@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -197,6 +198,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Gmail MCP credentials (read-write so OAuth tokens can be refreshed)
+  const gmailDir = path.join(os.homedir(), '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -221,6 +232,8 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
     'PARALLEL_API_KEY',
+    'AMADEUS_API_KEY',
+    'AMADEUS_API_SECRET',
   ]);
 }
 

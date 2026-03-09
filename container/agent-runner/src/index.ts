@@ -434,7 +434,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__parallel-search__*',
-        'mcp__parallel-task__*'
+        'mcp__parallel-task__*',
+        'mcp__gmail__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -466,6 +467,10 @@ async function runQuery(
           };
           log('Parallel AI MCP servers configured');
         }
+        servers['gmail'] = {
+          command: 'node',
+          args: ['/app/node_modules/gmail-mcp-readonly/dist/index.js'],
+        };
         return servers;
       })(),
       hooks: {

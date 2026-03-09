@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@gongrzhe/server-gmail-autoauth-mcp": "github:ArtyMcLabin/Gmail-MCP-Server",
     "@types/qrcode-terminal": "^0.12.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.1",
