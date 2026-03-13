@@ -39,8 +39,8 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY agent-runner/package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (NODE_OPTIONS needed for tsc in prepare scripts on low-memory VMs)
+RUN NODE_OPTIONS="--max-old-space-size=1536" npm install
 
 # Copy source code
 COPY agent-runner/ ./
