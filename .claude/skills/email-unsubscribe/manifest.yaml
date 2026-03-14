@@ -1,0 +1,11 @@
+skill: email-unsubscribe
+version: 1.0.0
+description: "Morning email unsubscribe curator — scans Gmail daily, sends a WhatsApp list of unsubscribe candidates, then uses the browser to unsubscribe from user-selected senders"
+core_version: 0.1.0
+adds: []
+modifies:
+  - groups/main/CLAUDE.md
+structured: {}
+conflicts: []
+depends:
+  - gmail
