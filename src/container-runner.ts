@@ -238,6 +238,11 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
+  // Pass Parallel AI API key directly to container if available
+  if (process.env.PARALLEL_API_KEY) {
+    args.push('-e', `PARALLEL_API_KEY=${process.env.PARALLEL_API_KEY}`);
+  }
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
