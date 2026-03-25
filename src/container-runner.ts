@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -241,6 +242,13 @@ function buildContainerArgs(
   // Pass Parallel AI API key directly to container if available
   if (process.env.PARALLEL_API_KEY) {
     args.push('-e', `PARALLEL_API_KEY=${process.env.PARALLEL_API_KEY}`);
+  }
+
+  // Pass GitHub token for git push and gh CLI (PR creation)
+  const ghSecrets = readEnvFile(['GITHUB_TOKEN']);
+  if (ghSecrets.GITHUB_TOKEN) {
+    args.push('-e', `GITHUB_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
+    args.push('-e', `GH_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
   }
 
   // Runtime-specific args for host gateway resolution
