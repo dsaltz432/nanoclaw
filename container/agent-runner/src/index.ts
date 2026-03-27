@@ -449,9 +449,62 @@ async function runQuery(
   })) {
     messageCount++;
     const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
 
-    if (message.type === 'assistant' && 'uuid' in message) {
+    // Log tool calls from assistant messages for real-time observability
+    if (message.type === 'assistant' && 'message' in message) {
+      const assistantMsg = message as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> }; uuid?: string };
+      if (assistantMsg.uuid) lastAssistantUuid = assistantMsg.uuid;
+      const toolUses = assistantMsg.message?.content?.filter(b => b.type === 'tool_use') || [];
+      if (toolUses.length > 0) {
+        for (const tool of toolUses) {
+          const input = tool.input || {};
+          let detail = '';
+          switch (tool.name) {
+            case 'Bash':
+              detail = ` cmd="${String(input.command || '').slice(0, 150)}"`;
+              break;
+            case 'Read':
+              detail = ` file="${input.file_path}"`;
+              break;
+            case 'Write':
+              detail = ` file="${input.file_path}"`;
+              break;
+            case 'Edit':
+              detail = ` file="${input.file_path}"`;
+              break;
+            case 'Glob':
+              detail = ` pattern="${input.pattern}"`;
+              break;
+            case 'Grep':
+              detail = ` pattern="${input.pattern}"`;
+              break;
+            case 'WebSearch':
+              detail = ` query="${input.query}"`;
+              break;
+            case 'WebFetch':
+              detail = ` url="${input.url}"`;
+              break;
+            case 'Agent':
+            case 'Task':
+            case 'TeamCreate':
+              detail = ` desc="${String(input.description || input.prompt || '').slice(0, 100)}"`;
+              break;
+            default:
+              detail = Object.keys(input).length > 0 ? ` keys=[${Object.keys(input).join(',')}]` : '';
+          }
+          log(`[msg #${messageCount}] tool=${tool.name}${detail}`);
+        }
+      } else {
+        // Text-only assistant message (thinking/responding)
+        const textBlocks = assistantMsg.message?.content?.filter(b => b.type === 'text') || [];
+        const textLen = textBlocks.reduce((sum, b) => sum + String((b as { text?: string }).text || '').length, 0);
+        log(`[msg #${messageCount}] type=assistant text=${textLen} chars`);
+      }
+    } else {
+      log(`[msg #${messageCount}] type=${msgType}`);
+    }
+
+    if (message.type === 'assistant' && 'uuid' in message && !lastAssistantUuid) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
     }
 

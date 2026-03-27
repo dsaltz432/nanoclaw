@@ -184,9 +184,10 @@ async function runTask(
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
+          // Buffer the latest result — only the final one will be sent
+          // after the container completes (avoids duplicate messages from
+          // agent teams producing multiple result events).
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -204,8 +205,12 @@ async function runTask(
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
-      // Result was already forwarded to the user via the streaming callback above
       result = output.result;
+    }
+
+    // Send only the final result to the user (after container completes)
+    if (result && !error) {
+      await deps.sendMessage(task.chat_jid, result);
     }
 
     logger.info(
