@@ -98,6 +98,7 @@ async function runTask(
       status: 'error',
       result: null,
       error,
+      container_name: null,
     });
     return;
   }
@@ -125,6 +126,7 @@ async function runTask(
       status: 'error',
       result: null,
       error: `Group not found: ${task.group_folder}`,
+      container_name: null,
     });
     return;
   }
@@ -168,6 +170,8 @@ async function runTask(
     }, TASK_CLOSE_DELAY_MS);
   };
 
+  let taskContainerName: string | null = null;
+
   try {
     const output = await runContainerAgent(
       group,
@@ -180,8 +184,10 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+      (proc, containerName) => {
+        taskContainerName = containerName;
+        return deps.onProcess(task.chat_jid, proc, containerName, task.group_folder);
+      },
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           // Buffer the latest result — only the final one will be sent
@@ -232,6 +238,7 @@ async function runTask(
     status: error ? 'error' : 'success',
     result,
     error,
+    container_name: taskContainerName,
   });
 
   const nextRun = computeNextRun(task);

@@ -106,6 +106,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add container_name column to task_run_logs for log file linking
+  try {
+    database.exec(
+      `ALTER TABLE task_run_logs ADD COLUMN container_name TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_main column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -483,8 +492,8 @@ export function updateTaskAfterRun(
 export function logTaskRun(log: TaskRunLog): void {
   db.prepare(
     `
-    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error, container_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     log.task_id,
@@ -493,6 +502,7 @@ export function logTaskRun(log: TaskRunLog): void {
     log.status,
     log.result,
     log.error,
+    log.container_name,
   );
 }
 

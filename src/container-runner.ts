@@ -558,6 +558,9 @@ export async function runContainerAgent(
             .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
             .join('\n'),
           ``,
+          `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
+          stderr,
+          ``,
         );
       }
 

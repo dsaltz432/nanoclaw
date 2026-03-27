@@ -20,6 +20,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| `dashboard/` | Command Center web dashboard (separate process) |
 
 ## Skills
 
@@ -65,6 +66,48 @@ systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
 ```
+
+## Sleep Prevention
+
+macOS can enter "Maintenance Sleep" even with "prevent sleep" checked in Energy Saver, which kills scheduled tasks overnight. A `caffeinate -s` launchd service prevents this while on AC power.
+
+| Component | Location |
+|-----------|----------|
+| Plist | `com.nanoclaw.caffeinate.plist` |
+| LaunchAgent | `~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist` |
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist    # start
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist  # stop
+```
+
+## Dashboard (Command Center)
+
+Separate Node.js process serving a React web UI for monitoring NanoClaw. Accessible on the local network at `http://<host-ip>:3100`.
+
+| Component | Location |
+|-----------|----------|
+| Frontend (React/Vite) | `dashboard/src/` |
+| Backend (Express) | `dashboard/server/` |
+| Launchd plist | `dashboard/com.nanoclaw.dashboard.plist` |
+| Logs | `dashboard/logs/` |
+
+Sections: Scheduled Tasks, Groups, Containers (live), Projects, Container Logs.
+
+```bash
+# Development
+cd dashboard && npm run dev
+
+# Rebuild frontend after changes
+cd dashboard && npx vite build
+
+# Service management (macOS)
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.dashboard  # restart
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw.dashboard.plist  # stop
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.dashboard.plist    # start
+```
+
+Config: password via `DASHBOARD_PASSWORD` env var, port via `DASHBOARD_PORT` (default 3100). Reads NanoClaw's SQLite DB (read-only) and shells out to `docker ps` for live container status.
 
 ## Troubleshooting
 

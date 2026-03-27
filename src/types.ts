@@ -75,6 +75,7 @@ export interface TaskRunLog {
   status: 'success' | 'error';
   result: string | null;
   error: string | null;
+  container_name: string | null;
 }
 
 // --- Channel abstraction ---
