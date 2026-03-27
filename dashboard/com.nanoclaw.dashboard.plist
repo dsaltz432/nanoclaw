@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.dashboard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/danielsaltz/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/danielsaltz/Documents/repositories/nanoclaw/dashboard/node_modules/tsx/dist/cli.mjs</string>
+        <string>/Users/danielsaltz/Documents/repositories/nanoclaw/dashboard/server/index.ts</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw/dashboard</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>DASHBOARD_PASSWORD</key>
+        <string>dsaltz432</string>
+        <key>NANOCLAW_ROOT</key>
+        <string>/Users/danielsaltz/Documents/repositories/nanoclaw</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Users/danielsaltz/.local/bin</string>
+        <key>HOME</key>
+        <string>/Users/danielsaltz</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw/dashboard/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw/dashboard/logs/stderr.log</string>
+</dict>
+</plist>
