@@ -30,24 +30,26 @@ interface BeaconEvent {
 }
 
 interface Venue {
-  id: number;
+  id: string | number;
   name: string;
   city: string;
   type_badge?: string;
   address?: string;
-  lat?: number;
-  lng?: number;
+  lat?: number | null;
+  lng?: number | null;
   website?: string;
   description?: string;
+  has_events?: boolean;
 }
 
 interface NewsItem {
-  id: number;
+  id: string | number;
   title: string;
   source?: string;
   url?: string;
   published_at?: string;
   category?: string;
+  discarded?: boolean;
 }
 
 interface Meta {
@@ -85,11 +87,12 @@ const CITY_ORDER = [
   "Tivoli",
 ];
 
-type VenueFilter = "all" | "beacon" | "food" | "brewery" | "music" | "outdoor";
+type VenueFilter = "all" | "beacon" | "food" | "brewery" | "music" | "outdoor" | "events";
 
 const VENUE_FILTERS: { key: VenueFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "beacon", label: "Beacon" },
+  { key: "events", label: "Has Events" },
   { key: "food", label: "Food" },
   { key: "brewery", label: "Brewery" },
   { key: "music", label: "Music" },
@@ -99,6 +102,7 @@ const VENUE_FILTERS: { key: VenueFilter; label: string }[] = [
 function matchVenueFilter(v: Venue, filter: VenueFilter): boolean {
   if (filter === "all") return true;
   if (filter === "beacon") return v.city === "Beacon";
+  if (filter === "events") return !!v.has_events;
   const t = v.type_badge ?? "";
   if (filter === "food") return /restaurant|cafe|bar(?!\/music)|kitchen/i.test(t);
   if (filter === "brewery") return /brewery|distillery|tap/i.test(t);
@@ -389,7 +393,8 @@ function VenuesTab() {
       .sort(),
   ];
 
-  const mappable = filtered.filter((v) => v.lat && v.lng);
+  const mappable = filtered.filter((v) => v.lat != null && v.lng != null);
+  const allVenuesHaveCoords = venues.every((v) => v.lat != null || v.lng === undefined);
   const center: [number, number] = [41.5037, -73.971]; // Beacon, NY
 
   if (loading) {
@@ -442,38 +447,49 @@ function VenuesTab() {
       {/* Leaflet Map */}
       {showMap && (
         <div className="mb-6 overflow-hidden rounded-xl border border-gray-800">
-          <MapContainer
-            center={center}
-            zoom={11}
-            style={{ height: "340px", width: "100%" }}
-            className="z-0"
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {mappable.map((v) => (
-              <Marker key={v.id} position={[v.lat!, v.lng!]}>
-                <Popup>
-                  <div className="text-sm">
-                    <strong>{v.name}</strong>
-                    {v.city && <div className="text-gray-500">{v.city}</div>}
-                    {v.type_badge && <div>{v.type_badge}</div>}
-                    {v.website && (
-                      <a
-                        href={v.website}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600"
-                      >
-                        Website →
-                      </a>
-                    )}
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
+          {mappable.length === 0 ? (
+            <div className="flex h-[340px] items-center justify-center bg-gray-900 text-sm text-gray-500">
+              {allVenuesHaveCoords
+                ? "No venues with map coordinates in this filter."
+                : "Geocoding venue locations… refresh in a moment to see pins."}
+            </div>
+          ) : (
+            <MapContainer
+              center={center}
+              zoom={11}
+              style={{ height: "340px", width: "100%" }}
+              className="z-0"
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              {mappable.map((v) => (
+                <Marker key={String(v.id)} position={[v.lat!, v.lng!]}>
+                  <Popup>
+                    <div className="text-sm">
+                      <strong>{v.name}</strong>
+                      {v.city && <div className="text-gray-500">{v.city}</div>}
+                      {v.type_badge && <div>{v.type_badge}</div>}
+                      {v.has_events && (
+                        <div className="text-green-600 text-xs mt-1">📅 Has upcoming events</div>
+                      )}
+                      {v.website && (
+                        <a
+                          href={v.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600"
+                        >
+                          Website →
+                        </a>
+                      )}
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
+            </MapContainer>
+          )}
         </div>
       )}
 
@@ -516,9 +532,14 @@ function VenuesTab() {
 
 function VenueCard({ venue }: { venue: Venue }) {
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 flex flex-col gap-2">
+    <div className={`rounded-xl border bg-gray-900 p-4 flex flex-col gap-2 ${venue.has_events ? "border-green-800/50" : "border-gray-800"}`}>
       <div className="flex items-start justify-between gap-2">
-        <p className="font-medium text-gray-100 leading-snug">{venue.name}</p>
+        <div className="flex items-center gap-2 min-w-0">
+          {venue.has_events && (
+            <span className="shrink-0 h-2 w-2 rounded-full bg-green-500" title="Has upcoming events" />
+          )}
+          <p className="font-medium text-gray-100 leading-snug">{venue.name}</p>
+        </div>
         {venue.type_badge && (
           <span className="shrink-0 rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-xs text-gray-400">
             {venue.type_badge}
@@ -550,36 +571,59 @@ function VenueCard({ venue }: { venue: Venue }) {
 function NewsTab() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showDiscarded, setShowDiscarded] = useState(false);
 
   useEffect(() => {
-    fetch("/api/beacon-intel/news")
+    setLoading(true);
+    const params = showDiscarded ? "?discarded=1" : "";
+    fetch(`/api/beacon-intel/news${params}`)
       .then((r) => r.json())
       .then(setNews)
       .catch(() => setNews([]))
       .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return <div className="text-sm text-gray-500">Loading news...</div>;
-  }
-
-  if (news.length === 0) {
-    return (
-      <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-12 text-center">
-        <p className="text-2xl mb-2">📰</p>
-        <p className="text-sm text-gray-500">No news yet.</p>
-        <p className="mt-1 text-xs text-gray-600">
-          Local news and restaurant updates will appear here.
-        </p>
-      </div>
-    );
-  }
+  }, [showDiscarded]);
 
   return (
-    <div className="space-y-2">
-      {news.map((item) => (
-        <NewsCard key={item.id} item={item} />
-      ))}
+    <div>
+      {/* Toolbar */}
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-xs text-gray-500">
+          {showDiscarded ? "Filtered-out items — review and ignore or promote" : "Relevant news and business updates"}
+        </p>
+        <button
+          onClick={() => setShowDiscarded(!showDiscarded)}
+          className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+            showDiscarded
+              ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+              : "border-gray-700 text-gray-500 hover:border-gray-600 hover:text-gray-400"
+          }`}
+        >
+          <span>{showDiscarded ? "⚠️" : "🗑"}</span>
+          {showDiscarded ? "Showing Discarded" : "Review Discarded"}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-gray-500">Loading...</div>
+      ) : news.length === 0 ? (
+        <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-12 text-center">
+          <p className="text-2xl mb-2">{showDiscarded ? "✅" : "📰"}</p>
+          <p className="text-sm text-gray-500">
+            {showDiscarded ? "Nothing in the discard pile." : "No news yet."}
+          </p>
+          {!showDiscarded && (
+            <p className="mt-1 text-xs text-gray-600">
+              Local news and restaurant updates will appear here.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {news.map((item) => (
+            <NewsCard key={item.id} item={item} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

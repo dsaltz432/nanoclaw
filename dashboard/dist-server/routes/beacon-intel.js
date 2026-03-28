@@ -6,7 +6,66 @@ import fs from "fs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
 const dbPath = process.env.BEACON_INTEL_DB ||
-    path.join(nanoclawRoot, "store", "beacon-intel.db");
+    path.join(nanoclawRoot, "data/sessions/telegram_main/.claude/beacon.db");
+const geoCachePath = path.join(nanoclawRoot, "data/beacon-geocache.json");
+let geoCache = null;
+let geocodingInProgress = false;
+function loadGeoCache() {
+    if (geoCache)
+        return geoCache;
+    try {
+        geoCache = JSON.parse(fs.readFileSync(geoCachePath, "utf8"));
+    }
+    catch {
+        geoCache = {};
+    }
+    return geoCache;
+}
+function saveGeoCache(cache) {
+    geoCache = cache;
+    try {
+        fs.writeFileSync(geoCachePath, JSON.stringify(cache, null, 2));
+    }
+    catch { }
+}
+async function geocodeAddress(address) {
+    try {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`;
+        const resp = await fetch(url, {
+            headers: { "User-Agent": "NanoClaw-Dashboard/1.0" },
+        });
+        const data = (await resp.json());
+        if (data[0])
+            return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    }
+    catch { }
+    return null;
+}
+async function geocodeVenuesBackground(venues) {
+    if (geocodingInProgress)
+        return;
+    geocodingInProgress = true;
+    const cache = loadGeoCache();
+    let updated = false;
+    for (const v of venues) {
+        if (cache[v.id] !== undefined)
+            continue;
+        if (!v.address) {
+            cache[v.id] = null;
+            updated = true;
+            continue;
+        }
+        const coords = await geocodeAddress(v.address);
+        cache[v.id] = coords;
+        updated = true;
+        if (coords)
+            await new Promise((r) => setTimeout(r, 1100)); // Nominatim: 1 req/sec
+    }
+    if (updated)
+        saveGeoCache(cache);
+    geocodingInProgress = false;
+}
+// ── DB helpers ──────────────────────────────────────────────────────────────
 function getDb() {
     if (!fs.existsSync(dbPath))
         return null;
@@ -17,35 +76,73 @@ function getDb() {
         return null;
     }
 }
-function hasTable(db, name) {
-    const row = db
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-        .get(name);
-    return !!row;
-}
+// ── Type mappings ────────────────────────────────────────────────────────────
+const TYPE_TO_CATEGORY = {
+    music_event: { category: "music", emoji: "🎵" },
+    farmers_market: { category: "market", emoji: "🌿" },
+    food_truck: { category: "market", emoji: "🌿" },
+    outdoor_event: { category: "outdoor", emoji: "🥾" },
+    festival: { category: "festival", emoji: "🎉" },
+    community_event: { category: "community", emoji: "🏘" },
+    sports: { category: "community", emoji: "🏘" },
+};
+const EVENT_TYPES = Object.keys(TYPE_TO_CATEGORY);
+const CATEGORY_TO_TYPES = {
+    music: ["music_event"],
+    market: ["farmers_market", "food_truck"],
+    outdoor: ["outdoor_event"],
+    festival: ["festival"],
+    community: ["community_event", "sports"],
+};
+const NEWS_TYPES = ["news", "restaurant_opening", "restaurant_closing", "restaurant_special"];
+const TYPE_TO_NEWS_CATEGORY = {
+    news: "news",
+    restaurant_opening: "opening",
+    restaurant_closing: "closing",
+    restaurant_special: "news",
+};
+// ── Routes ───────────────────────────────────────────────────────────────────
 const router = Router();
 router.get("/api/beacon-intel/events", (req, res) => {
     try {
         const db = getDb();
-        if (!db || !hasTable(db, "events"))
+        if (!db)
             return void res.json([]);
         const { category, date_from, date_to } = req.query;
-        let sql = "SELECT * FROM events WHERE 1=1";
-        const params = [];
-        if (category && category !== "all") {
-            sql += " AND category = ?";
-            params.push(category);
+        let types;
+        if (category && category !== "all" && CATEGORY_TO_TYPES[category]) {
+            types = CATEGORY_TO_TYPES[category];
         }
+        else {
+            types = EVENT_TYPES;
+        }
+        const placeholders = types.map(() => "?").join(", ");
+        let sql = `SELECT * FROM items WHERE archived = 0 AND type IN (${placeholders})`;
+        const params = [...types];
         if (date_from) {
-            sql += " AND date_start >= ?";
+            sql += " AND date >= ?";
             params.push(date_from);
         }
         if (date_to) {
-            sql += " AND date_start <= ?";
+            sql += " AND date <= ?";
             params.push(date_to);
         }
-        sql += " ORDER BY date_start ASC";
-        const events = db.prepare(sql).all(...params);
+        sql += " ORDER BY date ASC";
+        const rows = db.prepare(sql).all(...params);
+        const events = rows.map((row) => {
+            const mapped = TYPE_TO_CATEGORY[row.type] || { category: "community", emoji: "📅" };
+            return {
+                id: row.id,
+                title: row.title,
+                category: mapped.category,
+                emoji: mapped.emoji,
+                date_start: row.date,
+                date_end: null,
+                location: row.location,
+                url: row.url,
+                description: row.description,
+            };
+        });
         res.json(events);
     }
     catch (err) {
@@ -56,11 +153,40 @@ router.get("/api/beacon-intel/events", (req, res) => {
 router.get("/api/beacon-intel/venues", (_req, res) => {
     try {
         const db = getDb();
-        if (!db || !hasTable(db, "venues"))
+        if (!db)
             return void res.json([]);
-        const venues = db
-            .prepare("SELECT * FROM venues ORDER BY city, name")
+        const rows = db
+            .prepare("SELECT * FROM venues WHERE active = 1 ORDER BY city, name")
             .all();
+        // Get venue names that appear in active event item locations
+        const eventTypePlaceholders = EVENT_TYPES.map(() => "?").join(", ");
+        const eventLocations = db
+            .prepare(`SELECT location FROM items WHERE archived = 0 AND type IN (${eventTypePlaceholders})`)
+            .all(...EVENT_TYPES)
+            .map((r) => (r.location || "").toLowerCase());
+        const cache = loadGeoCache();
+        // Kick off background geocoding for any uncached venues
+        const uncached = rows.filter((v) => cache[v.id] === undefined);
+        if (uncached.length > 0)
+            geocodeVenuesBackground(uncached);
+        const venues = rows.map((row) => {
+            // Check if any event location references this venue (fuzzy name match)
+            const nameSlug = row.name.toLowerCase().split(/[,@(]/)[0].trim();
+            const has_events = eventLocations.some((loc) => loc.includes(nameSlug));
+            const coords = cache[row.id];
+            return {
+                id: row.id,
+                name: row.name,
+                city: row.city,
+                type_badge: row.type,
+                address: row.address,
+                lat: coords?.lat ?? null,
+                lng: coords?.lng ?? null,
+                website: row.website,
+                description: row.description || row.known_for,
+                has_events,
+            };
+        });
         res.json(venues);
     }
     catch (err) {
@@ -68,14 +194,32 @@ router.get("/api/beacon-intel/venues", (_req, res) => {
         res.json([]);
     }
 });
-router.get("/api/beacon-intel/news", (_req, res) => {
+router.get("/api/beacon-intel/news", (req, res) => {
     try {
         const db = getDb();
-        if (!db || !hasTable(db, "news"))
+        if (!db)
             return void res.json([]);
-        const news = db
-            .prepare("SELECT * FROM news ORDER BY published_at DESC LIMIT 100")
-            .all();
+        const showDiscarded = req.query.discarded === "1";
+        const placeholders = NEWS_TYPES.map(() => "?").join(", ");
+        // Check if discarded column exists (added via migration)
+        const hasDiscardedCol = db.prepare("PRAGMA table_info(items)").all().some((c) => c.name === "discarded");
+        const discardedFilter = hasDiscardedCol
+            ? showDiscarded
+                ? "AND discarded = 1"
+                : "AND discarded = 0"
+            : "";
+        const rows = db
+            .prepare(`SELECT * FROM items WHERE archived = 0 AND type IN (${placeholders}) ${discardedFilter} ORDER BY added DESC LIMIT 100`)
+            .all(...NEWS_TYPES);
+        const news = rows.map((row) => ({
+            id: row.id,
+            title: row.title,
+            source: row.source,
+            url: row.url,
+            published_at: row.added,
+            category: TYPE_TO_NEWS_CATEGORY[row.type] || "news",
+            discarded: row.discarded === 1,
+        }));
         res.json(news);
     }
     catch (err) {
@@ -86,12 +230,12 @@ router.get("/api/beacon-intel/news", (_req, res) => {
 router.get("/api/beacon-intel/meta", (_req, res) => {
     try {
         const db = getDb();
-        if (!db || !hasTable(db, "metadata"))
-            return void res.json({ last_updated: null, db_exists: !!db });
-        const meta = db
-            .prepare("SELECT value FROM metadata WHERE key = 'last_updated'")
+        if (!db)
+            return void res.json({ last_updated: null, db_exists: false });
+        const row = db
+            .prepare("SELECT MAX(added) as last_updated FROM items")
             .get();
-        res.json({ last_updated: meta?.value || null, db_exists: true });
+        res.json({ last_updated: row?.last_updated || null, db_exists: true });
     }
     catch (err) {
         console.error("Beacon Intel meta error:", err);
