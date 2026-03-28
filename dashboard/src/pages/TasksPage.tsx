@@ -139,7 +139,7 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <h2 className="mb-6 text-lg font-semibold text-gray-100">Scheduled Tasks</h2>
 
       <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1">
@@ -176,21 +176,25 @@ export default function TasksPage() {
                 className="flex w-full items-center gap-4 px-6 py-4 text-left transition-colors hover:bg-gray-800/50"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-200">{taskLabel(task)}</span>
-                    <span className="rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400">{task.group_folder}</span>
-                    <code className="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-400">
-                      {formatSchedule(task)}
-                    </code>
-                    <StatusBadge status={task.status} />
-                    {task.last_result?.startsWith("Error:") && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs text-red-400">
-                        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
-                        last run failed
-                      </span>
-                    )}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-gray-200">{taskLabel(task)}</span>
+                      <StatusBadge status={task.status} />
+                      {task.last_result?.startsWith("Error:") && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs text-red-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                          last run failed
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400">{task.group_folder}</span>
+                      <code className="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+                        {formatSchedule(task)}
+                      </code>
+                    </div>
                   </div>
-                  <div className="mt-1 flex gap-4 text-xs text-gray-500">
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
                     <span>Next: {task.next_run ? `${new Date(task.next_run).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })} ET (${relativeTime(task.next_run)})` : "N/A"}</span>
                     <span>Last: {task.last_run ? relativeTime(task.last_run) : "never"}</span>
                     {task.last_result && (

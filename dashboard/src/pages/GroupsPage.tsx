@@ -99,7 +99,7 @@ export default function GroupsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <h2 className="mb-6 text-lg font-semibold text-gray-100">Groups</h2>
 
       {groups.length === 0 ? (
@@ -115,10 +115,10 @@ export default function GroupsPage() {
                   : "border-gray-800"
               }`}
             >
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex flex-wrap items-start justify-between gap-y-2">
+                <div className="min-w-0 mr-3">
                   <h3 className="text-sm font-medium text-gray-100">{group.name}</h3>
-                  <p className="mt-1 font-mono text-xs text-gray-500">{group.folder}</p>
+                  <p className="mt-1 font-mono text-xs text-gray-500 truncate">{group.folder}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-400">
@@ -198,9 +198,9 @@ export default function GroupsPage() {
             </button>
           </div>
 
-          <div className="flex" style={{ minHeight: "320px", maxHeight: "60vh" }}>
+          <div className="flex flex-col sm:flex-row sm:min-h-80 max-h-[60vh]">
             {/* File list */}
-            <div className="w-56 shrink-0 border-r border-gray-800 overflow-auto">
+            <div className="w-full sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-800 overflow-auto max-h-40 sm:max-h-none">
               {loadingFiles ? (
                 <p className="p-4 text-xs text-gray-500">Loading...</p>
               ) : logFiles.length === 0 ? (

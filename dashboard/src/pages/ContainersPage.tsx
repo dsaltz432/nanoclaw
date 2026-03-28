@@ -89,7 +89,7 @@ export default function ContainersPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-100">Containers</h2>
         <div className="flex items-center gap-2 text-xs text-gray-500">

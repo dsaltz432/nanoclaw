@@ -149,9 +149,11 @@ router.get("/api/beacon-intel/events", (req: Request, res: Response) => {
         emoji: mapped.emoji,
         date_start: row.date,
         date_end: null,
+        time: row.time ?? null,
         location: row.location,
         url: row.url,
         description: row.description,
+        sources: row.sources ?? null,
       };
     });
 

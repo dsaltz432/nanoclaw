@@ -54,7 +54,7 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <h2 className="mb-6 text-lg font-semibold text-gray-100">Projects</h2>
 
       {projects.length === 0 ? (
@@ -63,12 +63,12 @@ export default function ProjectsPage() {
         <div className="space-y-4">
           {projects.map((project) => (
             <div key={project.path} className="rounded-xl border border-gray-800 bg-gray-900 p-6">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex flex-wrap items-start justify-between gap-y-2">
+                <div className="min-w-0 mr-3">
                   <h3 className="text-sm font-medium text-gray-100">{project.name}</h3>
-                  <p className="mt-1 font-mono text-xs text-gray-500">{project.path}</p>
+                  <p className="mt-1 font-mono text-xs text-gray-500 truncate">{project.path}</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <code className="rounded bg-indigo-500/10 px-2 py-0.5 font-mono text-xs text-indigo-400">
                     {project.branch}
                   </code>

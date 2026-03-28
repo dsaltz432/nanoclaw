@@ -23,10 +23,12 @@ interface BeaconEvent {
   emoji?: string;
   date_start: string;
   date_end?: string;
+  time?: string | null;
   location?: string;
   venue_id?: number;
   url?: string;
   description?: string;
+  sources?: string | null;
 }
 
 interface Venue {
@@ -148,6 +150,12 @@ function formatEventDate(dateStr: string): string {
   });
 }
 
+function parseEventTime(description?: string): string | null {
+  if (!description) return null;
+  const m = description.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  return m ? m[1].toLowerCase().replace(/\s/, "") : null;
+}
+
 function relativeUpdated(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
@@ -234,7 +242,7 @@ function EventsTab() {
   return (
     <div>
       {/* Date range toggle */}
-      <div className="mb-4 flex gap-1 rounded-lg bg-gray-900 p-1 w-fit">
+      <div className="mb-4 flex flex-wrap gap-1 rounded-lg bg-gray-900 p-1 w-full sm:w-fit">
         {DATE_RANGES.map((r) => (
           <button
             key={r.key}
@@ -320,6 +328,9 @@ function EventCard({ event }: { event: BeaconEvent }) {
           {event.date_end &&
             event.date_end !== event.date_start &&
             ` – ${formatEventDate(event.date_end)}`}
+          {(event.time || parseEventTime(event.description)) && (
+            <span className="text-gray-500">· {event.time || parseEventTime(event.description)}</span>
+          )}
         </div>
         {event.location && (
           <div className="flex items-center gap-1.5">
@@ -345,16 +356,23 @@ function EventCard({ event }: { event: BeaconEvent }) {
           </div>
         )}
       </div>
-      {event.url && (
-        <a
-          href={event.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-auto pt-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-        >
-          View details →
-        </a>
-      )}
+      <div className="mt-auto flex items-center justify-between pt-1">
+        {event.url ? (
+          <a
+            href={event.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          >
+            View details →
+          </a>
+        ) : <span />}
+        {event.sources && (
+          <span className="text-xs text-gray-600" title={event.sources}>
+            via {event.sources.split(", ")[0]}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -404,7 +422,7 @@ function VenuesTab() {
   return (
     <div>
       {/* Filter pills + map toggle */}
-      <div className="mb-6 flex items-center justify-between gap-4">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-1.5">
           {VENUE_FILTERS.map((f) => (
             <FilterPill
@@ -707,9 +725,9 @@ export default function BeaconIntelPage() {
   }, []);
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-100">Beacon Intel</h2>
           <p className="mt-0.5 text-sm text-gray-500">
@@ -731,7 +749,7 @@ export default function BeaconIntelPage() {
       </div>
 
       {/* Sub-tab bar */}
-      <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1 w-fit">
+      <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1 w-full sm:w-fit">
         {SUB_TABS.map((tab) => (
           <button
             key={tab.key}
