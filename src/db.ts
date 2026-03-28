@@ -108,9 +108,7 @@ function createSchema(database: Database.Database): void {
 
   // Add container_name column to task_run_logs for log file linking
   try {
-    database.exec(
-      `ALTER TABLE task_run_logs ADD COLUMN container_name TEXT`,
-    );
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN container_name TEXT`);
   } catch {
     /* column already exists */
   }

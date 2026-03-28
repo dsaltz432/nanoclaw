@@ -60,13 +60,19 @@ export class GroupQueue {
   }
 
   enqueueMessageCheck(groupJid: string): void {
-    if (this.shuttingDown) return;
+    if (this.shuttingDown) {
+      logger.info({ groupJid }, 'enqueueMessageCheck: rejected, shutting down');
+      return;
+    }
 
     const state = this.getGroup(groupJid);
 
     if (state.active) {
       state.pendingMessages = true;
-      logger.debug({ groupJid }, 'Container active, message queued');
+      logger.info(
+        { groupJid, isTaskContainer: state.isTaskContainer, idleWaiting: state.idleWaiting },
+        'enqueueMessageCheck: container active, message queued',
+      );
       return;
     }
 
@@ -75,13 +81,17 @@ export class GroupQueue {
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
-      logger.debug(
+      logger.info(
         { groupJid, activeCount: this.activeCount },
-        'At concurrency limit, message queued',
+        'enqueueMessageCheck: at concurrency limit, message queued',
       );
       return;
     }
 
+    logger.info(
+      { groupJid, activeCount: this.activeCount },
+      'enqueueMessageCheck: starting new container',
+    );
     this.runForGroup(groupJid, 'messages').catch((err) =>
       logger.error({ groupJid, err }, 'Unhandled error in runForGroup'),
     );
@@ -159,8 +169,13 @@ export class GroupQueue {
    */
   sendMessage(groupJid: string, text: string): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    if (!state.active || !state.groupFolder || state.isTaskContainer) {
+      logger.info(
+        { groupJid, active: state.active, groupFolder: state.groupFolder, isTaskContainer: state.isTaskContainer },
+        'sendMessage: no active container to pipe to',
+      );
       return false;
+    }
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
     const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
@@ -204,9 +219,9 @@ export class GroupQueue {
     state.pendingMessages = false;
     this.activeCount++;
 
-    logger.debug(
+    logger.info(
       { groupJid, reason, activeCount: this.activeCount },
-      'Starting container for group',
+      'runForGroup: starting container',
     );
 
     try {
@@ -214,12 +229,14 @@ export class GroupQueue {
         const success = await this.processMessagesFn(groupJid);
         if (success) {
           state.retryCount = 0;
+          logger.info({ groupJid }, 'runForGroup: completed successfully');
         } else {
+          logger.warn({ groupJid }, 'runForGroup: processMessages returned false, scheduling retry');
           this.scheduleRetry(groupJid, state);
         }
       }
     } catch (err) {
-      logger.error({ groupJid, err }, 'Error processing messages for group');
+      logger.error({ groupJid, err }, 'runForGroup: error processing messages');
       this.scheduleRetry(groupJid, state);
     } finally {
       state.active = false;

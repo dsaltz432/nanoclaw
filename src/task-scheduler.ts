@@ -186,7 +186,12 @@ async function runTask(
       },
       (proc, containerName) => {
         taskContainerName = containerName;
-        return deps.onProcess(task.chat_jid, proc, containerName, task.group_folder);
+        return deps.onProcess(
+          task.chat_jid,
+          proc,
+          containerName,
+          task.group_folder,
+        );
       },
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {

@@ -685,8 +685,9 @@ export function writeTasksSnapshot(
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
-  // Main sees all tasks, others only see their own
-  const filteredTasks = isMain
+  // Main and admin groups see all tasks, others only see their own
+  const hasFullAccess = isMain || groupFolder === 'nanoclaw-dev';
+  const filteredTasks = hasFullAccess
     ? tasks
     : tasks.filter((t) => t.groupFolder === groupFolder);
 

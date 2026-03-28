@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const hasFullAccess = isMain || groupFolder === 'nanoclaw-dev';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -166,7 +167,7 @@ server.tool(
 
       const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
 
-      const tasks = isMain
+      const tasks = hasFullAccess
         ? allTasks
         : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
 
@@ -329,6 +330,27 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'restart_service',
+  `Restart a NanoClaw host service via launchd. Allowed services: "dashboard" (Command Center web UI), "nanoclaw" (main NanoClaw process). Use after making changes that require a restart.`,
+  {
+    service: z.enum(['dashboard', 'nanoclaw']).describe('The service to restart'),
+  },
+  async (args) => {
+    const data = {
+      type: 'restart_service',
+      service: args.service,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Restart requested for ${args.service} service.` }],
     };
   },
 );

@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -172,6 +173,8 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For restart_service
+    service?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -454,6 +457,37 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'restart_service': {
+      const ALLOWED_SERVICES: Record<string, string> = {
+        dashboard: 'com.nanoclaw.dashboard',
+        nanoclaw: 'com.nanoclaw',
+      };
+      const service = data.service as string | undefined;
+      const launchdLabel = service ? ALLOWED_SERVICES[service] : undefined;
+      if (!launchdLabel) {
+        logger.warn(
+          { service },
+          'restart_service rejected: unknown service. Allowed: ' +
+            Object.keys(ALLOWED_SERVICES).join(', '),
+        );
+        break;
+      }
+      logger.info({ service, launchdLabel }, 'Restarting service via IPC');
+      const uid = process.getuid?.() ?? 501;
+      execFile(
+        'launchctl',
+        ['kickstart', '-k', `gui/${uid}/${launchdLabel}`],
+        (err, _stdout, stderr) => {
+          if (err) {
+            logger.error({ service, err, stderr }, 'Failed to restart service');
+          } else {
+            logger.info({ service }, 'Service restarted successfully');
+          }
+        },
+      );
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
