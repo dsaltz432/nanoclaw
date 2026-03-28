@@ -92,7 +92,7 @@ export default function DashboardPage() {
 
         <SummaryCard title="Containers" value={containers.length}>
           <p className="mt-2 text-xs text-gray-500">
-            {containers.filter((c) => c.status === "running").length} running
+            {containers.filter((c) => c.status.startsWith("Up")).length} running
           </p>
         </SummaryCard>
 

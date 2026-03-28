@@ -6,7 +6,7 @@ const navItems = [
   { to: "/groups", label: "Groups", icon: UsersIcon },
   { to: "/containers", label: "Containers", icon: BoxIcon },
   { to: "/projects", label: "Projects", icon: CodeIcon },
-  { to: "/logs", label: "Logs", icon: TerminalIcon },
+  { to: "/beacon-intel", label: "Beacon Intel", icon: BeaconIcon },
 ];
 
 export default function Layout() {
@@ -99,6 +99,15 @@ function TerminalIcon() {
   return (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
+    </svg>
+  );
+}
+
+function BeaconIcon() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
     </svg>
   );
 }

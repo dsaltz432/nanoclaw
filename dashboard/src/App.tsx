@@ -7,7 +7,7 @@ import TasksPage from "./pages/TasksPage";
 import GroupsPage from "./pages/GroupsPage";
 import ContainersPage from "./pages/ContainersPage";
 import ProjectsPage from "./pages/ProjectsPage";
-import LogsPage from "./pages/LogsPage";
+import BeaconIntelPage from "./pages/BeaconIntelPage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -40,7 +40,7 @@ export default function App() {
           <Route path="groups" element={<GroupsPage />} />
           <Route path="containers" element={<ContainersPage />} />
           <Route path="projects" element={<ProjectsPage />} />
-          <Route path="logs" element={<LogsPage />} />
+          <Route path="beacon-intel" element={<BeaconIntelPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

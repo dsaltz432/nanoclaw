@@ -14,6 +14,7 @@ import groupsRouter from "./routes/groups.js";
 import containersRouter from "./routes/containers.js";
 import logsRouter from "./routes/logs.js";
 import projectsRouter from "./routes/projects.js";
+import beaconIntelRouter from "./routes/beacon-intel.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -47,6 +48,7 @@ app.use(groupsRouter);
 app.use(containersRouter);
 app.use(logsRouter);
 app.use(projectsRouter);
+app.use(beaconIntelRouter);
 
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {
