@@ -70,7 +70,11 @@ export class GroupQueue {
     if (state.active) {
       state.pendingMessages = true;
       logger.info(
-        { groupJid, isTaskContainer: state.isTaskContainer, idleWaiting: state.idleWaiting },
+        {
+          groupJid,
+          isTaskContainer: state.isTaskContainer,
+          idleWaiting: state.idleWaiting,
+        },
         'enqueueMessageCheck: container active, message queued',
       );
       return;
@@ -171,7 +175,12 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder || state.isTaskContainer) {
       logger.info(
-        { groupJid, active: state.active, groupFolder: state.groupFolder, isTaskContainer: state.isTaskContainer },
+        {
+          groupJid,
+          active: state.active,
+          groupFolder: state.groupFolder,
+          isTaskContainer: state.isTaskContainer,
+        },
         'sendMessage: no active container to pipe to',
       );
       return false;
@@ -231,7 +240,10 @@ export class GroupQueue {
           state.retryCount = 0;
           logger.info({ groupJid }, 'runForGroup: completed successfully');
         } else {
-          logger.warn({ groupJid }, 'runForGroup: processMessages returned false, scheduling retry');
+          logger.warn(
+            { groupJid },
+            'runForGroup: processMessages returned false, scheduling retry',
+          );
           this.scheduleRetry(groupJid, state);
         }
       }
