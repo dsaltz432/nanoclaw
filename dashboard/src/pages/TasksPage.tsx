@@ -14,6 +14,7 @@ interface Task {
   status: string;
   created_at: string;
   context_mode: string;
+  name?: string | null;
 }
 
 interface TaskRun {
@@ -46,9 +47,10 @@ function relativeTime(dateStr: string): string {
 }
 
 function taskLabel(task: Task): string {
+  if (task.name) return task.name;
   // Extract a short description from the first line of the prompt
   const firstLine = task.prompt.split("\n").find((l) => l.trim().length > 0) || "";
-  // Strip markdown and take first ~50 chars
+  // Strip markdown and take first ~60 chars
   const clean = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "").replace(/^You are /, "").trim();
   if (clean.length > 60) return clean.slice(0, 57) + "...";
   return clean || task.id;

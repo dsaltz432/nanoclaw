@@ -92,6 +92,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
+    name: z.string().optional().describe('Short human-readable name for this task (e.g. "Daily mortgage rate", "Nightly recipe builder"). Shown in the Command Center dashboard.'),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -140,6 +141,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
+      task_name: args.name,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -256,6 +258,7 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    name: z.string().optional().describe('New human-readable name for the task'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -288,6 +291,7 @@ server.tool(
       isMain: String(isMain),
       timestamp: new Date().toISOString(),
     };
+    if (args.name !== undefined) data.task_name = args.name;
     if (args.prompt !== undefined) data.prompt = args.prompt;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
