@@ -81,6 +81,38 @@ launchctl load ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist    # start
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist  # stop
 ```
 
+## Email Unsubscribe Curator
+
+Daily email cleanup: a host-side script scans Gmail metadata (no bodies, no LLM), then the agent analyzes candidates and handles browser-based unsubscribes.
+
+| Component | Location |
+|-----------|----------|
+| Metadata extractor script | `scripts/email-metadata-extractor.ts` |
+| Gmail auth script | `scripts/gmail-auth.ts` |
+| Launchd plist template | `launchd/com.nanoclaw.email-metadata.plist` |
+| LaunchAgent (installed) | `~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist` |
+| Agent instructions | `groups/main/CLAUDE.md` (Email Unsubscribe Curator section) |
+| Setup skill | `.claude/skills/email-unsubscribe/SKILL.md` |
+| Scan output | `data/email-unsubscribe/` |
+| Unsubscribe history | `groups/telegram_main/unsubscribe-history.json` |
+| Gmail credentials | `~/.gmail-mcp/` (not in repo) |
+| Logs | `logs/email-metadata.log`, `logs/email-metadata.error.log` |
+
+**Scheduled task in SQLite:** `Email Unsubscribe Analyzer` — cron `2 6 * * *` (6:02 AM ET), `context_mode: isolated`, `group_folder: telegram_main`. Must be recreated on new machine via `/email-unsubscribe`.
+
+```bash
+# Service management (macOS)
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist    # start
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist  # stop
+
+# Manual test
+npx tsx scripts/email-metadata-extractor.ts
+
+# Full setup on new machine
+# 1. Run /email-unsubscribe (installs plist + creates scheduled task)
+# 2. If Gmail token expired: npx tsx scripts/gmail-auth.ts
+```
+
 ## Dashboard (Command Center)
 
 Separate Node.js process serving a React web UI for monitoring NanoClaw. Accessible on the local network at `http://<host-ip>:3100`.
@@ -92,7 +124,7 @@ Separate Node.js process serving a React web UI for monitoring NanoClaw. Accessi
 | Launchd plist | `dashboard/com.nanoclaw.dashboard.plist` |
 | Logs | `dashboard/logs/` |
 
-Sections: Scheduled Tasks, Groups, Containers (live), Projects, Container Logs.
+Sections: Scheduled Tasks (Daily/Weekly/Ad-Hoc), Groups, Containers (live), Projects, Beacon Intel, Mortgage Rates, Email Unsub.
 
 ```bash
 # Development
