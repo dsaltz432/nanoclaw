@@ -79,11 +79,40 @@ function formatDuration(ms: number): string {
   return `${hours}h ${remainingMin}m`;
 }
 
-type TabFilter = "recurring" | "ad_hoc";
+type TabFilter = "daily" | "weekly" | "ad_hoc";
 
 function classifyTask(task: Task): TabFilter {
-  if (task.schedule_type === "cron" || task.schedule_type === "interval") return "recurring";
+  if (task.schedule_type === "cron") {
+    // Cron: min hour dom month dow
+    // If day-of-week is * and day-of-month is *, it's daily
+    const parts = task.schedule_value.trim().split(/\s+/);
+    const dow = parts[4]; // day of week
+    if (dow === "*") return "daily";
+    return "weekly";
+  }
+  if (task.schedule_type === "interval") {
+    const ms = parseInt(task.schedule_value);
+    // Intervals >= 1 day are weekly-ish, shorter are daily
+    if (ms >= 86400000) return "weekly";
+    return "daily";
+  }
   return "ad_hoc";
+}
+
+/** Extract sort key from cron/interval: hour * 60 + minute for time-of-day ordering */
+function taskTimeSort(task: Task): number {
+  if (task.schedule_type === "cron") {
+    const parts = task.schedule_value.trim().split(/\s+/);
+    const minute = parseInt(parts[0]) || 0;
+    const hour = parseInt(parts[1]) || 0;
+    return hour * 60 + minute;
+  }
+  // For interval/once, sort by next_run time-of-day
+  if (task.next_run) {
+    const d = new Date(task.next_run);
+    return d.getHours() * 60 + d.getMinutes();
+  }
+  return 9999;
 }
 
 export default function TasksPage() {
@@ -94,7 +123,7 @@ export default function TasksPage() {
   const [runsLoading, setRunsLoading] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
   const [showPromptFor, setShowPromptFor] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabFilter>("recurring");
+  const [activeTab, setActiveTab] = useState<TabFilter>("daily");
 
   useEffect(() => {
     fetch("/api/tasks")
@@ -128,13 +157,17 @@ export default function TasksPage() {
   }
 
   const tabs: { key: TabFilter; label: string }[] = [
-    { key: "recurring", label: "Recurring" },
+    { key: "daily", label: "Daily" },
+    { key: "weekly", label: "Weekly" },
     { key: "ad_hoc", label: "Ad-Hoc" },
   ];
 
-  const filteredTasks = tasks.filter((t) => classifyTask(t) === activeTab);
+  const filteredTasks = tasks
+    .filter((t) => classifyTask(t) === activeTab)
+    .sort((a, b) => taskTimeSort(a) - taskTimeSort(b));
   const counts = {
-    recurring: tasks.filter((t) => classifyTask(t) === "recurring").length,
+    daily: tasks.filter((t) => classifyTask(t) === "daily").length,
+    weekly: tasks.filter((t) => classifyTask(t) === "weekly").length,
     ad_hoc: tasks.filter((t) => classifyTask(t) === "ad_hoc").length,
   };
 

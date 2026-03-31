@@ -9,6 +9,7 @@ import ContainersPage from "./pages/ContainersPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import BeaconIntelPage from "./pages/BeaconIntelPage";
 import MortgagePage from "./pages/MortgagePage";
+import EmailUnsubscribePage from "./pages/EmailUnsubscribePage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="beacon-intel" element={<BeaconIntelPage />} />
           <Route path="mortgage" element={<MortgagePage />} />
+          <Route path="email-unsubscribe" element={<EmailUnsubscribePage />} />
         </Route>
       </Routes>
     </BrowserRouter>

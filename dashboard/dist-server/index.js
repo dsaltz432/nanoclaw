@@ -11,6 +11,7 @@ import logsRouter from "./routes/logs.js";
 import projectsRouter from "./routes/projects.js";
 import beaconIntelRouter from "./routes/beacon-intel.js";
 import mortgageRouter from "./routes/mortgage.js";
+import emailUnsubscribeRouter from "./routes/email-unsubscribe.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
 const app = express();
@@ -38,6 +39,7 @@ app.use(logsRouter);
 app.use(projectsRouter);
 app.use(beaconIntelRouter);
 app.use(mortgageRouter);
+app.use(emailUnsubscribeRouter);
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {
     const distPath = path.resolve(__dirname, "../dist");

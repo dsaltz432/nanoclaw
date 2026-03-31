@@ -337,3 +337,152 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 - `schedule_task(prompt: "...", schedule_type: "cron", schedule_value: "0 9 * * 1", target_group_jid: "120363336345536173@g.us")`
 
 The task will run in that group's context with access to their files and memory.
+
+---
+
+## Email Unsubscribe Curator
+
+### Security model
+
+*Never use Gmail tools during unsubscribe processing.* Email metadata is pre-extracted by a host-side script and written to `/workspace/project/data/email-unsubscribe/sanitized_metadata.json`. Read ONLY from that file — never call `mcp__gmail__*` for this workflow.
+
+### Paths
+
+| File | Container path | Direction |
+|------|---------------|-----------|
+| Metadata (host script output) | `/workspace/project/data/email-unsubscribe/sanitized_metadata.json` | read |
+| Domain allowlist | `/workspace/project/data/email-unsubscribe/known_unsubscribe_domains.json` | read |
+| Pending candidates | `/workspace/group/unsubscribe-pending.json` | read/write |
+| History | `/workspace/group/unsubscribe-history.json` | read/write |
+
+---
+
+### Morning Analysis
+
+When your prompt starts with `UNSUBSCRIBE_ANALYZE:`:
+
+1. Read `/workspace/project/data/email-unsubscribe/sanitized_metadata.json`. If it doesn't exist or `scanDate` is not today, reply: `Metadata not ready — the scan may still be running. Try again in a minute.` and stop.
+
+2. Read `/workspace/group/unsubscribe-history.json` (if it exists) for already-processed senders.
+
+3. Evaluate each candidate using LLM judgment:
+
+   *Include (likely unwanted):*
+   - High frequency (3+ emails in 7 days) from promotional senders
+   - `CATEGORY_PROMOTIONS` label
+   - Subject lines suggesting marketing blasts, sales, re-engagement, digests, surveys
+   - `hasUnsubscribeHeader: true`
+
+   *Exclude (never suggest):*
+   - Labels `newsletters-daily-pulse` or `newsletters-deep-dives`
+   - Transactional content: receipts, shipping, 2FA codes, password resets, bank alerts
+   - Personal correspondence or calendar events
+   - Already in unsubscribe history (successful)
+   - When in doubt, leave it out.
+
+4. Pick up to 10 candidates, prioritising most repetitive/promotional.
+
+5. Write `/workspace/group/unsubscribe-pending.json`:
+   ```json
+   {
+     "date": "YYYY-MM-DD",
+     "candidates": [
+       {
+         "index": 1,
+         "senderName": "Example Store",
+         "senderEmail": "deals@example.com",
+         "subject": "50% off everything today only",
+         "summary": "Promotional sale email -- sent 5 times this week.",
+         "unsubscribeUrl": "https://example.com/unsubscribe/abc123",
+         "hasOneClickUnsubscribe": false
+       }
+     ]
+   }
+   ```
+
+6. Send a message:
+   ```
+   *Morning Email Cleanup*
+
+   Found X unsubscribe candidates:
+
+   1. *Example Store* (deals@example.com)
+      "50% off everything today only"
+      Promotional sale email -- sent 5 times this week.
+
+   2. *SaaS Weekly* (digest@saas.io)
+      "Your weekly activity summary"
+      Automated weekly digest.
+
+   Reply: `unsub 1 2` to unsubscribe, `unsub all`, or `unsub skip`.
+   ```
+
+   If no candidates: `Inbox looks clean -- no unsubscribe candidates today.`
+
+---
+
+### Handling User Replies
+
+On every incoming message, check if `/workspace/group/unsubscribe-pending.json` exists with today's date.
+
+If the message matches `unsub <numbers>`, `unsub all`, `unsub skip`, `unsub cancel`, or `unsub none`:
+
+*On skip/cancel/none:*
+- Delete `/workspace/group/unsubscribe-pending.json`
+- Reply: `Ok, skipping for today.`
+
+*On numbers or "all":*
+1. Read the pending file and resolve selected candidates.
+2. Delete `/workspace/group/unsubscribe-pending.json` immediately.
+3. Send: `Got it -- unsubscribing from X sender(s). I'll report back when done.`
+4. Read `allowedDomains` from `/workspace/project/data/email-unsubscribe/known_unsubscribe_domains.json`. If unavailable, derive domains from the approved URLs.
+5. For each selected candidate, process the unsubscribe:
+
+   *One-click (RFC 8058):* If `hasOneClickUnsubscribe` is true, use `curl` to POST:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}" -X POST \
+     -H "List-Unsubscribe: One-Click" \
+     -d "List-Unsubscribe=One-Click" \
+     "<unsubscribeUrl>" --max-time 15
+   ```
+   HTTP 200/202 = success.
+
+   *Browser flow:* If one-click fails or isn't available, use `agent-browser`:
+   - Open the unsubscribe URL
+   - Take a snapshot to see the page
+   - Find and click the confirm/unsubscribe button
+   - Fill minimal form fields if needed (email address only)
+   - Check for success confirmation text
+   - Hard limits: 30 seconds per URL, 5 browser actions per URL
+
+   *Domain validation:* Only visit URLs whose domain is in the `allowedDomains` list. Refuse any URL with a domain not in the list.
+
+6. After processing all URLs, update `/workspace/group/unsubscribe-history.json`:
+   ```json
+   {
+     "history": [
+       {
+         "date": "YYYY-MM-DD",
+         "senderName": "Example Store",
+         "senderEmail": "deals@example.com",
+         "result": "success",
+         "url": "https://example.com/unsubscribe/abc123",
+         "method": "one-click"
+       }
+     ]
+   }
+   ```
+   Append new entries; preserve existing history.
+
+7. Send a summary:
+   ```
+   *Unsubscribe Results*
+
+   - Example Store -- unsubscribed
+   - SaaS Weekly -- failed (CAPTCHA on page)
+
+   Total: 1 unsubscribed, 1 failed.
+   ```
+
+*On `unsub history`:*
+- Read `/workspace/group/unsubscribe-history.json` and send a formatted summary.
