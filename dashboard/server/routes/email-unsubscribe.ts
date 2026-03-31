@@ -10,12 +10,14 @@ const nanoclawRoot =
 const router = Router();
 
 interface HistoryEntry {
-  date: string;
+  unsubscribedAt?: string;
+  date?: string; // legacy
   senderName: string;
   senderEmail: string;
   result: string;
-  url: string;
+  url?: string;
   method?: string;
+  lastSeen?: string | null;
 }
 
 interface Candidate {
@@ -52,8 +54,12 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
       allHistory = allHistory.concat(data.history);
     }
 
-    // Sort newest first
-    allHistory.sort((a, b) => b.date.localeCompare(a.date));
+    // Sort newest first (support both unsubscribedAt and legacy date)
+    allHistory.sort((a, b) => {
+      const aDate = a.unsubscribedAt || a.date || "";
+      const bDate = b.unsubscribedAt || b.date || "";
+      return bDate.localeCompare(aDate);
+    });
 
     // Read latest scan metadata
     const metadataPath = path.join(
@@ -82,10 +88,12 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
     // Group by date for the timeline chart
     const byDate = new Map<string, { success: number; failed: number }>();
     for (const entry of allHistory) {
-      const existing = byDate.get(entry.date) || { success: 0, failed: 0 };
+      const dateKey = (entry.unsubscribedAt || entry.date || "").split("T")[0];
+      if (!dateKey) continue;
+      const existing = byDate.get(dateKey) || { success: 0, failed: 0 };
       if (entry.result === "success") existing.success++;
       else existing.failed++;
-      byDate.set(entry.date, existing);
+      byDate.set(dateKey, existing);
     }
 
     const timeline = [...byDate.entries()]
@@ -99,9 +107,26 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
         .map((h) => h.senderEmail),
     );
 
+    // Senders still emailing after unsubscribe (3-day grace period)
+    const GRACE_PERIOD_MS = 3 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const stillEmailing = allHistory
+      .filter((h) => {
+        if (h.result !== "success" || !h.lastSeen) return false;
+        const unsubTime = new Date(h.unsubscribedAt || h.date || "").getTime();
+        return now - unsubTime >= GRACE_PERIOD_MS;
+      })
+      .map((h) => ({
+        senderName: h.senderName,
+        senderEmail: h.senderEmail,
+        unsubscribedAt: h.unsubscribedAt || h.date,
+        lastSeen: h.lastSeen,
+      }));
+
     // Top domains from history
     const domainCounts = new Map<string, number>();
     for (const entry of allHistory.filter((h) => h.result === "success")) {
+      if (!entry.url) continue;
       try {
         const domain = new URL(entry.url).hostname;
         domainCounts.set(domain, (domainCounts.get(domain) || 0) + 1);
@@ -125,6 +150,7 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
       timeline,
       history: allHistory,
       topDomains,
+      stillEmailing,
       lastScan: {
         date: metadata.scanDate,
         scannedAt: metadata.scannedAt,
@@ -147,6 +173,7 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
       timeline: [],
       history: [],
       topDomains: [],
+      stillEmailing: [],
       lastScan: { date: "", scannedAt: "", totalMessages: 0, candidateCount: 0 },
       pendingCandidates: [],
     });

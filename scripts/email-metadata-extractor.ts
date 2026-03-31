@@ -192,31 +192,88 @@ function extractDomain(url: string): string | null {
   }
 }
 
-// --- History filtering ---
+// --- History filtering and lastSeen tracking ---
 
-function loadUnsubscribeHistory(): Set<string> {
-  const historyPaths = [
-    path.join(PROJECT_ROOT, 'groups', 'main', 'unsubscribe-history.json'),
-    path.join(PROJECT_ROOT, 'groups', 'telegram_main', 'unsubscribe-history.json'),
-  ];
+interface HistoryEntry {
+  unsubscribedAt: string;
+  senderName: string;
+  senderEmail: string;
+  result: string;
+  method?: string;
+  url?: string;
+  lastSeen?: string | null;
+  // Legacy field — ignored on read, not written
+  date?: string;
+}
 
+interface HistoryFile {
+  history: HistoryEntry[];
+}
+
+const HISTORY_PATHS = [
+  path.join(PROJECT_ROOT, 'groups', 'telegram_main', 'unsubscribe-history.json'),
+  path.join(PROJECT_ROOT, 'groups', 'main', 'unsubscribe-history.json'),
+];
+
+function loadUnsubscribeHistory(): { emails: Set<string>; entries: HistoryEntry[]; filePath: string | null } {
   const unsubscribedEmails = new Set<string>();
+  let allEntries: HistoryEntry[] = [];
+  let primaryPath: string | null = null;
 
-  for (const historyPath of historyPaths) {
+  for (const historyPath of HISTORY_PATHS) {
     if (!fs.existsSync(historyPath)) continue;
+    if (!primaryPath) primaryPath = historyPath;
     try {
-      const history = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
-      for (const entry of history.history || []) {
+      const data: HistoryFile = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+      for (const entry of data.history || []) {
         if (entry.result === 'success' && entry.senderEmail) {
           unsubscribedEmails.add(entry.senderEmail.toLowerCase());
         }
+        allEntries.push(entry);
       }
     } catch {
       // Ignore malformed history
     }
   }
 
-  return unsubscribedEmails;
+  return { emails: unsubscribedEmails, entries: allEntries, filePath: primaryPath };
+}
+
+/** Update lastSeen on history entries for senders still emailing after unsubscribe */
+function updateLastSeen(
+  historyPath: string,
+  entries: HistoryEntry[],
+  bySender: Map<string, SenderAccumulator>,
+): void {
+  const now = new Date().toISOString();
+  let updated = false;
+
+  for (const entry of entries) {
+    if (entry.result !== 'success') continue;
+    const sender = bySender.get(entry.senderEmail?.toLowerCase());
+    if (sender) {
+      entry.lastSeen = now;
+      // Backfill unsubscribe URL if missing
+      if (!entry.url && sender.unsubscribeUrl) {
+        entry.url = sender.unsubscribeUrl;
+      }
+      updated = true;
+    } else if (entry.lastSeen === undefined) {
+      // Initialize field for existing entries not seen this scan
+      entry.lastSeen = null;
+    }
+    // Migrate legacy date field to unsubscribedAt
+    if (entry.date && !entry.unsubscribedAt) {
+      entry.unsubscribedAt = entry.date + 'T00:00:00.000Z';
+      delete entry.date;
+    }
+  }
+
+  if (updated) {
+    fs.writeFileSync(historyPath, JSON.stringify({ history: entries }, null, 2) + '\n');
+    const seenCount = entries.filter(e => e.lastSeen && e.lastSeen !== null).length;
+    console.log(`Updated lastSeen for ${seenCount} entries in ${historyPath}`);
+  }
 }
 
 // --- Main ---
@@ -292,8 +349,14 @@ async function main() {
     }
   }
 
-  // Filter out already-unsubscribed senders
-  const unsubscribedEmails = loadUnsubscribeHistory();
+  // Filter out already-unsubscribed senders and update lastSeen
+  const { emails: unsubscribedEmails, entries: historyEntries, filePath: historyPath } = loadUnsubscribeHistory();
+
+  // Update lastSeen for senders still emailing after unsubscribe
+  if (historyPath) {
+    updateLastSeen(historyPath, historyEntries, bySender);
+  }
+
   const candidates: Candidate[] = [];
   const domains = new Set<string>();
 
@@ -325,7 +388,34 @@ async function main() {
   // Sort by frequency descending (most spammy first)
   candidates.sort((a, b) => b.frequency - a.frequency);
 
+  // Identify unsubscribed senders still emailing (only after a 3-day grace period)
+  const GRACE_PERIOD_MS = 3 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const historyByEmail = new Map<string, HistoryEntry>();
+  for (const entry of historyEntries) {
+    if (entry.result === 'success' && entry.senderEmail) {
+      historyByEmail.set(entry.senderEmail.toLowerCase(), entry);
+    }
+  }
+
+  const stillEmailing: Array<{ senderName: string; senderEmail: string; frequency: number; unsubscribedAt: string }> = [];
+  for (const sender of bySender.values()) {
+    const histEntry = historyByEmail.get(sender.senderEmail);
+    if (!histEntry) continue;
+    const unsubTime = new Date(histEntry.unsubscribedAt || histEntry.date || '').getTime();
+    if (now - unsubTime < GRACE_PERIOD_MS) continue; // still within grace period
+    stillEmailing.push({
+      senderName: sender.senderName,
+      senderEmail: sender.senderEmail,
+      frequency: sender.frequency,
+      unsubscribedAt: histEntry.unsubscribedAt || histEntry.date || '',
+    });
+  }
+
   console.log(`Candidates after filtering: ${candidates.length}`);
+  if (stillEmailing.length > 0) {
+    console.log(`Still emailing after unsubscribe: ${stillEmailing.length}`);
+  }
 
   // Write output
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -336,6 +426,7 @@ async function main() {
     lookbackDays: LOOKBACK_DAYS,
     totalMessagesScanned: uniqueMessages.size,
     candidates,
+    stillEmailing,
   };
   fs.writeFileSync(METADATA_FILE, JSON.stringify(metadata, null, 2) + '\n');
   console.log(`Wrote ${candidates.length} candidates to ${METADATA_FILE}`);

@@ -1,5 +1,5 @@
 ---
-name: email-unsubscribe
+name: add-email-unsubscribe
 description: "Set up the daily email unsubscribe curator. A host-side script scans Gmail metadata (no bodies), the agent analyzes candidates and messages the user, then uses the browser to unsubscribe from selected senders."
 user_invocable: true
 ---
@@ -116,12 +116,12 @@ VALUES (
   lower(hex(randomblob(8))),
   'telegram_main',
   '<MAIN_JID>',
-  'UNSUBSCRIBE_ANALYZE: Read /workspace/project/data/email-unsubscribe/sanitized_metadata.json. Evaluate the unsubscribe candidates and send the morning cleanup list.',
+  'Run /email-unsubscribe — read the metadata, analyze candidates, and send the morning cleanup list.',
   'cron',
   '<CRON_EXPRESSION>',
   '<NEXT_RUN_ISO>',
   'active',
-  'isolated',
+  'group',
   'Email Unsubscribe Analyzer',
   datetime(''now'')
 );
@@ -151,7 +151,7 @@ Tell the user:
 > *Every morning at [their time]:*
 > 1. A host-side script fetches Gmail metadata only — no email bodies, no LLM
 > 2. Two minutes later, the agent reads the metadata and sends you a list
-> 3. Reply `unsub 1 2` (or `unsub all` / `unsub skip`)
+> 3. Reply with which senders to unsubscribe from (any format)
 > 4. The agent visits each unsubscribe page via browser
 > 5. You get a summary of what worked and what didn't
 >
@@ -161,7 +161,7 @@ Tell the user:
 > ```
 > npx tsx scripts/email-metadata-extractor.ts
 > ```
-> Then send `UNSUBSCRIBE_ANALYZE:` in your main channel.
+> Then send "check my email unsubscribe candidates" in your main channel.
 
 ---
 
@@ -195,7 +195,7 @@ sqlite3 store/messages.db "UPDATE scheduled_tasks SET status = 'cancelled' WHERE
 
 # Remove data (optional)
 rm -rf data/email-unsubscribe/
-rm -f groups/main/unsubscribe-*.json
+rm -f groups/telegram_main/unsubscribe-*.json
 ```
 
-Then delete the "Email Unsubscribe Curator" section from `groups/main/CLAUDE.md`.
+Then delete the "Email Unsubscribe" section from `groups/main/CLAUDE.md` and remove `container/skills/email-unsubscribe/`.

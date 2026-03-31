@@ -15,12 +15,21 @@ interface TimelinePoint {
 }
 
 interface HistoryEntry {
-  date: string;
+  unsubscribedAt?: string;
+  date?: string; // legacy
   senderName: string;
   senderEmail: string;
   result: string;
-  url: string;
+  url?: string;
   method?: string;
+  lastSeen?: string | null;
+}
+
+interface StillEmailing {
+  senderName: string;
+  senderEmail: string;
+  unsubscribedAt?: string;
+  lastSeen?: string;
 }
 
 interface DomainCount {
@@ -49,6 +58,7 @@ interface UnsubscribeData {
   timeline: TimelinePoint[];
   history: HistoryEntry[];
   topDomains: DomainCount[];
+  stillEmailing: StillEmailing[];
   lastScan: LastScan;
   pendingCandidates: PendingCandidate[];
 }
@@ -122,7 +132,7 @@ export default function EmailUnsubscribePage() {
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 
 function OverviewTab({ data }: { data: UnsubscribeData }) {
-  const { stats, timeline, lastScan, topDomains } = data;
+  const { stats, timeline, lastScan, topDomains, stillEmailing } = data;
 
   return (
     <div className="space-y-6">
@@ -173,6 +183,28 @@ function OverviewTab({ data }: { data: UnsubscribeData }) {
             Unsubscribe Activity
           </h3>
           <TimelineChart timeline={timeline} />
+        </div>
+      )}
+
+      {/* Still emailing after unsubscribe */}
+      {stillEmailing.length > 0 && (
+        <div className="rounded-xl border border-amber-500/20 bg-gray-900 p-4">
+          <h3 className="mb-3 text-sm font-medium text-amber-400">
+            Still Emailing After Unsubscribe
+          </h3>
+          <div className="space-y-2">
+            {stillEmailing.map((s) => (
+              <div key={s.senderEmail} className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 truncate">{s.senderName}</p>
+                  <p className="text-xs text-gray-500 truncate">{s.senderEmail}</p>
+                </div>
+                <span className="shrink-0 text-xs text-gray-500">
+                  last seen {s.lastSeen ? new Date(s.lastSeen).toLocaleDateString() : "unknown"}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -280,9 +312,10 @@ function HistoryTab({ data }: { data: UnsubscribeData }) {
   // Group by date (already sorted newest first)
   const grouped = new Map<string, HistoryEntry[]>();
   for (const entry of history) {
-    const list = grouped.get(entry.date) || [];
+    const dateKey = (entry.unsubscribedAt || entry.date || "").split("T")[0] || "unknown";
+    const list = grouped.get(dateKey) || [];
     list.push(entry);
-    grouped.set(entry.date, list);
+    grouped.set(dateKey, list);
   }
 
   return (
@@ -311,6 +344,16 @@ function HistoryTab({ data }: { data: UnsubscribeData }) {
                   <p className="text-xs text-gray-500 truncate">
                     {entry.senderEmail}
                   </p>
+                  {entry.url && (
+                    <a
+                      href={entry.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-indigo-400/60 hover:text-indigo-400 truncate block mt-0.5"
+                    >
+                      {entry.url}
+                    </a>
+                  )}
                 </div>
                 <div className="shrink-0 text-right">
                   <span

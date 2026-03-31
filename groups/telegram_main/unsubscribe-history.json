@@ -1,18 +1,124 @@
 {
   "history": [
-    { "date": "2026-03-31", "senderName": "Yahoo Fantasy Sports", "senderEmail": "fantasy@sports.comms.yahoo.net", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "All Sport Health and Fitness", "senderEmail": "info-allsporthealthandfitness.com@shared1.ccsend.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Todd O'Connell", "senderEmail": "inmail-hit-reply@linkedin.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Vercel", "senderEmail": "notifications@vercel.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "CrossCountry Mortgage", "senderEmail": "hello@connect.ccm.com", "result": "success", "method": "one-click" },
-    { "date": "2026-03-31", "senderName": "Aetna", "senderEmail": "communications@ema.ahm.aetna.com", "result": "failed", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Chris @ StubHub", "senderEmail": "events@mail.stubhub.com", "result": "failed", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Rockport", "senderEmail": "customer.service@us.rockport.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "CAVA", "senderEmail": "hello@em.cava.com", "result": "success", "method": "one-click" },
-    { "date": "2026-03-31", "senderName": "Untappd", "senderEmail": "marketing@mail.untappd.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Amtrak Research", "senderEmail": "no-reply@research.amtrak.com", "result": "success", "method": "one-click" },
-    { "date": "2026-03-31", "senderName": "eBay", "senderEmail": "ebay@ebay.com", "result": "failed", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Zeno from Resend", "senderEmail": "zeno@updates.resend.com", "result": "success", "method": "browser" },
-    { "date": "2026-03-31", "senderName": "Dott", "senderEmail": "info@mail.ridedott.com", "result": "success", "method": "one-click" }
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Yahoo Fantasy Sports",
+      "senderEmail": "fantasy@sports.comms.yahoo.net",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://view.sports.comms.yahoo.net/messages/1774901042280317b32747fe8/unsubscribe"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "All Sport Health and Fitness",
+      "senderEmail": "info-allsporthealthandfitness.com@shared1.ccsend.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://visitor.constantcontact.com/do?p=un&m=001jJHUCqHh-tsyOVitFOm2-A%3D%3D&se=001GnqzJQLfncDy3R0FE-qbwA%3D%3D&t=001EkZLEx15CcE%3D&llr=89qn7jbbb"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Todd O'Connell",
+      "senderEmail": "inmail-hit-reply@linkedin.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://www.linkedin.com/comm/psettings/email-unsubscribe?lipi=urn%3Ali%3Apage%3Aemail_email_hire_inmail_initial_single_01%3BHAXmatkQTFaxlNwfRE%2Bpkw%3D%3D&midToken=AQGwGremj3JH2w&midSig=27L7vrgwTRjcc1&trk=eml-email_hire_inmail_initial_single_01-unsub-0-unsub&trkEmail=eml-email_hire_inmail_initial_single_01-unsub-0-unsub-null-4l4v30~mn8eto52~be-null-null&eid=4l4v30-mn8eto52-be&loid=AQEPxaLEr6gsQwAAAZ0tlP5_lw1e7YL1ZVrPLTLWxuJ6scCqL23kd0W5cPb6YuVem-6b1RQIOH7wEKKyoZmS8U5_6jlbwajW"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Vercel",
+      "senderEmail": "notifications@vercel.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "CrossCountry Mortgage",
+      "senderEmail": "hello@connect.ccm.com",
+      "result": "success",
+      "method": "one-click",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://api.getblueshift.com/customer/email_preferences?unsubscribe=true&source=header_http&auid=6131615a-7ddf-4f16-afd1-01d6c6ba6a1b&uid=823e91cd-e044-48ec-b26b-4b0d533e458b&mid=fb62217a-bbc8-4040-bf09-88a4a1d77335&txnid=fbcd055d-f6ac-4b88-8b09-47168935782d&eid=43182929-0804-1ead-5c37-4cf194591e7f&bsft_ek=2026-03-24T20%3A59%3A55Z&bsft_aaid=66af3366-bd99-4bf3-b228-9e1a25186c60"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Aetna",
+      "senderEmail": "communications@ema.ahm.aetna.com",
+      "result": "failed",
+      "method": "browser",
+      "lastSeen": null
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Chris @ StubHub",
+      "senderEmail": "events@mail.stubhub.com",
+      "result": "failed",
+      "method": "browser",
+      "lastSeen": null
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Rockport",
+      "senderEmail": "customer.service@us.rockport.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "CAVA",
+      "senderEmail": "hello@em.cava.com",
+      "result": "success",
+      "method": "one-click",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://03.emailinboundprocessing.com/enc_user/list_unsubscribe?d=%241%24NMoHnSH49sxBEIwMZSVwgg%3D%3D%24IWNWKMa70eDKrDPI122ZsxkQ%2FZLLbKtDfxOREOzeuZSSmKBjetw3xqmbefvV%0AQlH9%2BWd8C7AY20pHfkd6eE1IyZOcAmNQEG2m7vgJcPiL8ZJpWeCGcKAB7rEH%0AOL439Gsq%2B1Iow9oyKTEibn%2BHuKaZ2nPA6lHMvIVP7oFqbRRHCvVJwwrVhchb%0Ap0GYxPPw53l7eLr10%2FQR7rK73GO7vClhFg6o%2BM%2B6Jb8epSh7xgmW1GPFESfl%0AbtcPO%2FQ0HkjCiX5wQmHzQV%2FEycQryw5knplMSNCp8J%2BpXS%2FxTsbaLInwxeSB%0AH8NGj9kycj2rAv3iqAZ7ZIGNIfy%2FrppPZy116l00%2FJktL%2FRFbXOkYMs5eE7y%0Awa%2FD4GoyNG5UVRbWOEYCJpXB&1=1"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Untappd",
+      "senderEmail": "marketing@mail.untappd.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": null
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Amtrak Research",
+      "senderEmail": "no-reply@research.amtrak.com",
+      "result": "success",
+      "method": "one-click",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://survey3.medallia.com/?e923hn67wmk2k5pxnyb9&reject=yes"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "eBay",
+      "senderEmail": "ebay@ebay.com",
+      "result": "failed",
+      "method": "browser",
+      "lastSeen": null
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Zeno from Resend",
+      "senderEmail": "zeno@updates.resend.com",
+      "result": "success",
+      "method": "browser",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://unsubscribe.resend.com/?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb250YWN0SWQiOiI2MWRkZGEzMi00YTYxLTQxZTgtOGQ0Zi05MmRiY2RkYWUxOGYiLCJhdWRpZW5jZUlkIjoiMzViMWNmZjEtYzM4MS00ZDZmLTk5NGUtNDkwNGY4NTVmMmM3IiwiYnJvYWRjYXN0SWQiOiJlMzk3ZWYwZS05MzI1LTQ3OTQtOGMyNi1kM2Y1NjFhNWQ0MWUiLCJ0ZWFtSWQiOiI0MGI0OGMwOS0xYmYxLTRkNjItYWYyOS03YzE2MTNkMmVkNzUiLCJpYXQiOjE3NzQzNTE0MDAsImV4cCI6MTgwNTg4NzQwMH0.hNE2rLr_DC5vcSnxDPShwb4RsWmCmpWxXoup7RWAgy8"
+    },
+    {
+      "unsubscribedAt": "2026-03-31T02:48:00.000Z",
+      "senderName": "Dott",
+      "senderEmail": "info@mail.ridedott.com",
+      "result": "success",
+      "method": "one-click",
+      "lastSeen": "2026-03-31T12:12:13.381Z",
+      "url": "https://01.emailinboundprocessing.eu/enc_user/list_unsubscribe?d=%241%24om2XhHGuPluU%2B10DOI%2FRkw%3D%3D%24tHDfJgiQMg0F4qSH%2BtoJmPL7YcCvnxa%2FlBvHTHODZ8VM9Td1qz%2B1UEqtb6p4%0A9lMq7Kn9BEPnn7lL%2BUCrSEA%2F1uliyBcIkNtOqaz5C79NHBZPAp4TpveENRWR%0A%2BBFRiUJPM9U%2FcDFm03hmNeJD7R9xkAwBvsmIFHy8qhKuDbHnzwPCkciIa%2BB0%0ASg8sXF97a9xL7nHWH5vJonEdRTtKomORYudAmKIBLTHT9UVBBebhRVSbIW%2BH%0AW%2BOWDf0KbZdWIRAhzzjnO2zX%2B3eCx00fWHXD9w%2F%2Fz5l1U%2FnNLN53ozL5iD1b%0A4EQcXLDG4vLUnHC37M5j&1=1"
+    }
   ]
 }
