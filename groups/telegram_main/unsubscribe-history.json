@@ -1,0 +1,18 @@
+{
+  "history": [
+    { "date": "2026-03-31", "senderName": "Yahoo Fantasy Sports", "senderEmail": "fantasy@sports.comms.yahoo.net", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "All Sport Health and Fitness", "senderEmail": "info-allsporthealthandfitness.com@shared1.ccsend.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Todd O'Connell", "senderEmail": "inmail-hit-reply@linkedin.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Vercel", "senderEmail": "notifications@vercel.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "CrossCountry Mortgage", "senderEmail": "hello@connect.ccm.com", "result": "success", "method": "one-click" },
+    { "date": "2026-03-31", "senderName": "Aetna", "senderEmail": "communications@ema.ahm.aetna.com", "result": "failed", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Chris @ StubHub", "senderEmail": "events@mail.stubhub.com", "result": "failed", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Rockport", "senderEmail": "customer.service@us.rockport.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "CAVA", "senderEmail": "hello@em.cava.com", "result": "success", "method": "one-click" },
+    { "date": "2026-03-31", "senderName": "Untappd", "senderEmail": "marketing@mail.untappd.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Amtrak Research", "senderEmail": "no-reply@research.amtrak.com", "result": "success", "method": "one-click" },
+    { "date": "2026-03-31", "senderName": "eBay", "senderEmail": "ebay@ebay.com", "result": "failed", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Zeno from Resend", "senderEmail": "zeno@updates.resend.com", "result": "success", "method": "browser" },
+    { "date": "2026-03-31", "senderName": "Dott", "senderEmail": "info@mail.ridedott.com", "result": "success", "method": "one-click" }
+  ]
+}
