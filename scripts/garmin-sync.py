@@ -22,7 +22,12 @@ from datetime import date, datetime, timedelta
 from garminconnect import Garmin
 
 NANOCLAW_ROOT = os.environ.get("NANOCLAW_ROOT", os.path.join(os.path.dirname(__file__), ".."))
-DATA_DIR = os.path.join(NANOCLAW_ROOT, "data/sessions/telegram_main/.claude")
+# DATA_DIR is where credentials, tokens, and DBs live. Inside the container,
+# .claude is mounted at /home/node/.claude. Override via GARMIN_DATA_DIR if needed.
+DATA_DIR = os.environ.get(
+    "GARMIN_DATA_DIR",
+    os.path.join(NANOCLAW_ROOT, "data/sessions/telegram_main/.claude"),
+)
 CRED_PATH = os.path.join(DATA_DIR, "garmin-credentials.json")
 
 # Browser-like user agent — Garmin blocks the default garth mobile app agent

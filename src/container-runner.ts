@@ -164,6 +164,17 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount scripts/ read-only so scheduled tasks can run host helper scripts
+  // (e.g. garmin-sync.py). Path matches what scheduled task prompts expect.
+  const scriptsDir = path.join(projectRoot, 'scripts');
+  if (fs.existsSync(scriptsDir)) {
+    mounts.push({
+      hostPath: scriptsDir,
+      containerPath: '/home/node/nanoclaw/scripts',
+      readonly: true,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
