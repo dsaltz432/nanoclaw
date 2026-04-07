@@ -135,8 +135,10 @@ router.get("/api/beacon-intel/events", (req: Request, res: Response) => {
     let sql = `SELECT * FROM items WHERE archived = 0 AND type IN (${placeholders})`;
     const params: (string | number)[] = [...types];
 
-    if (date_from) { sql += " AND date >= ?"; params.push(date_from as string); }
-    if (date_to)   { sql += " AND date <= ?"; params.push(date_to as string); }
+    const today = new Date().toISOString().slice(0, 10);
+    const effectiveDateFrom = date_from && (date_from as string) > today ? date_from as string : today;
+    sql += " AND date >= ?"; params.push(effectiveDateFrom);
+    if (date_to) { sql += " AND date <= ?"; params.push(date_to as string); }
     sql += " ORDER BY date ASC";
 
     const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];

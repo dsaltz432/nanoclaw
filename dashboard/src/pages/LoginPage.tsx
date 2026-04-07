@@ -1,4 +1,8 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, useEffect } from "react";
+
+const STORAGE_KEY = "nc_saved_pw";
+const STORAGE_EXPIRY_KEY = "nc_saved_pw_expiry";
+const EXPIRY_DAYS = 90;
 
 interface LoginPageProps {
   onLogin: () => void;
@@ -9,29 +13,49 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function tryLogin(pw: string, silent = false) {
+    if (!silent) setLoading(true);
     setError("");
-    setLoading(true);
-
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: pw }),
       });
-
       if (res.ok) {
+        const expiry = Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+        localStorage.setItem(STORAGE_KEY, pw);
+        localStorage.setItem(STORAGE_EXPIRY_KEY, String(expiry));
         onLogin();
       } else {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "Invalid password");
+        if (!silent) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error ?? "Invalid password");
+        } else {
+          // Saved password no longer valid — clear it
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(STORAGE_EXPIRY_KEY);
+        }
       }
     } catch {
-      setError("Connection failed");
+      if (!silent) setError("Connection failed");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
+  }
+
+  // Auto-login with saved password on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    const expiry = Number(localStorage.getItem(STORAGE_EXPIRY_KEY) ?? 0);
+    if (saved && Date.now() < expiry) {
+      tryLogin(saved, true);
+    }
+  }, []);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    await tryLogin(password);
   }
 
   return (

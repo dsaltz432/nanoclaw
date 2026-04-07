@@ -123,9 +123,19 @@ function getDateBounds(range: DateRange): { from: string; to: string } | null {
 
   if (range === "weekend") {
     const day = today.getDay(); // 0=Sun,6=Sat
-    const daysToSat = day === 6 ? 0 : (6 - day) % 7 || 7;
+    if (day === 0) {
+      // Today is Sunday — show just today
+      return { from: fmt(today), to: fmt(today) };
+    }
+    if (day === 6) {
+      // Today is Saturday — show Sat + Sun
+      const sun = new Date(today);
+      sun.setDate(today.getDate() + 1);
+      return { from: fmt(today), to: fmt(sun) };
+    }
+    // Weekday — show upcoming Sat + Sun
     const sat = new Date(today);
-    sat.setDate(today.getDate() + daysToSat);
+    sat.setDate(today.getDate() + (6 - day));
     const sun = new Date(sat);
     sun.setDate(sat.getDate() + 1);
     return { from: fmt(sat), to: fmt(sun) };
@@ -288,11 +298,77 @@ function EventsTab() {
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {events.map((event) => (
-            <EventCard key={event.id} event={event} />
-          ))}
+          {groupEvents(events).map((group) =>
+            group.length === 1 ? (
+              <EventCard key={group[0].id} event={group[0]} />
+            ) : (
+              <RecurringEventCard key={group[0].title + group[0].location} events={group} />
+            )
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function groupEvents(events: BeaconEvent[]): BeaconEvent[][] {
+  const groups = new Map<string, BeaconEvent[]>();
+  for (const e of events) {
+    const key = `${e.title.trim().toLowerCase()}||${(e.location || "").trim().toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(e);
+  }
+  return Array.from(groups.values());
+}
+
+function RecurringEventCard({ events }: { events: BeaconEvent[] }) {
+  const rep = events[0];
+  const dates = events.map((e) => e.date_start).sort();
+  const shortDate = (d: string) => {
+    const dt = new Date(d + "T12:00:00");
+    return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 flex flex-col gap-2">
+      <div className="flex items-start gap-2">
+        <span className="text-xl leading-none">{rep.emoji || "📅"}</span>
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-gray-100 leading-snug">{rep.title}</p>
+          <div className="mt-1 flex flex-wrap gap-1.5 items-center">
+            <CategoryBadge cat={rep.category} />
+            <span className="text-[10px] text-gray-600 bg-gray-800 rounded px-1.5 py-0.5">recurring</span>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-1 text-xs text-gray-400">
+        <div className="flex items-start gap-1.5">
+          <svg className="h-3 w-3 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 9v7.5" />
+          </svg>
+          <span className="flex flex-wrap gap-x-2 gap-y-0.5">
+            {dates.map((d) => <span key={d}>{shortDate(d)}{rep.time ? ` · ${rep.time}` : ""}</span>)}
+          </span>
+        </div>
+        {rep.location && (
+          <div className="flex items-center gap-1.5">
+            <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+            </svg>
+            <span className="truncate">{rep.location}</span>
+          </div>
+        )}
+      </div>
+      <div className="mt-auto flex items-center justify-between pt-1">
+        {rep.url ? (
+          <a href={rep.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+            View details →
+          </a>
+        ) : <span />}
+        {rep.sources && (
+          <span className="text-xs text-gray-600">via {rep.sources.split(", ")[0]}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -713,6 +789,48 @@ const SUB_TABS: { key: SubTab; label: string; emoji: string }[] = [
   { key: "news", label: "News & Intel", emoji: "📰" },
 ];
 
+function WorkflowPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-6">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+      >
+        <span>{open ? "▾" : "▸"}</span>
+        <span>How this works</span>
+      </button>
+      {open && (
+        <div className="mt-3 rounded-xl border border-gray-800 bg-gray-900/60 p-4 text-xs text-gray-400 space-y-3 leading-relaxed">
+          <div>
+            <p className="font-semibold text-gray-300 mb-1">Daily Intel Gatherer — runs at 4pm ET</p>
+            <ol className="list-decimal list-inside space-y-1 pl-1">
+              <li><span className="text-gray-300">Cleanup</span> — archives past events, removes expired items</li>
+              <li><span className="text-gray-300">Priority sources</span> — scrapes thebeaconbeaconny.com, Highlands Current, Beacon Free Press, Chronogram, HVMAG, Eventbrite</li>
+              <li><span className="text-gray-300">Venue scraping</span> — visits the events page of every active venue in the DB</li>
+              <li><span className="text-gray-300">Broad searches</span> — 13 web searches covering events, live music, food trucks, farmers markets, restaurant news</li>
+              <li><span className="text-gray-300">Change detection</span> — re-checks upcoming events to catch cancellations</li>
+              <li><span className="text-gray-300">AI duplicate review</span> — before inserting, compares new venues and events against existing DB entries using semantic judgment to catch near-duplicates with slightly different names</li>
+              <li><span className="text-gray-300">Insert</span> — URL-based dedup (Layer 0) + normalized title dedup (Layer 1) + DB unique constraints as final backstop</li>
+            </ol>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-300 mb-1">Venue Profile Enricher — runs Mondays at 9am ET</p>
+            <p>Researches each venue (description, price range, known for, regular events, hours) and detects permanent closures. Prioritizes venues not checked recently.</p>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-300 mb-1">Weekend / Week Ahead Reports — Thu & Sun at 6pm ET</p>
+            <p>Reads curated events from the DB and sends a formatted digest to Telegram.</p>
+          </div>
+          <div className="pt-1 border-t border-gray-800 text-gray-600">
+            Coverage: Beacon (primary), Newburgh, Cold Spring, Fishkill, Garrison, Cornwall-on-Hudson, Marlboro — within ~30 min of Beacon. Excludes Poughkeepsie, art events, and kids activities.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function BeaconIntelPage() {
   const [activeTab, setActiveTab] = useState<SubTab>("events");
   const [meta, setMeta] = useState<Meta>({ last_updated: null, db_exists: false });
@@ -747,6 +865,8 @@ export default function BeaconIntelPage() {
           )}
         </div>
       </div>
+
+      <WorkflowPanel />
 
       {/* Sub-tab bar */}
       <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1 w-full sm:w-fit">

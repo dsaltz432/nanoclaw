@@ -24,10 +24,10 @@ interface Group {
   folder: string;
 }
 
-function taskLabel(task: Task): string {
+function taskLabel(task: Task, maxLen = 45): string {
   const firstLine = task.prompt.split("\n").find((l) => l.trim().length > 0) || "";
   const clean = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "").replace(/^You are /, "").trim();
-  if (clean.length > 50) return clean.slice(0, 47) + "...";
+  if (clean.length > maxLen) return clean.slice(0, maxLen - 3) + "...";
   return clean || task.group_folder;
 }
 
@@ -110,20 +110,18 @@ export default function DashboardPage() {
             {recentRuns.map((task) => (
               <div
                 key={task.id}
-                className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950 px-4 py-3"
+                className="rounded-lg border border-gray-800 bg-gray-950 px-4 py-3"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-300">{taskLabel(task)}</span>
-                    <span className="rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400">{task.group_folder}</span>
-                  </div>
-                  {task.last_result && (
-                    <p className="mt-1 truncate text-xs text-gray-500">{task.last_result}</p>
-                  )}
-                </div>
-                <div className="ml-4 flex items-center gap-3">
+                {/* Task name — full width, wraps if needed */}
+                <p className="text-sm text-gray-300 leading-snug">{taskLabel(task)}</p>
+                {task.last_result && (
+                  <p className="mt-1 truncate text-xs text-gray-500">{task.last_result}</p>
+                )}
+                {/* Meta row: group + status + time */}
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400">{task.group_folder}</span>
                   <StatusBadge status={task.status} />
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-gray-500 ml-auto">
                     {task.last_run ? relativeTime(task.last_run) : "never"}
                   </span>
                 </div>
@@ -146,9 +144,9 @@ function SummaryCard({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900 p-6">
-      <p className="text-sm text-gray-400">{title}</p>
-      <p className="mt-1 text-3xl font-semibold text-gray-100">{value}</p>
+    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 sm:p-6">
+      <p className="text-xs sm:text-sm text-gray-400">{title}</p>
+      <p className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-100">{value}</p>
       {children}
     </div>
   );

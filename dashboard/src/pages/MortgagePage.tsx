@@ -282,7 +282,7 @@ export default function MortgagePage() {
         {/* Target */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 sm:p-5">
           <p className="text-xs text-gray-500 mb-1">Refinance Target</p>
-          <p className="text-2xl sm:text-3xl font-bold text-green-400">{target.toFixed(1)}%</p>
+          <p className="text-2xl sm:text-3xl font-bold text-blue-400">{target.toFixed(1)}%</p>
           {bpsToTarget != null && (
             <p className="mt-1 text-xs text-gray-500">
               {bpsToTarget > 0 ? `${bpsToTarget} bps above target` : `${Math.abs(bpsToTarget)} bps below — alert!`}
