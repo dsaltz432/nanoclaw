@@ -10,6 +10,8 @@ import ProjectsPage from "./pages/ProjectsPage";
 import BeaconIntelPage from "./pages/BeaconIntelPage";
 import MortgagePage from "./pages/MortgagePage";
 import EmailUnsubscribePage from "./pages/EmailUnsubscribePage";
+import StravaPage from "./pages/StravaPage";
+import HealthPage from "./pages/HealthPage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -45,6 +47,8 @@ export default function App() {
           <Route path="beacon-intel" element={<BeaconIntelPage />} />
           <Route path="mortgage" element={<MortgagePage />} />
           <Route path="email-unsubscribe" element={<EmailUnsubscribePage />} />
+          <Route path="strava" element={<StravaPage />} />
+          <Route path="health" element={<HealthPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

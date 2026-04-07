@@ -10,6 +10,8 @@ const navItems = [
   { to: "/beacon-intel", label: "Beacon Intel", icon: BeaconIcon },
   { to: "/mortgage", label: "Mortgage Rates", icon: MortgageIcon },
   { to: "/email-unsubscribe", label: "Email Unsub", icon: EmailIcon },
+  { to: "/strava", label: "Strava", icon: StravaIcon },
+  { to: "/health", label: "Health", icon: HealthIcon },
 ];
 
 export default function Layout() {
@@ -217,6 +219,22 @@ function BeaconIcon() {
     <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+    </svg>
+  );
+}
+
+function StravaIcon() {
+  return (
+    <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5l5-9 4 7 3-5 5 9" />
+    </svg>
+  );
+}
+
+function HealthIcon() {
+  return (
+    <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
     </svg>
   );
 }
