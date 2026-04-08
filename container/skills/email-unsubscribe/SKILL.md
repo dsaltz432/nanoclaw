@@ -13,13 +13,13 @@ description: Morning email cleanup — analyze pre-scanned Gmail metadata, prese
 
 | File | Container path | Direction |
 |------|---------------|-----------|
-| Metadata | `/workspace/project/data/email-unsubscribe/sanitized_metadata.json` | read |
-| Domain allowlist | `/workspace/project/data/email-unsubscribe/known_unsubscribe_domains.json` | read |
+| Metadata | `/workspace/extra/email-unsubscribe/sanitized_metadata.json` | read |
+| Domain allowlist | `/workspace/extra/email-unsubscribe/known_unsubscribe_domains.json` | read |
 | History | `/workspace/group/unsubscribe-history.json` | read/write |
 
 ## Morning Analysis
 
-1. Read `/workspace/project/data/email-unsubscribe/sanitized_metadata.json`. If it doesn't exist or `scanDate` is not today, reply: `Metadata not ready — the scan may still be running. Try again in a minute.` and stop.
+1. Read `/workspace/extra/email-unsubscribe/sanitized_metadata.json`. If it doesn't exist or `scanDate` is not today, handle per the "Stale or missing metadata: scheduled vs interactive" section in the email group's CLAUDE.md — interactive triggers reply `Metadata not ready — the scan may still be running. Try again in a minute.` and stop; scheduled triggers emit a loud skip message with launchd diagnostic info and stop.
 
 2. Read `/workspace/group/unsubscribe-history.json` (if it exists). Skip senders already successfully unsubscribed.
 

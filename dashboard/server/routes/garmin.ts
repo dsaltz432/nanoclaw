@@ -6,7 +6,7 @@ import fs from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
-const dataDir = path.join(nanoclawRoot, "data/sessions/telegram_main/.claude");
+const dataDir = path.join(nanoclawRoot, "data/sessions/fitness/.claude");
 const credPath = path.join(dataDir, "garmin-credentials.json");
 
 // ── Profile helpers ──────────────────────────────────────────────────────────

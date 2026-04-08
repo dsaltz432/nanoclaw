@@ -94,11 +94,11 @@ Daily email cleanup: a host-side script scans Gmail metadata (no bodies, no LLM)
 | Agent instructions | `groups/main/CLAUDE.md` (Email Unsubscribe Curator section) |
 | Setup skill | `.claude/skills/email-unsubscribe/SKILL.md` |
 | Scan output | `data/email-unsubscribe/` |
-| Unsubscribe history | `groups/telegram_main/unsubscribe-history.json` |
+| Unsubscribe history | `groups/email/unsubscribe-history.json` |
 | Gmail credentials | `~/.gmail-mcp/` (not in repo) |
 | Logs | `logs/email-metadata.log`, `logs/email-metadata.error.log` |
 
-**Scheduled task in SQLite:** `Email Unsubscribe Analyzer` — cron `2 6 * * *` (6:02 AM ET), `context_mode: isolated`, `group_folder: telegram_main`. Must be recreated on new machine via `/email-unsubscribe`.
+**Scheduled task in SQLite:** `Email Unsubscribe Analyzer` — cron `25 6 * * *` (6:25 AM ET), `context_mode: isolated`, `group_folder: email`. Must be recreated on new machine via `/email-unsubscribe`.
 
 ```bash
 # Service management (macOS)

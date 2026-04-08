@@ -9,10 +9,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
 const dbPath =
   process.env.STRAVA_DB ||
-  path.join(nanoclawRoot, "data/sessions/telegram_main/.claude/strava.db");
+  path.join(nanoclawRoot, "data/sessions/fitness/.claude/strava.db");
 const credPath = path.join(
   nanoclawRoot,
-  "data/sessions/telegram_main/.claude/strava-credentials.json"
+  "data/sessions/fitness/.claude/strava-credentials.json"
 );
 
 interface StravaCredential {
@@ -530,7 +530,7 @@ const ncDbPath =
   path.join(nanoclawRoot, "store", "messages.db");
 const askResponseDir = path.join(
   nanoclawRoot,
-  "data/sessions/telegram_main/.claude"
+  "data/sessions/fitness/.claude"
 );
 
 // POST /api/strava/ask — submit a question; returns { task_id }
@@ -602,7 +602,7 @@ Do not send any messages. Just write the file and exit.`;
 
 // GET /api/strava/ask/:taskId — poll for answer
 router.get("/api/strava/ask/:taskId", (req: Request, res: Response) => {
-  const { taskId } = req.params;
+  const taskId = req.params.taskId as string;
   if (!taskId.startsWith("strava-ask-")) {
     return res.status(400).json({ error: "invalid task id" });
   }

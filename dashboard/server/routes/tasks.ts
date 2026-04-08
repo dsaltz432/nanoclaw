@@ -94,7 +94,7 @@ router.patch("/api/tasks/:id/status", (req: Request, res: Response) => {
       res.status(400).json({ error: "status must be 'active' or 'paused'" });
       return;
     }
-    setTaskStatus(req.params.id, status);
+    setTaskStatus(req.params.id as string, status);
     res.json({ ok: true, status });
   } catch (err) {
     console.error("Failed to update task status:", err);

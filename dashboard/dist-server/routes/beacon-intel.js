@@ -6,7 +6,7 @@ import fs from "fs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
 const dbPath = process.env.BEACON_INTEL_DB ||
-    path.join(nanoclawRoot, "data/sessions/telegram_main/.claude/beacon.db");
+    path.join(nanoclawRoot, "data/sessions/beacon/.claude/beacon.db");
 const geoCachePath = path.join(nanoclawRoot, "data/beacon-geocache.json");
 let geoCache = null;
 let geocodingInProgress = false;
@@ -119,10 +119,10 @@ router.get("/api/beacon-intel/events", (req, res) => {
         const placeholders = types.map(() => "?").join(", ");
         let sql = `SELECT * FROM items WHERE archived = 0 AND type IN (${placeholders})`;
         const params = [...types];
-        if (date_from) {
-            sql += " AND date >= ?";
-            params.push(date_from);
-        }
+        const today = new Date().toISOString().slice(0, 10);
+        const effectiveDateFrom = date_from && date_from > today ? date_from : today;
+        sql += " AND date >= ?";
+        params.push(effectiveDateFrom);
         if (date_to) {
             sql += " AND date <= ?";
             params.push(date_to);

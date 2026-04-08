@@ -5,9 +5,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "..");
 const dbPath = path.join(nanoclawRoot, "store", "messages.db");
 const db = new Database(dbPath, { readonly: true });
+const dbWrite = new Database(dbPath);
 export default db;
 export function getTasks() {
     return db.prepare("SELECT * FROM scheduled_tasks ORDER BY COALESCE(last_run, created_at) DESC").all();
+}
+export function setTaskStatus(taskId, status) {
+    dbWrite.prepare("UPDATE scheduled_tasks SET status = ? WHERE id = ?").run(status, taskId);
 }
 export function getTaskRuns(taskId, limit = 50) {
     return db

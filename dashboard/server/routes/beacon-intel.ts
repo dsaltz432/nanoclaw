@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
 const dbPath =
   process.env.BEACON_INTEL_DB ||
-  path.join(nanoclawRoot, "data/sessions/telegram_main/.claude/beacon.db");
+  path.join(nanoclawRoot, "data/sessions/beacon/.claude/beacon.db");
 const geoCachePath = path.join(nanoclawRoot, "data/beacon-geocache.json");
 
 // ── Geocoding ───────────────────────────────────────────────────────────────

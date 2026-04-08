@@ -1,7 +1,7 @@
 import { Router } from "express";
 import fs from "fs";
 import path from "path";
-import { getTasks, getTaskRuns } from "../db.js";
+import { getTasks, getTaskRuns, setTaskStatus } from "../db.js";
 const router = Router();
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(import.meta.dirname, "..");
 function findLogForRun(groupFolder, runAt) {
@@ -81,6 +81,21 @@ router.get("/api/tasks/:id/runs", (req, res) => {
     catch (err) {
         console.error("Failed to fetch task runs:", err);
         res.status(500).json({ error: "Failed to fetch task runs" });
+    }
+});
+router.patch("/api/tasks/:id/status", (req, res) => {
+    try {
+        const { status } = req.body;
+        if (status !== "active" && status !== "paused") {
+            res.status(400).json({ error: "status must be 'active' or 'paused'" });
+            return;
+        }
+        setTaskStatus(req.params.id, status);
+        res.json({ ok: true, status });
+    }
+    catch (err) {
+        console.error("Failed to update task status:", err);
+        res.status(500).json({ error: "Failed to update task status" });
     }
 });
 export default router;

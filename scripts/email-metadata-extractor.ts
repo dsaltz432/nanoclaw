@@ -211,8 +211,12 @@ interface HistoryFile {
 }
 
 const HISTORY_PATHS = [
-  path.join(PROJECT_ROOT, 'groups', 'telegram_main', 'unsubscribe-history.json'),
-  path.join(PROJECT_ROOT, 'groups', 'main', 'unsubscribe-history.json'),
+  // email group is the sole location after the multi-group migration.
+  // Pre-migration copies live at groups/telegram_main/unsubscribe-history.json
+  // as rollback snapshots but are intentionally NOT read here — reading them
+  // would duplicate entries during the merge. If rolling back, move the
+  // telegram_main copy back into place manually.
+  path.join(PROJECT_ROOT, 'groups', 'email', 'unsubscribe-history.json'),
 ];
 
 function loadUnsubscribeHistory(): { emails: Set<string>; entries: HistoryEntry[]; filePath: string | null } {

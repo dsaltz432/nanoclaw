@@ -5,65 +5,65 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
-const dbPath = path.join(nanoclawRoot, "store/messages.db");
-const DAILY_TASK_ID = "task-1774321313812-tu4hfc";
+const messagesDbPath = path.join(nanoclawRoot, "store/messages.db");
+const ratesDbPath = path.join(nanoclawRoot, "data/sessions/finance/.claude/mortgage-rates.db");
+// Hard-coded task ID for the weekly report's free-text summary, still pulled
+// from task_run_logs. The rate history itself now comes from mortgage-rates.db.
 const WEEKLY_TASK_ID = "task-1774321323925-cof6xm";
 const TARGET_RATE = 5.8;
-function getDb() {
-    if (!fs.existsSync(dbPath))
+function openReadonly(p) {
+    if (!fs.existsSync(p))
         return null;
     try {
-        return new Database(dbPath, { readonly: true });
+        return new Database(p, { readonly: true });
     }
     catch {
         return null;
     }
 }
-function parseRate(text) {
-    if (!text)
-        return null;
-    // Match bold rate: **6.37%** or **6.37 %**
-    const bold = text.match(/\*\*(\d+\.\d+)\s*%\*\*/);
-    if (bold)
-        return parseFloat(bold[1]);
-    // Match plain: "6.37%" or "6.37 percent"
-    const plain = text.match(/\b(\d+\.\d+)\s*%/);
-    if (plain) {
-        const n = parseFloat(plain[1]);
-        // Sanity check: mortgage rates are 3–12%
-        if (n >= 3 && n <= 12)
-            return n;
-    }
-    return null;
-}
-function formatDate(isoStr) {
-    return isoStr.split("T")[0];
-}
 const router = Router();
 router.get("/api/mortgage", (_req, res) => {
     try {
-        const db = getDb();
-        if (!db)
-            return void res.json({ rates: [], weekly_summary: null, target: TARGET_RATE });
-        // Daily rate history
-        const dailyRuns = db.prepare(`
-      SELECT run_at, result FROM task_run_logs
-      WHERE task_id = ? AND status = 'success'
-      ORDER BY run_at ASC
-    `).all(DAILY_TASK_ID);
+        // Rate history: canonical source is mortgage-rates.db in the finance
+        // group's per-group .claude/ directory. Populated by the daily tracker
+        // task (task-1774321313812-tu4hfc) via INSERT OR REPLACE.
+        const ratesDb = openReadonly(ratesDbPath);
         const rates = [];
-        for (const run of dailyRuns) {
-            const rate = parseRate(run.result);
-            if (rate !== null) {
-                rates.push({ date: formatDate(run.run_at), rate });
+        if (ratesDb) {
+            try {
+                const rows = ratesDb
+                    .prepare(`SELECT date, rate_30yr FROM rates ORDER BY date ASC`)
+                    .all();
+                for (const row of rows) {
+                    rates.push({ date: row.date, rate: row.rate_30yr });
+                }
+            }
+            finally {
+                ratesDb.close();
             }
         }
-        // Latest weekly report
-        const weeklyRun = db.prepare(`
-      SELECT run_at, result FROM task_run_logs
-      WHERE task_id = ? AND status = 'success'
-      ORDER BY run_at DESC LIMIT 1
-    `).get(WEEKLY_TASK_ID);
+        // Weekly report summary: still lives in task_run_logs.result as free-text
+        // output from the weekly task. Kept here unchanged so the dashboard can
+        // render the latest narrative summary beneath the chart.
+        let weekly_summary = null;
+        let weekly_run_at = null;
+        const messagesDb = openReadonly(messagesDbPath);
+        if (messagesDb) {
+            try {
+                const weeklyRun = messagesDb
+                    .prepare(`SELECT run_at, result FROM task_run_logs
+             WHERE task_id = ? AND status = 'success'
+             ORDER BY run_at DESC LIMIT 1`)
+                    .get(WEEKLY_TASK_ID);
+                if (weeklyRun) {
+                    weekly_summary = weeklyRun.result ?? null;
+                    weekly_run_at = weeklyRun.run_at ?? null;
+                }
+            }
+            finally {
+                messagesDb.close();
+            }
+        }
         const current = rates.length > 0 ? rates[rates.length - 1].rate : null;
         const previous = rates.length > 1 ? rates[rates.length - 2].rate : null;
         res.json({
@@ -71,8 +71,8 @@ router.get("/api/mortgage", (_req, res) => {
             current,
             previous,
             target: TARGET_RATE,
-            weekly_summary: weeklyRun?.result ?? null,
-            weekly_run_at: weeklyRun?.run_at ?? null,
+            weekly_summary,
+            weekly_run_at,
         });
     }
     catch (err) {
