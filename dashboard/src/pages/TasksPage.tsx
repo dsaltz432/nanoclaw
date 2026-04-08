@@ -133,6 +133,19 @@ export default function TasksPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  async function toggleStatus(e: React.MouseEvent, task: Task) {
+    e.stopPropagation();
+    const newStatus = task.status === "active" ? "paused" : "active";
+    const res = await fetch(`/api/tasks/${task.id}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    if (res.ok) {
+      setTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, status: newStatus } : t));
+    }
+  }
+
   function toggleExpand(taskId: string) {
     if (expandedId === taskId) {
       setExpandedId(null);
@@ -203,11 +216,12 @@ export default function TasksPage() {
       ) : (
         <div className="space-y-3">
           {filteredTasks.map((task) => (
-            <div key={task.id} className="rounded-xl border border-gray-800 bg-gray-900">
-              <button
-                onClick={() => toggleExpand(task.id)}
-                className="flex w-full items-center gap-4 px-6 py-4 text-left transition-colors hover:bg-gray-800/50"
-              >
+            <div key={task.id} className={`rounded-xl border bg-gray-900 ${task.status === "paused" ? "border-gray-700 opacity-60" : "border-gray-800"}`}>
+              <div className="flex items-center">
+                <button
+                  onClick={() => toggleExpand(task.id)}
+                  className="flex min-w-0 flex-1 items-center gap-4 px-4 py-4 text-left transition-colors hover:bg-gray-800/50"
+                >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-col gap-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -244,7 +258,30 @@ export default function TasksPage() {
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                 </svg>
-              </button>
+                </button>
+                {task.schedule_type === "cron" && (
+                  <button
+                    onClick={(e) => toggleStatus(e, task)}
+                    title={task.status === "active" ? "Pause task" : "Resume task"}
+                    className={`mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                      task.status === "active"
+                        ? "text-gray-500 hover:bg-red-500/10 hover:text-red-400"
+                        : "text-green-500 hover:bg-green-500/10 hover:text-green-400"
+                    }`}
+                  >
+                    {task.status === "active" ? (
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                        <rect x="6" y="4" width="4" height="16" rx="1" />
+                        <rect x="14" y="4" width="4" height="16" rx="1" />
+                      </svg>
+                    ) : (
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
 
               {expandedId === task.id && (
                 <div className="border-t border-gray-800 px-6 py-4">
