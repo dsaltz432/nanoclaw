@@ -184,7 +184,7 @@ to bite again.
 
 1. Grep first: `grep -rn "sessions/<old_group>" dashboard/server`
 2. Update every hit in the `.ts` source.
-3. Recompile: `cd dashboard && npx tsc -p tsconfig.server.json`
+3. Restart dashboard: the server runs via `tsx` (compiles on the fly), so no build step is needed for server changes.
 4. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw.dashboard`
 5. **Then** delete the old files. Never delete before the grep/recompile/
    restart cycle completes.
