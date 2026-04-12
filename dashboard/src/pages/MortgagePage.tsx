@@ -36,6 +36,7 @@ function RateChart({
   rates: RatePoint[];
   target: number;
 }) {
+  const [hov, setHov] = useState<number | null>(null);
   if (rates.length === 0) {
     return (
       <div className="flex h-48 items-center justify-center text-sm text-gray-500">
@@ -95,8 +96,9 @@ function RateChart({
     <div className="w-full overflow-x-auto">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
+        className="w-full cursor-crosshair"
         style={{ minWidth: "320px", maxWidth: "100%" }}
+        onMouseLeave={() => setHov(null)}
       >
         <defs>
           <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -169,16 +171,46 @@ function RateChart({
             strokeLinecap="round"
           />
 
-          {/* Data points */}
-          {rates.map((r, i) => (
-            <circle
-              key={i}
-              cx={xScale(i).toFixed(1)}
-              cy={yScale(r.rate).toFixed(1)}
-              r={rates.length > 14 ? 0 : 3}
-              fill={belowTarget ? "#10b981" : "#6366f1"}
-            />
-          ))}
+          {/* Data points + hover targets */}
+          {rates.map((r, i) => {
+            const cx = parseFloat(xScale(i).toFixed(1));
+            const cy = parseFloat(yScale(r.rate).toFixed(1));
+            const isHov = hov === i;
+            return (
+              <g key={i} onMouseEnter={() => setHov(i)}>
+                {/* invisible wider hit area */}
+                <rect x={cx - 8} y={0} width={16} height={chartH} fill="transparent" />
+                <circle
+                  cx={cx} cy={cy}
+                  r={isHov ? 5 : rates.length > 14 ? 0 : 3}
+                  fill={belowTarget ? "#10b981" : "#6366f1"}
+                  stroke={isHov ? "#111827" : "none"}
+                  strokeWidth={2}
+                />
+              </g>
+            );
+          })}
+
+          {/* Tooltip — rendered last so it's always on top */}
+          {hov !== null && (() => {
+            const r = rates[hov];
+            const cx = parseFloat(xScale(hov).toFixed(1));
+            const cy = parseFloat(yScale(r.rate).toFixed(1));
+            const TW = 88, TH = 36, TPad = 6;
+            const aboveY = cy - TH - 8;
+            const ty = aboveY < 0 ? cy + 12 : aboveY;
+            const tx = Math.max(0, Math.min(cx - TW / 2, chartW - TW));
+            return (
+              <g>
+                <line x1={cx} y1={0} x2={cx} y2={chartH} stroke="#374151" strokeWidth={1} strokeDasharray="3,3" />
+                <g transform={`translate(${tx},${ty})`}>
+                  <rect width={TW} height={TH} rx={5} fill="#1f2937" stroke="#374151" strokeWidth={1} />
+                  <text x={TW/2} y={TPad+9} textAnchor="middle" fontSize={9} fill="#9ca3af">{formatDate(r.date)}</text>
+                  <text x={TW/2} y={TPad+22} textAnchor="middle" fontSize={11} fontWeight="600" fill="#f3f4f6">{r.rate.toFixed(2)}%</text>
+                </g>
+              </g>
+            );
+          })()}
 
           {/* X axis labels */}
           {[...labelIndices].map((i) => (

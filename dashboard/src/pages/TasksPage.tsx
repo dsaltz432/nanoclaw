@@ -115,7 +115,7 @@ function taskTimeSort(task: Task): number {
   return 9999;
 }
 
-export default function TasksPage() {
+export default function TasksPage({ embedded }: { embedded?: boolean }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -132,6 +132,23 @@ export default function TasksPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const [triggering, setTriggering] = useState<string | null>(null);
+
+  async function triggerNow(e: React.MouseEvent, task: Task) {
+    e.stopPropagation();
+    setTriggering(task.id);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/trigger`, { method: "POST" });
+      if (res.ok) {
+        // Refresh task list to show the new one-time task
+        const updated = await fetch("/api/tasks").then((r) => r.json());
+        setTasks(updated);
+      }
+    } finally {
+      setTimeout(() => setTriggering(null), 2000);
+    }
+  }
 
   async function toggleStatus(e: React.MouseEvent, task: Task) {
     e.stopPropagation();
@@ -185,8 +202,8 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="p-4 sm:p-8">
-      <h2 className="mb-6 text-lg font-semibold text-gray-100">Scheduled Tasks</h2>
+    <div className={embedded ? "" : "p-4 sm:p-8"}>
+      {!embedded && <h2 className="mb-6 text-lg font-semibold text-gray-100">Scheduled Tasks</h2>}
 
       <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1">
         {tabs.map((tab) => (
@@ -259,26 +276,43 @@ export default function TasksPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                 </svg>
                 </button>
+                <button
+                  onClick={(e) => triggerNow(e, task)}
+                  title="Run now"
+                  disabled={triggering === task.id}
+                  className={`mr-2 flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    triggering === task.id
+                      ? "border-green-500/30 bg-green-500/10 text-green-400"
+                      : "border-gray-700 bg-gray-800 text-gray-300 hover:border-indigo-500/50 hover:bg-indigo-500/10 hover:text-indigo-300"
+                  }`}
+                >
+                  {triggering === task.id ? (
+                    <>
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      Triggered
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                      Run Now
+                    </>
+                  )}
+                </button>
                 {task.schedule_type === "cron" && (
                   <button
                     onClick={(e) => toggleStatus(e, task)}
-                    title={task.status === "active" ? "Pause task" : "Resume task"}
-                    className={`mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
-                      task.status === "active"
-                        ? "text-gray-500 hover:bg-red-500/10 hover:text-red-400"
-                        : "text-green-500 hover:bg-green-500/10 hover:text-green-400"
-                    }`}
+                    title={task.status === "active" ? "Disable task" : "Enable task"}
+                    className="mr-3 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors"
+                    style={{ backgroundColor: task.status === "active" ? "#22c55e" : "#374151" }}
                   >
-                    {task.status === "active" ? (
-                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="6" y="4" width="4" height="16" rx="1" />
-                        <rect x="14" y="4" width="4" height="16" rx="1" />
-                      </svg>
-                    ) : (
-                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                    )}
+                    <span
+                      className="h-4 w-4 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: task.status === "active" ? "translateX(16px)" : "translateX(0)" }}
+                    />
                   </button>
                 )}
               </div>

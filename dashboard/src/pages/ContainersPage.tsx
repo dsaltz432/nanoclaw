@@ -23,7 +23,7 @@ function relativeTime(dateStr: string): string {
   return `${days}d ago`;
 }
 
-export default function ContainersPage() {
+export default function ContainersPage({ embedded }: { embedded?: boolean }) {
   const [containers, setContainers] = useState<Container[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -89,9 +89,9 @@ export default function ContainersPage() {
   }
 
   return (
-    <div className="p-4 sm:p-8">
+    <div className={embedded ? "" : "p-4 sm:p-8"}>
       <div className="mb-6 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-100">Containers</h2>
+        {!embedded && <h2 className="text-lg font-semibold text-gray-100">Containers</h2>}
         <div className="flex items-center gap-2 text-xs text-gray-500">
           <span
             className={`inline-block h-2 w-2 rounded-full bg-green-500 transition-opacity ${refreshing ? "animate-pulse opacity-100" : "opacity-30"}`}

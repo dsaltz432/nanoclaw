@@ -43,7 +43,7 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function GroupsPage() {
+export default function GroupsPage({ embedded }: { embedded?: boolean }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -99,8 +99,8 @@ export default function GroupsPage() {
   }
 
   return (
-    <div className="p-4 sm:p-8">
-      <h2 className="mb-6 text-lg font-semibold text-gray-100">Groups</h2>
+    <div className={embedded ? "" : "p-4 sm:p-8"}>
+      {!embedded && <h2 className="mb-6 text-lg font-semibold text-gray-100">Groups</h2>}
 
       {groups.length === 0 ? (
         <p className="text-gray-500">No groups registered</p>

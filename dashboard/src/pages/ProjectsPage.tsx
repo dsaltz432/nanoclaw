@@ -33,7 +33,7 @@ function relativeTime(dateStr: string): string {
   return `${days}d ago`;
 }
 
-export default function ProjectsPage() {
+export default function ProjectsPage({ embedded }: { embedded?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,8 +54,8 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="p-4 sm:p-8">
-      <h2 className="mb-6 text-lg font-semibold text-gray-100">Projects</h2>
+    <div className={embedded ? "" : "p-4 sm:p-8"}>
+      {!embedded && <h2 className="mb-6 text-lg font-semibold text-gray-100">Projects</h2>}
 
       {projects.length === 0 ? (
         <p className="text-gray-500">No projects configured</p>
@@ -105,6 +105,33 @@ export default function ProjectsPage() {
                         {commit}
                       </p>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {project.status.length > 0 && (
+                <div className="mt-4 border-t border-gray-800 pt-4">
+                  <h4 className="mb-2 text-xs font-medium text-gray-500">
+                    Changed Files ({project.status.length})
+                  </h4>
+                  <div className="space-y-0.5">
+                    {project.status.map((line, i) => {
+                      const code = line.slice(0, 2);
+                      const file = line.slice(3);
+                      const staged = code[0] !== " " && code[0] !== "?";
+                      const untracked = code === "??";
+                      const color = untracked
+                        ? "text-gray-500"
+                        : staged
+                        ? "text-green-400"
+                        : "text-yellow-400";
+                      return (
+                        <div key={i} className="flex items-center gap-2 font-mono text-xs">
+                          <code className={`w-5 shrink-0 ${color}`}>{code}</code>
+                          <span className="text-gray-400 truncate">{file}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
