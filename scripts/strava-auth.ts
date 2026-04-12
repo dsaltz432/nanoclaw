@@ -6,7 +6,7 @@
  *
  * This script walks you through connecting a Strava account to NanoClaw.
  * Run it once per athlete (you + your wife). It saves credentials to
- * data/sessions/telegram_main/.claude/strava-credentials.json
+ * data/sessions/fitness/.claude/strava-credentials.json
  */
 
 import * as fs from "fs";
@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = path.resolve(__dirname, "..");
 const credPath = path.join(
   nanoclawRoot,
-  "data/sessions/telegram_main/.claude/strava-credentials.json"
+  "data/sessions/fitness/.claude/strava-credentials.json"
 );
 
 const CALLBACK_PORT = 8765;

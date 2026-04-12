@@ -26,7 +26,7 @@ NANOCLAW_ROOT = os.environ.get("NANOCLAW_ROOT", os.path.join(os.path.dirname(__f
 # .claude is mounted at /home/node/.claude. Override via GARMIN_DATA_DIR if needed.
 DATA_DIR = os.environ.get(
     "GARMIN_DATA_DIR",
-    os.path.join(NANOCLAW_ROOT, "data/sessions/telegram_main/.claude"),
+    os.path.join(NANOCLAW_ROOT, "data/sessions/fitness/.claude"),
 )
 CRED_PATH = os.path.join(DATA_DIR, "garmin-credentials.json")
 

@@ -14,7 +14,7 @@ import sys
 from garminconnect import Garmin
 
 NANOCLAW_ROOT = os.environ.get("NANOCLAW_ROOT", os.path.join(os.path.dirname(__file__), ".."))
-DATA_DIR = os.path.join(NANOCLAW_ROOT, "data/sessions/telegram_main/.claude")
+DATA_DIR = os.path.join(NANOCLAW_ROOT, "data/sessions/fitness/.claude")
 CRED_PATH = os.path.join(DATA_DIR, "garmin-credentials.json")
 
 # Browser-like user agent — Garmin blocks the default garth mobile app agent
