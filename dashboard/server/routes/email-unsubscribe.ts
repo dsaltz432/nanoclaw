@@ -44,8 +44,7 @@ router.get("/api/email-unsubscribe", (_req: Request, res: Response) => {
   try {
     // Read history from both possible locations
     const historyPaths = [
-      path.join(nanoclawRoot, "groups", "telegram_main", "unsubscribe-history.json"),
-      path.join(nanoclawRoot, "groups", "main", "unsubscribe-history.json"),
+      path.join(nanoclawRoot, "groups", "email", "unsubscribe-history.json"),
     ];
 
     let allHistory: HistoryEntry[] = [];
