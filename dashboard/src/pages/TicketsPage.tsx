@@ -173,6 +173,36 @@ const VENUE_INFO: Record<
         "Pinstripe Pass — general admission standing room. Cheapest way in. You can roam the concourses and find a spot.",
     },
   },
+  "new-york-knicks": {
+    venue: "Madison Square Garden",
+    description:
+      "Iconic arena in Midtown Manhattan. Circular layout with the court/rink at center. Four main levels: Floor/Courtside, 100 Level (lower bowl), 200 Level (upper bowl), and Chase Bridges (suspended club seating).",
+    categories: {
+      "Floor / Courtside":
+        "Floor-level seating around the court. Single-digit sections (1-4) with lettered rows. The most premium seats in the arena.",
+      "100 Level":
+        "Lower bowl sections 101-120. Closest raised tier to the court with excellent sightlines.",
+      "200 Level":
+        "Upper bowl sections 201-230. Full court/rink view from above.",
+      "Club / Bridge":
+        "Chase Bridge sections — suspended club seating above the 100 level with unique overhead perspective and premium amenities.",
+    },
+  },
+  "new-york-rangers": {
+    venue: "Madison Square Garden",
+    description:
+      "Iconic arena in Midtown Manhattan. Same layout as Knicks — circular with four main levels. Section numbers are the same for hockey and basketball.",
+    categories: {
+      "Floor / Courtside":
+        "Rink-level seating closest to the ice. Single-digit sections (1-4) with lettered rows.",
+      "100 Level":
+        "Lower bowl sections 101-120. Great views of the ice.",
+      "200 Level":
+        "Upper bowl sections 201-230. Full rink view from above.",
+      "Club / Bridge":
+        "Chase Bridge sections — suspended club seating with unique overhead perspective.",
+    },
+  },
   "new-york-liberty": {
     venue: "Barclays Center",
     description:
@@ -301,6 +331,15 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
                 src="/images/yankee-stadium-map.png"
                 alt="Yankee Stadium Seating Map"
                 className="w-full"
+              />
+            </div>
+          )}
+          {(teamSlug === "new-york-knicks" || teamSlug === "new-york-rangers") && (
+            <div className="mb-4 rounded-lg overflow-hidden bg-white p-2">
+              <img
+                src="/images/msg-map.png"
+                alt="Madison Square Garden Seating Map"
+                className="w-full max-w-lg mx-auto"
               />
             </div>
           )}
