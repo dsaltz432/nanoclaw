@@ -192,7 +192,7 @@ router.get("/api/garmin/hrv", (req: Request, res: Response) => {
   res.json(rows);
 });
 
-// GET /api/garmin/sleep?days=90 — sleep trend
+// GET /api/garmin/sleep?days=90 — sleep trend (daily or aggregated)
 router.get("/api/garmin/sleep", (req: Request, res: Response) => {
   const slug = resolveProfile(req);
   const db = getDb(slug);
@@ -200,23 +200,57 @@ router.get("/api/garmin/sleep", (req: Request, res: Response) => {
 
   const days = Number(req.query.days ?? 90);
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const agg = days > 180 ? "month" : days > 30 ? "week" : "day";
+  const dateFmt = agg === "month"
+    ? "strftime('%Y-%m-15', date)"
+    : agg === "week"
+    ? "strftime('%Y-%m-%d', date, 'weekday 0', '-6 days')"
+    : "date";
 
   const rows = db.prepare(`
+    SELECT ${dateFmt} as date,
+      ROUND(AVG(sleep_time_seconds) / 3600.0, 2) as total_hours,
+      ROUND(AVG(deep_sleep_seconds) / 3600.0, 2) as deep_hours,
+      ROUND(AVG(light_sleep_seconds) / 3600.0, 2) as light_hours,
+      ROUND(AVG(rem_sleep_seconds) / 3600.0, 2) as rem_hours,
+      ROUND(AVG(awake_sleep_seconds) / 3600.0, 2) as awake_hours,
+      ROUND(AVG(sleep_score)) as sleep_score,
+      ROUND(AVG(average_heart_rate), 1) as average_heart_rate,
+      ROUND(AVG(average_respiration_value), 1) as average_respiration_value,
+      ROUND(AVG(average_spo2), 1) as average_spo2
+    FROM daily_sleep
+    WHERE date >= ? AND sleep_time_seconds > 0
+    GROUP BY ${dateFmt}
+    ORDER BY date
+  `).all(cutoff);
+
+  db.close();
+  res.json(rows);
+});
+
+// GET /api/garmin/sleep/:date — single-day sleep detail
+router.get("/api/garmin/sleep/:date", (req: Request, res: Response) => {
+  const slug = resolveProfile(req);
+  const db = getDb(slug);
+  if (!db) return res.json(null);
+
+  const row = db.prepare(`
     SELECT date,
       ROUND(sleep_time_seconds / 3600.0, 2) as total_hours,
       ROUND(deep_sleep_seconds / 3600.0, 2) as deep_hours,
       ROUND(light_sleep_seconds / 3600.0, 2) as light_hours,
       ROUND(rem_sleep_seconds / 3600.0, 2) as rem_hours,
       ROUND(awake_sleep_seconds / 3600.0, 2) as awake_hours,
-      sleep_score, average_heart_rate, average_respiration_value,
-      average_spo2
+      sleep_score, sleep_score_feedback, sleep_score_insight,
+      average_heart_rate, lowest_heart_rate,
+      average_respiration_value, lowest_respiration_value, highest_respiration_value,
+      average_spo2, lowest_spo2, avg_sleep_stress
     FROM daily_sleep
-    WHERE date >= ? AND sleep_time_seconds > 0
-    ORDER BY date
-  `).all(cutoff);
+    WHERE date = ? AND sleep_time_seconds > 0
+  `).get(req.params.date);
 
   db.close();
-  res.json(rows);
+  res.json(row ?? null);
 });
 
 // GET /api/garmin/stress?days=90 — stress trend
@@ -263,7 +297,7 @@ router.get("/api/garmin/steps", (req: Request, res: Response) => {
   res.json(rows);
 });
 
-// GET /api/garmin/body-battery?days=30 — body battery trend
+// GET /api/garmin/body-battery?days=30 — body battery band data (peak + end_of_day)
 router.get("/api/garmin/body-battery", (req: Request, res: Response) => {
   const slug = resolveProfile(req);
   const db = getDb(slug);
@@ -271,16 +305,59 @@ router.get("/api/garmin/body-battery", (req: Request, res: Response) => {
 
   const days = Number(req.query.days ?? 30);
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const agg = days > 180 ? "month" : days > 30 ? "week" : "day";
 
-  const rows = db.prepare(`
-    SELECT date, charged, drained, end_of_day_level
+  // Fetch raw rows and extract peak from bodyBatteryValuesArray
+  const raw = db.prepare(`
+    SELECT date, end_of_day_level, raw
     FROM daily_body_battery
-    WHERE date >= ?
+    WHERE date >= ? AND end_of_day_level IS NOT NULL
     ORDER BY date
-  `).all(cutoff);
+  `).all(cutoff) as { date: string; end_of_day_level: number; raw: string }[];
 
   db.close();
-  res.json(rows);
+
+  // Extract daily peak from raw JSON
+  const daily = raw.map((r) => {
+    let peak = r.end_of_day_level;
+    try {
+      const parsed = JSON.parse(r.raw);
+      const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+      const arr: [number, number][] = entry?.bodyBatteryValuesArray ?? [];
+      const valid = arr.map((x) => x[1]).filter((v): v is number => v != null);
+      if (valid.length) peak = Math.max(...valid);
+    } catch {}
+    return { date: r.date, peak, end_of_day: r.end_of_day_level };
+  });
+
+  if (agg === "day") return res.json(daily);
+
+  // Aggregate into weekly or monthly buckets
+  const buckets = new Map<string, { peak: number[]; end_of_day: number[] }>();
+  for (const d of daily) {
+    const dt = new Date(d.date + "T12:00:00");
+    let key: string;
+    if (agg === "month") {
+      key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-15`;
+    } else {
+      // Start of ISO week (Monday)
+      const day = dt.getDay() || 7;
+      const mon = new Date(dt);
+      mon.setDate(dt.getDate() - day + 1);
+      key = mon.toISOString().slice(0, 10);
+    }
+    if (!buckets.has(key)) buckets.set(key, { peak: [], end_of_day: [] });
+    const b = buckets.get(key)!;
+    b.peak.push(d.peak);
+    b.end_of_day.push(d.end_of_day);
+  }
+
+  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const result = Array.from(buckets.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, b]) => ({ date, peak: Math.round(avg(b.peak)), end_of_day: Math.round(avg(b.end_of_day)) }));
+
+  res.json(result);
 });
 
 // GET /api/garmin/weight?days=365 — weight trend
@@ -324,6 +401,124 @@ router.get("/api/garmin/activities", (req: Request, res: Response) => {
 
   db.close();
   res.json(rows);
+});
+
+// GET /api/garmin/trend?metric=resting_hr&days=30 — unified trend for any metric
+router.get("/api/garmin/trend", (req: Request, res: Response) => {
+  const slug = resolveProfile(req);
+  const db = getDb(slug);
+  if (!db) return res.json([]);
+
+  const days = Number(req.query.days ?? 30);
+  const metric = req.query.metric as string ?? "resting_hr";
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+
+  // Aggregate based on range: daily ≤30d, weekly ≤180d, monthly >180d
+  const agg = days > 180 ? "month" : days > 30 ? "week" : "day";
+  const dateFmt = agg === "month" ? "strftime('%Y-%m-15', date)" : agg === "week" ? "strftime('%Y-%m-%d', date, 'weekday 0', '-6 days')" : "date";
+
+  type Row = { date: string; value: number };
+
+  const queries: Record<string, () => Row[]> = {
+    resting_hr: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(resting_heart_rate), 1) as value
+      FROM daily_heart_rate WHERE date >= ? AND resting_heart_rate > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    steps: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(total_steps)) as value
+      FROM daily_summary WHERE date >= ? AND total_steps > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    intensity_minutes: () => (db!.prepare(`
+      SELECT ${dateFmt} as date,
+        ROUND(AVG(moderate_intensity_minutes + vigorous_intensity_minutes * 2)) as value
+      FROM daily_summary WHERE date >= ? AND moderate_intensity_minutes IS NOT NULL
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    hrv: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(last_night), 1) as value
+      FROM daily_hrv WHERE date >= ? AND last_night > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    endurance_score: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(overall_score), 1) as value
+      FROM daily_endurance_score WHERE date >= ? AND overall_score > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    respiration: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(avg_waking_respiration_value), 1) as value
+      FROM daily_respiration WHERE date >= ? AND avg_waking_respiration_value > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    vo2max: () => (db!.prepare(`
+      SELECT ${dateFmt.replace(/\bdate\b/g, "substr(start_time,1,10)")} as date,
+        ROUND(AVG(vo2max_estimate), 1) as value
+      FROM activity_metrics
+      WHERE substr(start_time,1,10) >= ? AND vo2max_estimate IS NOT NULL AND vo2max_estimate > 0
+      GROUP BY ${dateFmt.replace(/\bdate\b/g, "substr(start_time,1,10)")} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    body_battery: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(end_of_day_level), 1) as value
+      FROM daily_body_battery WHERE date >= ? AND end_of_day_level IS NOT NULL
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+
+    sleep_duration: () => (db!.prepare(`
+      SELECT ${dateFmt} as date, ROUND(AVG(sleep_time_seconds) / 3600.0, 2) as value
+      FROM daily_sleep WHERE date >= ? AND sleep_time_seconds > 0
+      GROUP BY ${dateFmt} ORDER BY date
+    `).all(cutoff) as Row[]),
+  };
+
+  const queryFn = queries[metric];
+  if (!queryFn) { db.close(); return res.status(400).json({ error: "Unknown metric" }); }
+
+  try {
+    const rows = queryFn();
+    db.close();
+    res.json(rows);
+  } catch (err) {
+    db.close();
+    console.error("Trend query failed:", err);
+    res.status(500).json({ error: "Query failed" });
+  }
+});
+
+// GET /api/garmin/metric-ranges — earliest available date per metric
+router.get("/api/garmin/metric-ranges", (req: Request, res: Response) => {
+  const slug = resolveProfile(req);
+  const db = getDb(slug);
+  if (!db) return res.json({});
+
+  const queries: Record<string, string> = {
+    resting_hr:        "SELECT MIN(date) FROM daily_heart_rate WHERE resting_heart_rate > 0",
+    steps:             "SELECT MIN(date) FROM daily_summary WHERE total_steps > 0",
+    intensity_minutes: "SELECT MIN(date) FROM daily_summary WHERE moderate_intensity_minutes IS NOT NULL",
+    hrv:               "SELECT MIN(date) FROM daily_hrv WHERE last_night > 0",
+    endurance_score:   "SELECT MIN(date) FROM daily_endurance_score WHERE overall_score > 0",
+    respiration:       "SELECT MIN(date) FROM daily_respiration WHERE avg_waking_respiration_value > 0",
+    vo2max:            "SELECT MIN(substr(start_time,1,10)) FROM activity_metrics WHERE vo2max_estimate > 0",
+    body_battery:      "SELECT MIN(date) FROM daily_body_battery WHERE end_of_day_level IS NOT NULL",
+    sleep_duration:    "SELECT MIN(date) FROM daily_sleep WHERE sleep_time_seconds > 0",
+  };
+
+  const result: Record<string, string | null> = {};
+  for (const [metric, q] of Object.entries(queries)) {
+    try {
+      const row = db.prepare(q).get() as { "MIN(date)": string | null } | undefined;
+      result[metric] = row ? Object.values(row)[0] : null;
+    } catch { result[metric] = null; }
+  }
+  db.close();
+  res.json(result);
 });
 
 // GET /api/garmin/recovery-trend?days=180 — recovery HR over time

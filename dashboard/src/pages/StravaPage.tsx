@@ -75,26 +75,16 @@ const SPORT_COLORS: Record<string, string> = {
   WeightTraining: "#a855f7",
   Yoga: "#ec4899",
   Workout: "#14b8a6",
-};
-
-const SPORT_EMOJI: Record<string, string> = {
-  Run: "🏃",
-  TrailRun: "🏔️",
-  Ride: "🚴",
-  VirtualRide: "🖥️",
-  Swim: "🏊",
-  Walk: "🚶",
-  Hike: "🥾",
-  WeightTraining: "🏋️",
-  Yoga: "🧘",
-  Workout: "💪",
+  Soccer: "#10b981",
+  Pickleball: "#06b6d4",
+  NordicSki: "#64748b",
+  Tennis: "#eab308",
+  Snowshoe: "#94a3b8",
+  Kayaking: "#0ea5e9",
 };
 
 function sportColor(type: string) {
   return SPORT_COLORS[type] ?? "#6b7280";
-}
-function sportEmoji(type: string) {
-  return SPORT_EMOJI[type] ?? "🏅";
 }
 
 function fmtDistance(meters: number) {
@@ -509,7 +499,7 @@ function ActivityDetailModal({ activityId, onClose }: { activityId: number; onCl
             {/* Header */}
             <div className="flex items-start justify-between gap-3 mb-4">
               <div className="flex items-start gap-3">
-                <span className="text-2xl leading-none mt-0.5">{sportEmoji(detail.sport_type)}</span>
+                <span className="h-3 w-3 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: sportColor(detail.sport_type) }} />
                 <div>
                   <h2 className="text-base font-semibold text-gray-100 leading-snug">{detail.name}</h2>
                   <p className="text-xs text-gray-500 mt-0.5">
@@ -637,8 +627,8 @@ function Stat({ icon, label, value }: { icon: string; label: string; value: stri
 
 function ActivityCard({ activity, onOpen }: { activity: Activity; onOpen: (id: number) => void }) {
   const color = sportColor(activity.sport_type);
-  const emoji = sportEmoji(activity.sport_type);
   const running = isRun(activity.sport_type);
+  const hasDist = activity.distance > 0;
 
   return (
     <div
@@ -646,12 +636,7 @@ function ActivityCard({ activity, onOpen }: { activity: Activity; onOpen: (id: n
       onClick={() => onOpen(activity.id)}
     >
       <div className="flex items-start gap-3">
-        <div
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm"
-          style={{ backgroundColor: color + "22", color }}
-        >
-          {emoji}
-        </div>
+        <span className="h-2.5 w-2.5 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: color }} />
         <div className="min-w-0 flex-1">
           <p className="font-medium text-gray-100 text-sm leading-snug truncate">{activity.name}</p>
           <p className="text-xs text-gray-500 mt-0.5">{fmtDate(activity.start_date_local)}</p>
@@ -663,23 +648,27 @@ function ActivityCard({ activity, onOpen }: { activity: Activity; onOpen: (id: n
           <span className="rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-500">Commute</span>
         )}
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <div>
-          <p className="text-xs text-gray-500">Distance</p>
-          <p className="text-sm font-semibold text-gray-200">{fmtDistance(activity.distance)}</p>
-        </div>
+      <div className={`mt-3 grid gap-2 text-center ${hasDist ? "grid-cols-3" : "grid-cols-1"}`}>
+        {hasDist && (
+          <div>
+            <p className="text-xs text-gray-500">Distance</p>
+            <p className="text-sm font-semibold text-gray-200">{fmtDistance(activity.distance)}</p>
+          </div>
+        )}
         <div>
           <p className="text-xs text-gray-500">Time</p>
           <p className="text-sm font-semibold text-gray-200">{fmtTime(activity.moving_time)}</p>
         </div>
-        <div>
-          <p className="text-xs text-gray-500">{running ? "Pace" : "Speed"}</p>
-          <p className="text-sm font-semibold text-gray-200">
-            {running
-              ? fmtPace(activity.distance, activity.moving_time)
-              : fmtSpeed(activity.average_speed)}
-          </p>
-        </div>
+        {hasDist && (
+          <div>
+            <p className="text-xs text-gray-500">{running ? "Pace" : "Speed"}</p>
+            <p className="text-sm font-semibold text-gray-200">
+              {running
+                ? fmtPace(activity.distance, activity.moving_time)
+                : fmtSpeed(activity.average_speed)}
+            </p>
+          </div>
+        )}
       </div>
       {(activity.average_heartrate || activity.total_elevation_gain > 0) && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -826,7 +815,7 @@ function TrendsChart({
               style={active ? { borderColor: sportColor(st) } : {}}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: active ? sportColor(st) : "#4b5563" }} />
-              {sportEmoji(st)} {st}
+              {st}
             </button>
           );
         })}
@@ -925,23 +914,27 @@ function StatsTab({ athleteId }: { athleteId: number }) {
           style={{ borderLeftColor: sportColor(s.sport_type), borderLeftWidth: 3 }}
         >
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-lg">{sportEmoji(s.sport_type)}</span>
+            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: sportColor(s.sport_type) }} />
             <span className="font-medium text-gray-200">{s.sport_type}</span>
             <span className="ml-auto text-xs text-gray-500">{s.count} activities</span>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <p className="text-xs text-gray-500">Total Distance</p>
-              <p className="font-semibold text-gray-200">{s.total_km.toFixed(1)} km</p>
-            </div>
+            {s.total_km > 1 && (
+              <div>
+                <p className="text-xs text-gray-500">Total Distance</p>
+                <p className="font-semibold text-gray-200">{s.total_km.toFixed(1)} km</p>
+              </div>
+            )}
             <div>
               <p className="text-xs text-gray-500">Total Time</p>
               <p className="font-semibold text-gray-200">{fmtTime(s.total_seconds)}</p>
             </div>
-            <div>
-              <p className="text-xs text-gray-500">Elevation</p>
-              <p className="font-semibold text-gray-200">{s.total_elevation_m.toLocaleString()}m</p>
-            </div>
+            {s.total_elevation_m > 0 && (
+              <div>
+                <p className="text-xs text-gray-500">Elevation</p>
+                <p className="font-semibold text-gray-200">{s.total_elevation_m.toLocaleString()}m</p>
+              </div>
+            )}
             {s.avg_hr && (
               <div>
                 <p className="text-xs text-gray-500">Avg HR</p>
@@ -1032,7 +1025,7 @@ function ActivitiesTab({ athleteId }: { athleteId: number }) {
                   : "border-gray-700 text-gray-400 hover:border-gray-600"
               }`}
             >
-              {sportEmoji(st)} {st}
+              {st}
             </button>
           ))}
         </div>
@@ -1274,7 +1267,7 @@ function CalendarTab({ athleteId }: { athleteId: number }) {
                 const info = dayMap.get(dateStr);
                 const active = info?.active ?? false;
                 const isToday = day === now.getDate() && cellMonth === now.getMonth() + 1 && cellYear === now.getFullYear();
-                const emojis = (info?.sport_types ?? []).slice(0, 3).map(sportEmoji).join("");
+                const sportDots = (info?.sport_types ?? []).slice(0, 3);
 
                 return (
                   <div
@@ -1296,7 +1289,11 @@ function CalendarTab({ athleteId }: { athleteId: number }) {
                     <span className={`text-[10px] font-medium leading-none ${active ? "text-green-400" : isToday ? "text-gray-300" : "text-gray-600"}`}>
                       {day}
                     </span>
-                    {emojis && <span className="text-[9px] leading-none mt-0.5">{emojis}</span>}
+                    {sportDots.length > 0 && (
+                      <span className="flex gap-0.5 mt-0.5">
+                        {sportDots.map((st, i) => <span key={i} className="h-1 w-1 rounded-full" style={{ backgroundColor: sportColor(st) }} />)}
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -1321,7 +1318,7 @@ function CalendarTab({ athleteId }: { athleteId: number }) {
                 onClick={() => setOpenActivityId(a.id)}
                 className="w-full flex items-center justify-between gap-2 text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 rounded px-2 py-1.5 transition-colors text-left"
               >
-                <span>{sportEmoji(a.sport_type)} {a.name}</span>
+                <span className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: sportColor(a.sport_type) }} />{a.name}</span>
                 <span className="text-gray-500 shrink-0">{fmtTime(a.moving_time)}{a.distance > 0 ? ` · ${(a.distance/1000).toFixed(1)}km` : ""}</span>
               </button>
             ))}

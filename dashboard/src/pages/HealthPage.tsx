@@ -1,452 +1,859 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-interface GarminProfile {
-  slug: string;
-  display_name: string;
-  full_name: string;
-  connected: boolean;
-  day_count: number;
-  last_sync: string | null;
-}
+interface GarminProfile { slug: string; display_name: string; full_name: string; connected: boolean; day_count: number; last_sync: string | null }
+interface TrendPoint { date: string; value: number }
+interface SleepPoint { date: string; total_hours: number; deep_hours: number; light_hours: number; rem_hours: number; awake_hours: number; sleep_score: number | null; average_heart_rate?: number | null; average_respiration_value?: number | null; average_spo2?: number | null }
+interface SleepDetail { date: string; total_hours: number; deep_hours: number; light_hours: number; rem_hours: number; awake_hours: number; sleep_score: number | null; sleep_score_feedback: string | null; sleep_score_insight: string | null; average_heart_rate: number | null; lowest_heart_rate: number | null; average_respiration_value: number | null; lowest_respiration_value: number | null; highest_respiration_value: number | null; average_spo2: number | null; lowest_spo2: number | null; avg_sleep_stress: number | null }
 
-interface Overview {
-  avg_resting_hr: number | null;
-  avg_hrv: number | null;
-  avg_sleep_hours: number | null;
-  avg_steps: number | null;
-  avg_stress: number | null;
-  latest_weight_kg: number | null;
-}
+// ── Config ────────────────────────────────────────────────────────────────────
 
-interface HRPoint { date: string; resting_heart_rate: number; max_heart_rate: number }
-interface HRVPoint { date: string; last_night: number; weekly_avg: number; hrv_status: string }
-interface SleepPoint {
-  date: string; total_hours: number; deep_hours: number; light_hours: number;
-  rem_hours: number; awake_hours: number; sleep_score: number | null;
-}
-interface StepsPoint { date: string; total_steps: number; active_calories: number }
-interface StressPoint { date: string; overall_stress_level: number; avg_waking_stress: number }
-interface RecoveryPoint { date: string; sport_type: string; max_hr: number; recovery_heart_rate: number; hrr_drop: number }
-interface WeightPoint { date: string; weight_kg: number; body_fat_percent: number | null }
+const METRICS = [
+  { key: "resting_hr",        label: "Resting HR",        unit: "bpm",  color: "#ef4444", invert: true,  desc: "Heart rate at complete rest. Lower is generally better for cardiovascular fitness." },
+  { key: "steps",             label: "Steps",             unit: "steps",color: "#6366f1", invert: false, desc: "Total daily step count from your watch." },
+  { key: "intensity_minutes", label: "Intensity Min",     unit: "min",  color: "#f59e0b", invert: false, desc: "Minutes of moderate + 2× vigorous activity. WHO recommends 150 min/week." },
+  { key: "hrv",               label: "HRV",               unit: "ms",   color: "#10b981", invert: false, desc: "Heart rate variability measured overnight. Higher indicates better recovery and fitness." },
+  { key: "endurance_score",   label: "Endurance",         unit: "",     color: "#3b82f6", invert: false, desc: "Garmin's cumulative endurance score. Trained: 5800+, Well-trained: 6600+, Expert: 7300+." },
+  { key: "respiration",       label: "Respiration",       unit: "brpm", color: "#8b5cf6", invert: true,  desc: "Average waking breathing rate. Typical range is 12–20 breaths per minute." },
+  { key: "vo2max",            label: "VO₂ Max",           unit: "ml/kg",color: "#06b6d4", invert: false, desc: "Max oxygen uptake estimated from activities. Higher is better. Superior: 50+ for most ages." },
+  { key: "body_battery",      label: "Body Battery",      unit: "%",    color: "#f97316", invert: false, desc: "End-of-day energy level (0–100) based on HRV, stress, sleep, and activity." },
+  { key: "sleep_duration",    label: "Sleep",             unit: "hrs",  color: "#a78bfa", invert: false, desc: "Total sleep duration. Most adults need 7–9 hours per night." },
+] as const;
+
+type MetricKey = typeof METRICS[number]["key"];
+
+const RANGES: { label: string; days: number }[] = [
+  { label: "1W",  days: 7   },
+  { label: "1M",  days: 30  },
+  { label: "3M",  days: 90  },
+  { label: "6M",  days: 180 },
+  { label: "1Y",  days: 365 },
+  { label: "2Y",  days: 730 },
+  { label: "5Y",  days: 1825},
+  { label: "7Y",  days: 2555},
+];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmtDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+function getAgg(days: number): "day" | "week" | "month" {
+  return days > 180 ? "month" : days > 30 ? "week" : "day";
 }
 
-function kgToLbs(kg: number) { return (kg * 2.20462).toFixed(1); }
+function fmtAxis(d: string, agg: "day" | "week" | "month"): string {
+  const date = new Date(d + "T12:00:00");
+  if (agg === "month") return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
-// ── Mini SVG line chart ───────────────────────────────────────────────────────
+function fmtTooltip(d: string, agg: "day" | "week" | "month"): string {
+  const date = new Date(d + "T12:00:00");
+  if (agg === "month") return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  if (agg === "week") return "Week of " + date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
 
-function LineChart({
-  data, color = "#6366f1", height = 80, label,
+function aggLabel(agg: "day" | "week" | "month"): string {
+  if (agg === "month") return "Monthly avg";
+  if (agg === "week")  return "Weekly avg";
+  return "Daily";
+}
+
+function fmtVal(val: number, unit: string): string {
+  if (unit === "steps") return Math.round(val).toLocaleString();
+  if (unit === "hrs") return val.toFixed(1) + "h";
+  // Metrics that benefit from decimals
+  if (unit === "ml/kg" || unit === "ms") return val.toFixed(1) + " " + unit;
+  // Integer metrics: bpm, min, %, brpm, no-unit scores
+  if (unit === "bpm" || unit === "min" || unit === "%" || unit === "brpm" || unit === "")
+    return Math.round(val).toString() + (unit ? " " + unit : "");
+  return val.toFixed(1) + (unit ? " " + unit : "");
+}
+
+function relTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(diff / 3600000);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// ── Large SVG trend chart ─────────────────────────────────────────────────────
+
+function TrendChart({
+  data, color, unit, days,
 }: {
-  data: number[];
-  color?: string;
-  height?: number;
-  label?: string;
+  data: TrendPoint[]; color: string; unit: string; days: number;
 }) {
-  if (data.length < 2) return <div className="text-xs text-gray-600 py-2">Not enough data</div>;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const w = 300;
-  const h = height;
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * w;
-    const y = h - ((v - min) / range) * (h - 10) - 2;
-    return `${x},${y}`;
-  });
+  const [hov, setHov] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  if (data.length < 2) return (
+    <div className="flex h-48 items-center justify-center text-sm text-gray-600">
+      Not enough data for this time range
+    </div>
+  );
+
+  const agg = getAgg(days);
+  const vals = data.map((d) => d.value);
+  const rawMin = Math.min(...vals);
+  const rawMax = Math.max(...vals);
+  const rawRange = rawMax - rawMin;
+  // When range is very small (flat data), pad by 0.5 above and below to center the line
+  const padding = rawRange < 1 ? 0.5 : 0;
+  const minV = rawMin - padding;
+  const maxV = rawMax + padding;
+  const range = maxV - minV;
+
+  const W = 600, H = 260, padL = 34, padR = 8, padT = 10, padB = 30;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const toX = (i: number) => padL + (i / (data.length - 1)) * chartW;
+  const toY = (v: number) => padT + chartH - ((v - minV) / range) * chartH;
+
+  const pts = data.map((d, i) => `${toX(i)},${toY(d.value)}`).join(" ");
+
+  // Show all labels when ≤10 points, otherwise ~6 evenly spaced
+  const tickCount = data.length <= 10 ? data.length : Math.min(6, data.length);
+  const tickIndices = tickCount === data.length
+    ? data.map((_, i) => i)
+    : Array.from({ length: tickCount }, (_, i) => Math.round((i / (tickCount - 1)) * (data.length - 1)));
+
+  const yTicks = [0, 0.33, 0.67, 1].map((f) => minV + f * range);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    const idx = Math.round(((x - padL) / chartW) * (data.length - 1));
+    setHov(Math.max(0, Math.min(data.length - 1, idx)));
+  }, [data.length]);
+
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+
   return (
     <div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" preserveAspectRatio="none">
-        <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
+
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full cursor-crosshair"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHov(null)}
+      >
+        {yTicks.map((v, i) => (
+          <g key={i}>
+            <line x1={padL} y1={toY(v)} x2={W - padR} y2={toY(v)} stroke="#1f2937" strokeWidth={1} />
+            <text x={padL - 4} y={toY(v) + 4} textAnchor="end" fontSize={11} fill="#4b5563">
+              {unit === "steps" ? (v/1000).toFixed(0)+"k" : unit === "hrs" ? v.toFixed(1) : range < 4 ? v.toFixed(1) : Math.round(v)}
+            </text>
+          </g>
+        ))}
+
+        <defs>
+          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.15" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.01" />
+          </linearGradient>
+        </defs>
+        <polygon
+          points={`${padL},${padT + chartH} ${pts} ${toX(data.length-1)},${padT + chartH}`}
+          fill="url(#areaGrad)"
+        />
+        <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
+
+        {hov !== null && (() => {
+          const cx = toX(hov);
+          const cy = toY(data[hov].value);
+          const label = fmtTooltip(data[hov].date, agg);
+          const valStr = fmtVal(data[hov].value, unit);
+          const TW = Math.max(120, label.length * 6.5), TH = 44, TPad = 6;
+          const aboveY = cy - TH - 10;
+          const ty = aboveY < padT ? cy + 12 : aboveY;
+          const tx = Math.max(padL, Math.min(cx - TW / 2, W - padR - TW));
+          return (
+            <>
+              <line x1={cx} y1={padT} x2={cx} y2={padT + chartH} stroke="#374151" strokeWidth={1} strokeDasharray="3,3" />
+              <circle cx={cx} cy={cy} r={4} fill={color} stroke="#111827" strokeWidth={2} />
+              <g transform={`translate(${tx},${ty})`}>
+                <rect width={TW} height={TH} rx={6} fill="#111827" stroke="#374151" strokeWidth={1} />
+                <text x={TW / 2} y={TPad + 10} textAnchor="middle" fontSize={9.5} fill="#6b7280">{label}</text>
+                <text x={TW / 2} y={TPad + 28} textAnchor="middle" fontSize={13} fontWeight="700" fill="#f9fafb">{valStr}</text>
+              </g>
+            </>
+          );
+        })()}
+
+        {tickIndices.map((i) => (
+          <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize={11} fill="#4b5563">
+            {fmtAxis(data[i].date, agg)}
+          </text>
+        ))}
+
+        <line x1={padL} y1={padT + chartH} x2={W - padR} y2={padT + chartH} stroke="#1f2937" strokeWidth={1} />
       </svg>
-      {label && <p className="text-xs text-gray-600 text-center mt-1">{label}</p>}
     </div>
   );
 }
 
-// Stack bar chart for sleep stages
-function SleepBars({ data }: { data: SleepPoint[] }) {
-  if (!data.length) return <div className="text-xs text-gray-600 py-2">No data</div>;
-  const maxH = Math.max(...data.map((d) => d.total_hours), 1);
-  const barW = Math.max(4, Math.floor(280 / data.length) - 1);
-  const step = Math.floor(280 / data.length);
+// ── Sleep detail modal ────────────────────────────────────────────────────────
+
+function SleepDetailModal({ date, profile, onClose }: { date: string; profile: string; onClose: () => void }) {
+  const [detail, setDetail] = useState<SleepDetail | null | "loading">("loading");
+
+  useEffect(() => {
+    fetch(`/api/garmin/sleep/${date}?profile=${profile}`)
+      .then((r) => r.json())
+      .then(setDetail)
+      .catch(() => setDetail(null));
+  }, [date, profile]);
+
+  const d = typeof detail === "object" ? detail : null;
 
   return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${Math.max(data.length * step, 280)} 80`} className="w-full">
-        {data.map((d, i) => {
-          const x = i * step;
-          const totalH = (d.total_hours / maxH) * 65;
-          const deepH = (d.deep_hours / maxH) * 65;
-          const remH = (d.rem_hours / maxH) * 65;
-          const lightH = (d.light_hours / maxH) * 65;
-          let y = 67;
-          return (
-            <g key={d.date}>
-              {deepH > 0 && (() => { y -= deepH; return <rect x={x} y={y} width={barW} height={deepH} fill="#6366f1" rx={1}><title>{`${d.date}: Deep ${d.deep_hours.toFixed(1)}h`}</title></rect>; })()}
-              {remH > 0 && (() => { y -= remH; return <rect x={x} y={y} width={barW} height={remH} fill="#8b5cf6" rx={1}><title>{`REM ${d.rem_hours.toFixed(1)}h`}</title></rect>; })()}
-              {lightH > 0 && (() => { y -= lightH; return <rect x={x} y={y} width={barW} height={lightH} fill="#a78bfa" opacity={0.7} rx={1}><title>{`Light ${d.light_hours.toFixed(1)}h`}</title></rect>; })()}
-              {totalH > 14 && (
-                <text x={x + barW / 2} y={67 - totalH - 2} textAnchor="middle" fontSize={6} fill="#9ca3af">
-                  {d.total_hours.toFixed(1)}
-                </text>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute right-3 top-3 text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
+        <h3 className="mb-4 text-sm font-semibold text-gray-200">
+          Sleep · {date ? new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : date}
+        </h3>
+        {detail === "loading" ? (
+          <div className="text-sm text-gray-600 py-6 text-center">Loading…</div>
+        ) : !d ? (
+          <div className="text-sm text-gray-600 py-6 text-center">No detail available</div>
+        ) : (
+          <div className="space-y-3">
+            {/* Score */}
+            {d.sleep_score != null && (
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-a78bfa text-lg font-bold text-purple-400" style={{ borderColor: "#a78bfa" }}>
+                  {d.sleep_score}
+                </div>
+                <div className="text-xs text-gray-400">
+                  {d.sleep_score_feedback && <div className="font-medium text-gray-300">{d.sleep_score_feedback}</div>}
+                  {d.sleep_score_insight && <div className="mt-0.5">{d.sleep_score_insight}</div>}
+                </div>
+              </div>
+            )}
+
+            {/* Sleep stages */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {[
+                { label: "Total", val: d.total_hours, color: "#a78bfa" },
+                { label: "Deep",  val: d.deep_hours,  color: "#3b82f6" },
+                { label: "REM",   val: d.rem_hours,   color: "#8b5cf6" },
+                { label: "Light", val: d.light_hours, color: "#6b7280" },
+                { label: "Awake", val: d.awake_hours, color: "#374151" },
+              ].map(({ label, val, color }) => (
+                <div key={label} className="flex items-center gap-2 rounded-lg bg-gray-800 px-3 py-2">
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color }} />
+                  <span className="text-gray-400">{label}</span>
+                  <span className="ml-auto font-semibold text-gray-200">{(val || 0).toFixed(1)}h</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Vitals */}
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              {d.average_heart_rate != null && (
+                <div className="rounded-lg bg-gray-800 px-2 py-2 text-center">
+                  <div className="text-gray-500">HR avg</div>
+                  <div className="font-semibold text-gray-200">{d.average_heart_rate} bpm</div>
+                </div>
               )}
-            </g>
-          );
-        })}
-        <line x1={0} y1={68} x2={data.length * step} y2={68} stroke="#374151" strokeWidth={1} />
-      </svg>
-      <div className="flex gap-3 mt-1 justify-center">
-        {[["#6366f1", "Deep"], ["#8b5cf6", "REM"], ["#a78bfa", "Light"]].map(([c, l]) => (
-          <div key={l} className="flex items-center gap-1 text-xs text-gray-500">
-            <span className="h-2 w-2 rounded-full inline-block" style={{ backgroundColor: c }} />{l}
+              {d.lowest_heart_rate != null && (
+                <div className="rounded-lg bg-gray-800 px-2 py-2 text-center">
+                  <div className="text-gray-500">HR low</div>
+                  <div className="font-semibold text-gray-200">{d.lowest_heart_rate} bpm</div>
+                </div>
+              )}
+              {d.average_respiration_value != null && (
+                <div className="rounded-lg bg-gray-800 px-2 py-2 text-center">
+                  <div className="text-gray-500">Resp</div>
+                  <div className="font-semibold text-gray-200">{d.average_respiration_value} brpm</div>
+                </div>
+              )}
+              {d.average_spo2 != null && (
+                <div className="rounded-lg bg-gray-800 px-2 py-2 text-center">
+                  <div className="text-gray-500">SpO₂</div>
+                  <div className="font-semibold text-gray-200">{d.average_spo2}%</div>
+                </div>
+              )}
+              {d.avg_sleep_stress != null && (
+                <div className="rounded-lg bg-gray-800 px-2 py-2 text-center">
+                  <div className="text-gray-500">Stress</div>
+                  <div className="font-semibold text-gray-200">{d.avg_sleep_stress}</div>
+                </div>
+              )}
+            </div>
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
 }
 
-// ── Metric card ───────────────────────────────────────────────────────────────
+// ── Body Battery band chart ────────────────────────────────────────────────────
 
-function MetricCard({ icon, label, value, sub, color = "text-gray-100" }: {
-  icon: string; label: string; value: string | null; sub?: string; color?: string;
-}) {
+interface BatteryPoint { date: string; peak: number; end_of_day: number }
+
+function BodyBatteryChart({ data, days }: { data: BatteryPoint[]; days: number }) {
+  const [hov, setHov] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  if (data.length < 2) return (
+    <div className="flex h-48 items-center justify-center text-sm text-gray-600">Not enough data</div>
+  );
+
+  const agg = getAgg(days);
+  const W = 600, H = 260, padL = 34, padR = 8, padT = 10, padB = 30;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const maxV = Math.max(...data.map((d) => d.peak), 100);
+  const minV = 0;
+  const toX = (i: number) => padL + (i / (data.length - 1)) * chartW;
+  const toY = (v: number) => padT + chartH - ((v - minV) / (maxV - minV)) * chartH;
+
+  const peakPts   = data.map((d, i) => `${toX(i)},${toY(d.peak)}`).join(" ");
+  const eodPts    = data.map((d, i) => `${toX(i)},${toY(d.end_of_day)}`).join(" ");
+  const bandPts   = [
+    ...data.map((d, i) => `${toX(i)},${toY(d.peak)}`),
+    ...[...data].reverse().map((d, i) => `${toX(data.length - 1 - i)},${toY(d.end_of_day)}`),
+  ].join(" ");
+
+  const tickCount = data.length <= 10 ? data.length : Math.min(6, data.length);
+  const tickIndices = tickCount === data.length
+    ? data.map((_, i) => i)
+    : Array.from({ length: tickCount }, (_, i) => Math.round((i / (tickCount - 1)) * (data.length - 1)));
+
+  const yTicks = [0, 25, 50, 75, 100];
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    const idx = Math.round(((x - padL) / chartW) * (data.length - 1));
+    setHov(Math.max(0, Math.min(data.length - 1, idx)));
+  }, [data.length]);
+
+  const avgPeak = Math.round(data.reduce((a, b) => a + b.peak, 0) / data.length);
+  const avgEod  = Math.round(data.reduce((a, b) => a + b.end_of_day, 0) / data.length);
+
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-      <p className="text-xs text-gray-500 mb-1">{icon} {label}</p>
-      <p className={`text-2xl font-bold ${color}`}>{value ?? "—"}</p>
-      {sub && <p className="text-xs text-gray-600 mt-0.5">{sub}</p>}
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-4 rounded-sm inline-block" style={{ background: "#f59e0b" }} />
+          Morning peak <span className="text-gray-300 font-medium">avg {avgPeak}</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-4 rounded-sm inline-block" style={{ background: "#6b7280" }} />
+          End of day <span className="text-gray-300 font-medium">avg {avgEod}</span>
+        </span>
+        {agg !== "day" && (
+          <span className="ml-auto rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-500">{aggLabel(agg)}</span>
+        )}
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full cursor-crosshair"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHov(null)}
+      >
+        {yTicks.map((v) => (
+          <g key={v}>
+            <line x1={padL} y1={toY(v)} x2={W - padR} y2={toY(v)} stroke="#1f2937" strokeWidth={1} />
+            <text x={padL - 4} y={toY(v) + 4} textAnchor="end" fontSize={11} fill="#4b5563">{v}</text>
+          </g>
+        ))}
+
+        {/* Band fill */}
+        <polygon points={bandPts} fill="#f59e0b" fillOpacity={0.12} />
+
+        {/* End-of-day line */}
+        <polyline points={eodPts} fill="none" stroke="#6b7280" strokeWidth={1.5} strokeLinejoin="round" strokeDasharray="4,2" />
+
+        {/* Peak line */}
+        <polyline points={peakPts} fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinejoin="round" />
+
+        {/* Hover */}
+        {hov !== null && (() => {
+          const cx = toX(hov);
+          const label = fmtTooltip(data[hov].date, agg);
+          const TW = Math.max(130, label.length * 6.5), TH = 54, TPad = 6;
+          const cy = toY(data[hov].peak);
+          const aboveY = cy - TH - 10;
+          const ty = aboveY < padT ? cy + 12 : aboveY;
+          const tx = Math.max(padL, Math.min(cx - TW / 2, W - padR - TW));
+          return (
+            <>
+              <line x1={cx} y1={padT} x2={cx} y2={padT + chartH} stroke="#374151" strokeWidth={1} strokeDasharray="3,3" />
+              <circle cx={cx} cy={toY(data[hov].peak)} r={4} fill="#f59e0b" stroke="#111827" strokeWidth={2} />
+              <circle cx={cx} cy={toY(data[hov].end_of_day)} r={3} fill="#6b7280" stroke="#111827" strokeWidth={2} />
+              <g transform={`translate(${tx},${ty})`}>
+                <rect width={TW} height={TH} rx={6} fill="#111827" stroke="#374151" strokeWidth={1} />
+                <text x={TW / 2} y={TPad + 10} textAnchor="middle" fontSize={9.5} fill="#6b7280">{label}</text>
+                <text x={TW / 2} y={TPad + 26} textAnchor="middle" fontSize={12} fontWeight="700" fill="#f59e0b">Peak {data[hov].peak}</text>
+                <text x={TW / 2} y={TPad + 42} textAnchor="middle" fontSize={12} fontWeight="700" fill="#9ca3af">End {data[hov].end_of_day}</text>
+              </g>
+            </>
+          );
+        })()}
+
+        {tickIndices.map((i) => (
+          <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize={11} fill="#4b5563">
+            {fmtAxis(data[i].date, agg)}
+          </text>
+        ))}
+        <line x1={padL} y1={padT + chartH} x2={W - padR} y2={padT + chartH} stroke="#1f2937" strokeWidth={1} />
+      </svg>
     </div>
   );
 }
 
-// ── Chart section ─────────────────────────────────────────────────────────────
+// ── Sleep chart (bar for ≤1M, line for >1M) ───────────────────────────────────
 
-function ChartSection({ title, children }: { title: string; children: React.ReactNode }) {
+function SleepChart({ data, days, profile }: { data: SleepPoint[]; days: number; profile: string }) {
+  const [hov, setHov] = useState<number | null>(null);
+  const [detailDate, setDetailDate] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  if (!data.length) return <div className="text-sm text-gray-600 py-4">No sleep data</div>;
+
+  const LEGEND = [
+    { label: "Total",  color: "#a78bfa", key: "total_hours"  as const },
+    { label: "Deep",   color: "#3b82f6", key: "deep_hours"   as const },
+    { label: "REM",    color: "#8b5cf6", key: "rem_hours"    as const },
+    { label: "Light",  color: "#6b7280", key: "light_hours"  as const },
+  ];
+
+  const W = 600, H = 260, padL = 28, padR = 8, padT = 10, padB = 30;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const tickCount = data.length <= 10 ? data.length : Math.min(6, data.length);
+  const tickIndices = tickCount === data.length
+    ? data.map((_, i) => i)
+    : Array.from({ length: tickCount }, (_, i) =>
+        data.length === 1 ? 0 : Math.round((i / (tickCount - 1)) * (data.length - 1))
+      );
+
+  // ── Bar chart (≤30 days) ──────────────────────────────────────────────────
+
+  if (days <= 30) {
+    const maxH = Math.max(...data.map((d) => d.total_hours), 1);
+    const step = chartW / data.length;
+    const barW = Math.max(2, step - 2);
+    function bh(hrs: number) { return (hrs / maxH) * chartH; }
+
+    return (
+      <div>
+        <div className="mb-3 flex flex-wrap gap-4 text-xs text-gray-400">
+          {LEGEND.slice(1).map(({ label, color }) => (
+            <span key={label} className="flex items-center gap-1">
+              <span className="h-2 w-3 rounded-sm inline-block" style={{ background: color }} />
+              {label}
+            </span>
+          ))}
+          {hov !== null && (
+            <span className="ml-2 text-gray-300">
+              {fmtTooltip(data[hov].date, "day")} · {data[hov].total_hours.toFixed(1)}h
+              {data[hov].sleep_score != null ? ` · score ${data[hov].sleep_score}` : ""}
+            </span>
+          )}
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full cursor-pointer" ref={svgRef}>
+          {Array.from({ length: Math.floor(maxH) + 1 }, (_, i) => i).map((v) => {
+            const y = padT + chartH - bh(v);
+            const is7 = v === 7;
+            return (
+              <g key={v}>
+                <line x1={padL} y1={y} x2={W - padR} y2={y}
+                  stroke={is7 ? "#4b5563" : "#1f2937"} strokeWidth={1}
+                  strokeDasharray={is7 ? "4,4" : undefined} />
+                <text x={padL - 4} y={y + 4} textAnchor="end" fontSize={11} fill={is7 ? "#9ca3af" : "#4b5563"}>{v}h</text>
+              </g>
+            );
+          })}
+          {data.map((d, i) => {
+            const x = padL + i * step + (step - barW) / 2;
+            const bottom = padT + chartH;
+            const deep  = bh(d.deep_hours  || 0);
+            const rem   = bh(d.rem_hours   || 0);
+            const light = bh(d.light_hours || 0);
+            const hasStages = (d.deep_hours || 0) + (d.rem_hours || 0) + (d.light_hours || 0) > 0;
+            return (
+              <g key={d.date}
+                onMouseEnter={() => setHov(i)}
+                onMouseLeave={() => setHov(null)}
+                onClick={() => setDetailDate(d.date)}
+                style={{ cursor: "pointer" }}
+              >
+                {hasStages ? (
+                  <>
+                    <rect x={x} y={bottom - deep}                         width={barW} height={deep}  fill="#3b82f6" />
+                    <rect x={x} y={bottom - deep - rem}                   width={barW} height={rem}   fill="#8b5cf6" />
+                    <rect x={x} y={bottom - deep - rem - light}           width={barW} height={light} fill="#6b7280" />
+                  </>
+                ) : (
+                  <rect x={x} y={bottom - bh(d.total_hours)} width={barW} height={bh(d.total_hours)} fill="#a78bfa" opacity={0.5} />
+                )}
+                <rect x={x} y={padT} width={barW} height={chartH} fill="transparent" />
+              </g>
+            );
+          })}
+          {tickIndices.map((i) => (
+            <text key={i} x={padL + i * step + step / 2} y={H - 6} textAnchor="middle" fontSize={11} fill="#4b5563">
+              {fmtAxis(data[i].date, "day")}
+            </text>
+          ))}
+          <line x1={padL} y1={padT + chartH} x2={W - padR} y2={padT + chartH} stroke="#1f2937" strokeWidth={1} />
+        </svg>
+        {detailDate && <SleepDetailModal date={detailDate} profile={profile} onClose={() => setDetailDate(null)} />}
+      </div>
+    );
+  }
+
+  // ── Line chart (>30 days) ─────────────────────────────────────────────────
+
+  const allVals = data.flatMap((d) => [d.total_hours, d.deep_hours || 0, d.rem_hours || 0, d.light_hours || 0, d.awake_hours || 0]);
+  const minV = 0;
+  const maxV = Math.max(...data.map((d) => d.total_hours), 1);
+
+  const toX = (i: number) => padL + (i / Math.max(data.length - 1, 1)) * chartW;
+  const toY = (v: number) => padT + chartH - ((v - minV) / (maxV - minV || 1)) * chartH;
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    const idx = Math.round(((x - padL) / chartW) * (data.length - 1));
+    setHov(Math.max(0, Math.min(data.length - 1, idx)));
+  };
+
+  const yTicks = Array.from({ length: Math.floor(maxV) + 1 }, (_, i) => i);
+
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-      <p className="text-sm font-semibold text-gray-300 mb-3">{title}</p>
-      {children}
+    <div>
+      <div className="mb-3 flex flex-wrap gap-4 text-xs text-gray-400">
+        {LEGEND.map(({ label, color }) => (
+          <span key={label} className="flex items-center gap-1">
+            <span className="h-2 w-3 rounded-sm inline-block" style={{ background: color }} />
+            {label}
+          </span>
+        ))}
+        {hov !== null && (
+          <span className="ml-2 text-gray-300">
+            {fmtTooltip(data[hov].date, getAgg(days))} · {data[hov].total_hours.toFixed(1)}h
+          </span>
+        )}
+        {getAgg(days) !== "day" && (
+          <span className="ml-auto rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-500">
+            {aggLabel(getAgg(days))}
+          </span>
+        )}
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full cursor-crosshair"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHov(null)}
+      >
+        {yTicks.map((v) => {
+          const is7 = v === 7;
+          return (
+            <g key={v}>
+              <line x1={padL} y1={toY(v)} x2={W - padR} y2={toY(v)}
+                stroke={is7 ? "#4b5563" : "#1f2937"} strokeWidth={1}
+                strokeDasharray={is7 ? "4,4" : undefined} />
+              <text x={padL - 4} y={toY(v) + 4} textAnchor="end" fontSize={11} fill={is7 ? "#9ca3af" : "#6b7280"}>{v}h</text>
+            </g>
+          );
+        })}
+
+        {/* Lines for each stage */}
+        {LEGEND.map(({ color, key }) => {
+          const pts = data.map((d, i) => `${toX(i)},${toY(d[key] || 0)}`).join(" ");
+          return (
+            <polyline key={key} points={pts} fill="none" stroke={color}
+              strokeWidth={key === "total_hours" ? 2.5 : 1.5}
+              strokeOpacity={key === "total_hours" ? 1 : 0.75}
+              strokeLinejoin="round" />
+          );
+        })}
+
+        {/* Hover crosshair + tooltip */}
+        {hov !== null && (() => {
+          const cx = toX(hov);
+          const cy = toY(data[hov].total_hours);
+          const TW = 130, TH = 42, TPad = 6;
+          const aboveY = cy - TH - 8;
+          const ty = aboveY < padT ? cy + 12 : aboveY;
+          const tx = Math.max(padL, Math.min(cx - TW / 2, W - padR - TW));
+          return (
+            <Fragment>
+              <line x1={cx} y1={padT} x2={cx} y2={padT + chartH} stroke="#374151" strokeWidth={1} strokeDasharray="3,3" />
+              <circle cx={cx} cy={cy} r={4} fill="#a78bfa" stroke="#111827" strokeWidth={2} />
+              <g transform={`translate(${tx},${ty})`}>
+                <rect width={TW} height={TH} rx={6} fill="#111827" stroke="#374151" strokeWidth={1} />
+                <text x={TW / 2} y={TPad + 10} textAnchor="middle" fontSize={11} fill="#6b7280">
+                  {fmtTooltip(data[hov].date, getAgg(days))}
+                </text>
+                <text x={TW / 2} y={TPad + 28} textAnchor="middle" fontSize={13} fontWeight="700" fill="#f9fafb">
+                  {data[hov].total_hours.toFixed(1)}h total
+                </text>
+              </g>
+            </Fragment>
+          );
+        })()}
+
+        {tickIndices.map((i) => (
+          <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize={11} fill="#4b5563">
+            {fmtAxis(data[i].date, getAgg(days))}
+          </text>
+        ))}
+        <line x1={padL} y1={padT + chartH} x2={W - padR} y2={padT + chartH} stroke="#1f2937" strokeWidth={1} />
+      </svg>
     </div>
   );
-}
-
-// ── Range selector ────────────────────────────────────────────────────────────
-
-function RangeSelector({ value, onChange }: { value: number; onChange: (n: number) => void }) {
-  return (
-    <div className="flex gap-1 rounded-lg bg-gray-900 border border-gray-800 p-1">
-      {[[30, "30d"], [90, "90d"], [180, "6m"], [365, "1y"]].map(([d, label]) => (
-        <button key={d} onClick={() => onChange(Number(d))}
-          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${value === d ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"}`}>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ── Profile selector ──────────────────────────────────────────────────────────
-
-function ProfileSelector({ profiles, activeSlug, onChange }: {
-  profiles: GarminProfile[];
-  activeSlug: string;
-  onChange: (slug: string) => void;
-}) {
-  if (profiles.length <= 1) return null;
-  return (
-    <div className="flex gap-1 rounded-lg bg-gray-900 border border-gray-800 p-1">
-      {profiles.map((p) => (
-        <button
-          key={p.slug}
-          onClick={() => onChange(p.slug)}
-          className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
-            activeSlug === p.slug
-              ? "bg-gray-800 text-gray-100"
-              : "text-gray-400 hover:text-gray-300"
-          }`}
-        >
-          {(p.full_name || p.display_name || p.slug).split(" ")[0]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ── HRV status color ──────────────────────────────────────────────────────────
-
-function hrvStatusColor(status: string): string {
-  const s = (status || "").toLowerCase();
-  if (s.includes("balanced")) return "text-green-400";
-  if (s.includes("low")) return "text-red-400";
-  if (s.includes("unbalanced")) return "text-yellow-400";
-  return "text-gray-400";
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function HealthPage() {
-  const [profiles, setProfiles] = useState<GarminProfile[] | null>(null);
-  const [activeSlug, setActiveSlug] = useState("");
-  const [days, setDays] = useState(90);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [hrData, setHrData] = useState<HRPoint[]>([]);
-  const [hrvData, setHrvData] = useState<HRVPoint[]>([]);
+  const [profiles, setProfiles] = useState<GarminProfile[]>([]);
+  const [profile, setProfile] = useState<string>("");
+  const [metric, setMetric] = useState<MetricKey>("resting_hr");
+  const [days, setDays] = useState(30);
+  const [sleepDays, setSleepDays] = useState(30);
+  const [trendData, setTrendData] = useState<TrendPoint[]>([]);
+  const [batteryData, setBatteryData] = useState<BatteryPoint[]>([]);
   const [sleepData, setSleepData] = useState<SleepPoint[]>([]);
-  const [stepsData, setStepsData] = useState<StepsPoint[]>([]);
-  const [stressData, setStressData] = useState<StressPoint[]>([]);
-  const [recoveryData, setRecoveryData] = useState<RecoveryPoint[]>([]);
-  const [weightData, setWeightData] = useState<WeightPoint[]>([]);
-  const [connected, setConnected] = useState<boolean | null>(null);
-  const [notConnectedReason, setNotConnectedReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sleepLoading, setSleepLoading] = useState(false);
+  const [metricRanges, setMetricRanges] = useState<Record<string, string | null>>({});
 
-  // Load profiles on mount
+  const metricCfg = METRICS.find((m) => m.key === metric)!;
+
   useEffect(() => {
     fetch("/api/garmin/profiles")
       .then((r) => r.json())
-      .then((data: GarminProfile[]) => {
-        setProfiles(data);
-        if (data.length > 0 && !activeSlug) {
-          setActiveSlug(data[0].slug);
-        }
+      .then((p: GarminProfile[]) => {
+        setProfiles(p);
+        if (p.length > 0) setProfile(p[0].slug);
       })
-      .catch(() => setProfiles([]));
+      .catch(() => {});
   }, []);
 
-  // Check connection status for active profile
   useEffect(() => {
-    if (!activeSlug) return;
-    fetch(`/api/garmin/status?profile=${activeSlug}`)
+    if (!profile) return;
+    fetch(`/api/garmin/metric-ranges?profile=${profile}`)
       .then((r) => r.json())
-      .then((d) => {
-        setConnected(d.connected);
-        if (!d.connected) setNotConnectedReason(d.reason ?? "");
-      })
-      .catch(() => setConnected(false));
-  }, [activeSlug]);
+      .then(setMetricRanges)
+      .catch(() => {});
+  }, [profile]);
 
-  // Load data for active profile
   useEffect(() => {
-    if (!connected || !activeSlug) return;
-    const q = `profile=${activeSlug}`;
-    fetch(`/api/garmin/overview?days=${days}&${q}`).then((r) => r.json()).then(setOverview).catch(() => {});
-    fetch(`/api/garmin/heart-rate?days=${days}&${q}`).then((r) => r.json()).then(setHrData).catch(() => setHrData([]));
-    fetch(`/api/garmin/hrv?days=${days}&${q}`).then((r) => r.json()).then(setHrvData).catch(() => setHrvData([]));
-    fetch(`/api/garmin/sleep?days=${days}&${q}`).then((r) => r.json()).then(setSleepData).catch(() => setSleepData([]));
-    fetch(`/api/garmin/steps?days=${days}&${q}`).then((r) => r.json()).then(setStepsData).catch(() => setStepsData([]));
-    fetch(`/api/garmin/stress?days=${days}&${q}`).then((r) => r.json()).then(setStressData).catch(() => setStressData([]));
-    fetch(`/api/garmin/recovery-trend?days=${days}&${q}`).then((r) => r.json()).then(setRecoveryData).catch(() => setRecoveryData([]));
-    fetch(`/api/garmin/weight?days=365&${q}`).then((r) => r.json()).then(setWeightData).catch(() => setWeightData([]));
-  }, [connected, days, activeSlug]);
+    if (!profile) return;
+    setLoading(true);
+    if (metric === "body_battery") {
+      fetch(`/api/garmin/body-battery?days=${days}&profile=${profile}`)
+        .then((r) => r.json())
+        .then(setBatteryData)
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    } else {
+      fetch(`/api/garmin/trend?metric=${metric}&days=${days}&profile=${profile}`)
+        .then((r) => r.json())
+        .then(setTrendData)
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }
+  }, [profile, metric, days]);
 
-  if (profiles === null) {
-    return <div className="py-16 text-center text-sm text-gray-500">Loading...</div>;
-  }
+  useEffect(() => {
+    if (!profile) return;
+    setSleepLoading(true);
+    fetch(`/api/garmin/sleep?days=${sleepDays}&profile=${profile}`)
+      .then((r) => r.json())
+      .then(setSleepData)
+      .catch(() => {})
+      .finally(() => setSleepLoading(false));
+  }, [profile, sleepDays]);
 
-  if (profiles.length === 0) {
-    return (
-      <div className="max-w-lg mx-auto py-16 text-center">
-        <p className="text-4xl mb-4">⌚</p>
-        <p className="text-lg font-semibold text-gray-200 mb-2">Garmin not connected</p>
-        <p className="text-sm text-gray-500 mb-6">No profiles found</p>
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 text-left text-sm text-gray-400 space-y-2">
-          <p className="font-medium text-gray-300">Setup instructions:</p>
-          <p>1. Run <code className="text-indigo-400">python3 scripts/garmin-auth.py</code></p>
-          <p>2. Run <code className="text-indigo-400">python3 scripts/garmin-sync.py --full</code></p>
-          <p>3. Refresh this page</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (connected === null) {
-    return <div className="py-16 text-center text-sm text-gray-500">Loading...</div>;
-  }
-
-  if (!connected) {
-    const activeProfile = profiles.find((p) => p.slug === activeSlug);
-    return (
-      <div className="space-y-5">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <h1 className="text-xl font-bold text-gray-100">Health</h1>
-          <ProfileSelector profiles={profiles} activeSlug={activeSlug} onChange={setActiveSlug} />
-        </div>
-        <div className="max-w-lg mx-auto py-8 text-center">
-          <p className="text-4xl mb-4">⌚</p>
-          <p className="text-lg font-semibold text-gray-200 mb-2">No data for {activeProfile?.full_name || activeSlug}</p>
-          <p className="text-sm text-gray-500 mb-6">{notConnectedReason}</p>
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 text-left text-sm text-gray-400 space-y-2">
-            <p className="font-medium text-gray-300">Sync this profile:</p>
-            <p>Run <code className="text-indigo-400">python3 scripts/garmin-sync.py --profile {activeSlug} --full</code></p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const latestHrv = hrvData[hrvData.length - 1];
-  const latestSleep = sleepData[sleepData.length - 1];
+  const activeProfile = profiles.find((p) => p.slug === profile);
 
   return (
-    <div className="space-y-5">
+    <div className="p-4 sm:p-8 max-w-4xl">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-xl font-bold text-gray-100">Health</h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          <ProfileSelector profiles={profiles} activeSlug={activeSlug} onChange={setActiveSlug} />
-          <RangeSelector value={days} onChange={setDays} />
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-100">Health</h2>
+          {activeProfile && (
+            <p className="text-sm text-gray-500">
+              {activeProfile.full_name || activeProfile.slug}
+              {activeProfile.last_sync && <span className="ml-2">· synced {relTime(activeProfile.last_sync)}</span>}
+            </p>
+          )}
         </div>
+        {profiles.length > 1 && (
+          <div className="flex gap-1 rounded-lg bg-gray-900 p-1">
+            {profiles.map((p) => (
+              <button
+                key={p.slug}
+                onClick={() => setProfile(p.slug)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${profile === p.slug ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"}`}
+              >
+                {p.full_name.split(" ")[0] || p.display_name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Overview metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <MetricCard icon="❤️" label="Resting HR" value={overview?.avg_resting_hr ? `${overview.avg_resting_hr} bpm` : null} sub={`${days}d avg`} color="text-red-400" />
-        <MetricCard icon="📊" label="HRV" value={overview?.avg_hrv ? `${overview.avg_hrv} ms` : null}
-          sub={latestHrv?.hrv_status ?? `${days}d avg`}
-          color={latestHrv ? hrvStatusColor(latestHrv.hrv_status) : "text-gray-100"} />
-        <MetricCard icon="😴" label="Sleep" value={overview?.avg_sleep_hours ? `${overview.avg_sleep_hours}h` : null} sub={`${days}d avg`} color="text-purple-400" />
-        <MetricCard icon="👣" label="Steps" value={overview?.avg_steps ? Math.round(overview.avg_steps).toLocaleString() : null} sub={`${days}d avg`} color="text-green-400" />
-        <MetricCard icon="🧘" label="Stress" value={overview?.avg_stress ? `${overview.avg_stress}` : null} sub={`${days}d avg · 0–100`} color={overview?.avg_stress && overview.avg_stress > 50 ? "text-orange-400" : "text-teal-400"} />
-        <MetricCard icon="⚖️" label="Weight"
-          value={overview?.latest_weight_kg ? `${kgToLbs(overview.latest_weight_kg)} lbs` : null}
-          sub="latest" color="text-gray-100" />
+      {/* Metric selector */}
+      <div className="mb-4 flex flex-wrap gap-2">
+        {METRICS.map((m) => (
+          <button
+            key={m.key}
+            onClick={() => setMetric(m.key as MetricKey)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors border ${
+              metric === m.key
+                ? "border-transparent text-white"
+                : "border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300"
+            }`}
+            style={metric === m.key ? { background: m.color } : {}}
+          >
+            {m.label}
+          </button>
+        ))}
       </div>
 
-      {/* Charts row 1: HR + HRV */}
-      <div className="grid sm:grid-cols-2 gap-4">
-        <ChartSection title="❤️ Resting Heart Rate">
-          {hrData.length > 0 ? (
-            <>
-              <LineChart data={hrData.map((d) => d.resting_heart_rate)} color="#f87171" label="bpm" />
-              <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-                <span>{fmtDate(hrData[0].date)}</span>
-                <span>{fmtDate(hrData[hrData.length - 1].date)}</span>
-              </div>
-            </>
-          ) : <div className="py-8 text-center text-sm text-gray-500">No data yet</div>}
-        </ChartSection>
-
-        <ChartSection title="📊 HRV (Last Night)">
-          {hrvData.length > 0 ? (
-            <>
-              <LineChart data={hrvData.map((d) => d.last_night)} color="#34d399" label="ms" />
-              <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-                <span>{fmtDate(hrvData[0].date)}</span>
-                <span>{fmtDate(hrvData[hrvData.length - 1].date)}</span>
-              </div>
-              {latestHrv && (
-                <p className={`mt-2 text-xs font-medium ${hrvStatusColor(latestHrv.hrv_status)}`}>
-                  Status: {latestHrv.hrv_status} · Last night: {latestHrv.last_night} ms · 7d avg: {latestHrv.weekly_avg} ms
-                </p>
-              )}
-            </>
-          ) : <div className="py-8 text-center text-sm text-gray-500">No data yet</div>}
-        </ChartSection>
-      </div>
-
-      {/* Sleep */}
-      <ChartSection title="😴 Sleep">
-        {sleepData.length > 0 ? (
-          <>
-            <SleepBars data={sleepData.slice(-60)} />
-            <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-              <span>{fmtDate(sleepData[Math.max(0, sleepData.length - 60)].date)}</span>
-              <span>{fmtDate(sleepData[sleepData.length - 1].date)}</span>
+      {/* Time range selector */}
+      {(() => {
+        const earliest = metricRanges[metric];
+        const maxDays = earliest
+          ? Math.floor((Date.now() - new Date(earliest).getTime()) / 86400000)
+          : Infinity;
+        const dataFrom = earliest
+          ? new Date(earliest).toLocaleDateString("en-US", { month: "short", year: "numeric" })
+          : null;
+        return (
+          <div className="mb-6">
+            <div className="flex gap-1 rounded-lg bg-gray-900 p-1 w-fit">
+              {RANGES.map((r) => {
+                const unavailable = r.days > maxDays * 1.08; // 8% buffer so e.g. 6.9Y of data enables 7Y button
+                return (
+                  <button
+                    key={r.label}
+                    onClick={() => !unavailable && setDays(r.days)}
+                    title={unavailable ? `No data before ${dataFrom}` : undefined}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                      unavailable
+                        ? "text-gray-700 cursor-not-allowed"
+                        : days === r.days
+                        ? "bg-gray-800 text-gray-100"
+                        : "text-gray-400 hover:text-gray-300"
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                );
+              })}
             </div>
-            {latestSleep && (
-              <p className="mt-2 text-xs text-gray-500">
-                Last night: {latestSleep.total_hours.toFixed(1)}h total · {latestSleep.deep_hours.toFixed(1)}h deep · {latestSleep.rem_hours.toFixed(1)}h REM
-                {latestSleep.sleep_score ? ` · Score: ${latestSleep.sleep_score}` : ""}
+            {dataFrom && maxDays < 3650 && (
+              <p className="mt-1.5 text-xs text-gray-600">
+                Data available from {dataFrom}
               </p>
             )}
-          </>
-        ) : <div className="py-8 text-center text-sm text-gray-500">No sleep data yet</div>}
-      </ChartSection>
+          </div>
+        );
+      })()}
 
-      {/* Steps + Stress */}
-      <div className="grid sm:grid-cols-2 gap-4">
-        <ChartSection title="👣 Daily Steps">
-          {stepsData.length > 0 ? (
-            <>
-              <LineChart data={stepsData.map((d) => d.total_steps)} color="#4ade80" label="steps" />
-              <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-                <span>{fmtDate(stepsData[0].date)}</span>
-                <span>{fmtDate(stepsData[stepsData.length - 1].date)}</span>
-              </div>
-            </>
-          ) : <div className="py-8 text-center text-sm text-gray-500">No data yet</div>}
-        </ChartSection>
-
-        <ChartSection title="🧘 Stress Level">
-          {stressData.length > 0 ? (
-            <>
-              <LineChart data={stressData.map((d) => d.overall_stress_level)} color="#fb923c" label="0–100 (lower = better)" />
-              <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-                <span>{fmtDate(stressData[0].date)}</span>
-                <span>{fmtDate(stressData[stressData.length - 1].date)}</span>
-              </div>
-            </>
-          ) : <div className="py-8 text-center text-sm text-gray-500">No data yet</div>}
-        </ChartSection>
+      {/* Trend chart */}
+      <div className="mb-8 rounded-xl border border-gray-800 bg-gray-900 p-3 sm:p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+            {metricCfg.label}
+            <span className="group relative">
+              <svg className="h-3.5 w-3.5 text-gray-600 hover:text-gray-400 transition-colors cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-4m0-4h.01" strokeLinecap="round" />
+              </svg>
+              <span className="pointer-events-none absolute top-full left-0 mt-2 w-64 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-xs font-normal leading-relaxed text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+                {metricCfg.desc}
+              </span>
+            </span>
+            {metric !== "body_battery" && trendData.length > 0 && (
+              <span className="ml-1 font-normal text-gray-400">
+                avg {fmtVal(trendData.reduce((a, b) => a + b.value, 0) / trendData.length, metricCfg.unit)}
+              </span>
+            )}
+          </h3>
+          {getAgg(days) !== "day" && metric !== "body_battery" && (
+            <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-500">
+              {aggLabel(getAgg(days))}
+            </span>
+          )}
+        </div>
+        {loading ? (
+          <div className="flex h-48 items-center justify-center text-sm text-gray-600">Loading…</div>
+        ) : metric === "body_battery" ? (
+          <BodyBatteryChart data={batteryData} days={days} />
+        ) : (
+          <TrendChart data={trendData} color={metricCfg.color} unit={metricCfg.unit} days={days} />
+        )}
       </div>
 
-      {/* Heart Rate Recovery */}
-      <ChartSection title="💪 Heart Rate Recovery (Garmin native · bpm drop after 2 min)">
-        {recoveryData.length > 0 ? (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-500 border-b border-gray-800">
-                    <th className="text-left pb-2">Date</th>
-                    <th className="text-left pb-2">Activity</th>
-                    <th className="text-right pb-2">Max HR</th>
-                    <th className="text-right pb-2">Recovery HR</th>
-                    <th className="text-right pb-2">Drop</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-800/50">
-                  {recoveryData.slice(-20).reverse().map((r, i) => (
-                    <tr key={i} className="text-gray-300">
-                      <td className="py-1.5">{fmtDate(r.date)}</td>
-                      <td className="py-1.5">{r.sport_type}</td>
-                      <td className="py-1.5 text-right">{r.max_hr}</td>
-                      <td className="py-1.5 text-right">{r.recovery_heart_rate}</td>
-                      <td className={`py-1.5 text-right font-semibold ${r.hrr_drop >= 30 ? "text-green-400" : r.hrr_drop >= 20 ? "text-yellow-400" : "text-red-400"}`}>
-                        ↓{r.hrr_drop}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {recoveryData.length > 5 && (
-              <div className="mt-3">
-                <p className="text-xs text-gray-500 mb-1">Trend (bpm drop)</p>
-                <LineChart data={recoveryData.map((d) => d.hrr_drop)} color="#34d399" height={60} />
+      {/* Sleep breakdown */}
+      <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-gray-300">Sleep</h3>
+          {/* Sleep-specific range selector */}
+          {(() => {
+            const earliest = metricRanges["sleep_duration"];
+            const maxDays = earliest
+              ? Math.floor((Date.now() - new Date(earliest).getTime()) / 86400000)
+              : Infinity;
+            return (
+              <div className="flex gap-1 rounded-lg bg-gray-800 p-1">
+                {RANGES.map((r) => {
+                  const unavailable = r.days > maxDays * 1.08;
+                  return (
+                    <button
+                      key={r.label}
+                      onClick={() => !unavailable && setSleepDays(r.days)}
+                      title={unavailable ? "No data for this range" : undefined}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        unavailable
+                          ? "text-gray-700 cursor-not-allowed"
+                          : sleepDays === r.days
+                          ? "bg-gray-700 text-gray-100"
+                          : "text-gray-400 hover:text-gray-300"
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  );
+                })}
               </div>
-            )}
-          </>
-        ) : <div className="py-8 text-center text-sm text-gray-500">No recovery data yet — sync activities from Garmin</div>}
-      </ChartSection>
-
-      {/* Weight */}
-      {weightData.length > 0 && (
-        <ChartSection title="⚖️ Weight">
-          <LineChart data={weightData.map((d) => parseFloat(kgToLbs(d.weight_kg)))} color="#94a3b8" label="lbs" />
-          <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-            <span>{fmtDate(weightData[0].date)}</span>
-            <span>{fmtDate(weightData[weightData.length - 1].date)}</span>
-          </div>
-        </ChartSection>
-      )}
+            );
+          })()}
+        </div>
+        {sleepLoading ? (
+          <div className="flex h-40 items-center justify-center text-sm text-gray-600">Loading…</div>
+        ) : (
+          <SleepChart data={sleepData} days={sleepDays} profile={profile} />
+        )}
+      </div>
     </div>
   );
 }

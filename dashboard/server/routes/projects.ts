@@ -127,6 +127,10 @@ router.get("/api/projects", async (_req: Request, res: Response) => {
   try {
     const projects = await Promise.all([
       getProjectInfo(
+        "nanoclaw",
+        "/Users/danielsaltz/Documents/repositories/nanoclaw"
+      ),
+      getProjectInfo(
         "recipe-club",
         "/Users/danielsaltz/Documents/repositories/recipe-club"
       ),

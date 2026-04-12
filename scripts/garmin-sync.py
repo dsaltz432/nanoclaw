@@ -500,12 +500,15 @@ def sync_day(client, conn, d: date):
     if bb and isinstance(bb, list) and bb:
         charged = sum(e.get("charged") or 0 for e in bb)
         drained = sum(e.get("drained") or 0 for e in bb)
-        # End-of-day level from last entry in bodyBatteryValuesArray
+        # End-of-day level from last non-null entry in bodyBatteryValuesArray
         end_level = None
         last_entry = bb[-1] if bb else {}
         vals_array = last_entry.get("bodyBatteryValuesArray", [])
-        if vals_array and isinstance(vals_array, list) and vals_array[-1]:
-            end_level = vals_array[-1][-1] if isinstance(vals_array[-1], list) else None
+        if vals_array and isinstance(vals_array, list):
+            for v in reversed(vals_array):
+                if isinstance(v, list) and len(v) >= 2 and v[-1] is not None:
+                    end_level = v[-1]
+                    break
         conn.execute("""
             INSERT OR REPLACE INTO daily_body_battery VALUES (?,?,?,?,?)
         """, (ds, charged, drained, end_level, j(bb)))

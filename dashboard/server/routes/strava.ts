@@ -583,8 +583,8 @@ Do not send any messages. Just write the file and exit.`;
       )
       .run(
         taskId,
-        "telegram_main",
-        "tg:8684529481",
+        "fitness",
+        "tg:-5113982013",
         prompt,
         "once",
         nextRun,
