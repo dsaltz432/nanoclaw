@@ -19,6 +19,7 @@ import mortgageRouter from "./routes/mortgage.js";
 import emailUnsubscribeRouter from "./routes/email-unsubscribe.js";
 import stravaRouter from "./routes/strava.js";
 import garminRouter from "./routes/garmin.js";
+import ticketsRouter from "./routes/tickets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -42,6 +43,9 @@ app.use(
 app.post("/api/auth/login", loginHandler);
 app.post("/api/auth/logout", logoutHandler);
 app.get("/api/auth/status", statusHandler);
+
+// Tickets routes are self-auth (bearer token for writes, open for reads)
+app.use(ticketsRouter);
 
 // Protect all other API routes
 app.use("/api/{*splat}", authMiddleware);

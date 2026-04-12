@@ -28,6 +28,27 @@ export function getTaskRuns(taskId: string, limit = 50) {
     .all(taskId, limit);
 }
 
+export function triggerTaskNow(taskId: string): string {
+  const task = db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId) as Record<string, unknown> | undefined;
+  if (!task) throw new Error("Task not found");
+  const newId = `${taskId}-manual-${Date.now()}`;
+  dbWrite.prepare(`
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, name)
+    VALUES (?, ?, ?, ?, 'once', ?, ?, 'active', ?, ?, ?)
+  `).run(
+    newId,
+    task.group_folder,
+    task.chat_jid,
+    task.prompt,
+    new Date().toISOString(),
+    new Date().toISOString(),
+    new Date().toISOString(),
+    task.context_mode,
+    task.name ? `${task.name} (manual)` : null,
+  );
+  return newId;
+}
+
 export function getGroups() {
   return db.prepare("SELECT * FROM registered_groups").all();
 }

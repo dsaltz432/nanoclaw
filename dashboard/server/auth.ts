@@ -60,7 +60,7 @@ export function authMiddleware(
   res: Response,
   next: NextFunction
 ) {
-  // Skip auth for login, logout, and status endpoints
+  // Auth routes are mounted before this middleware and never reach here
   if (
     req.path === "/api/auth/login" ||
     req.path === "/api/auth/logout" ||

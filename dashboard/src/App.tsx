@@ -3,15 +3,13 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
-import TasksPage from "./pages/TasksPage";
-import GroupsPage from "./pages/GroupsPage";
-import ContainersPage from "./pages/ContainersPage";
-import ProjectsPage from "./pages/ProjectsPage";
+import AdminPage from "./pages/AdminPage";
 import BeaconIntelPage from "./pages/BeaconIntelPage";
 import MortgagePage from "./pages/MortgagePage";
 import EmailUnsubscribePage from "./pages/EmailUnsubscribePage";
 import StravaPage from "./pages/StravaPage";
 import HealthPage from "./pages/HealthPage";
+import TicketsPage from "./pages/TicketsPage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -40,15 +38,13 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<DashboardPage />} />
-          <Route path="tasks" element={<TasksPage />} />
-          <Route path="groups" element={<GroupsPage />} />
-          <Route path="containers" element={<ContainersPage />} />
-          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="admin" element={<AdminPage />} />
           <Route path="beacon-intel" element={<BeaconIntelPage />} />
           <Route path="mortgage" element={<MortgagePage />} />
           <Route path="email-unsubscribe" element={<EmailUnsubscribePage />} />
           <Route path="strava" element={<StravaPage />} />
           <Route path="health" element={<HealthPage />} />
+          <Route path="tickets" element={<TicketsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

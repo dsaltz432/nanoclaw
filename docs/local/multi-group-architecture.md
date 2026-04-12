@@ -55,6 +55,7 @@ check the schedule first.
 | Fitness | `fitness` | `tg:-5113982013` | any (no prefix) | 30 min | Garmin + Strava health syncs |
 | Email | `email` | `tg:-5289234401` | any (no prefix) | 30 min | Gmail unsubscribe curator |
 | Recipe Club | `recipe-club` | `tg:-5280655097` | `@recipe` (required) | **2 hours** | Autonomous dev work on the Recipe Club repo |
+| Tickets | `telegram_tickets` | `tg:-5206776349` | any (no prefix) | 30 min | Sports ticket price tracking (StubHub) |
 | NanoClaw Dev | `nanoclaw-dev` | `tg:-5187361917` | `@nanoclaw` (required) | 30 min | Ad-hoc dev work on this repo |
 
 **Why `telegram_main` keeps `requires_trigger=1` while the four new domain
@@ -80,6 +81,8 @@ shared-ish spaces where not every message should invoke the agent.
 | fitness | Garmin daily sync | `30 1 * * *` | active | `task-garmin-daily-sync` |
 | recipe-club | Nightly builder | `0 2 * * *` | active | `task-1774406569571-52712j` |
 | telegram_main | Morning briefing | `15 6 * * *` | active | `task-1774495205281-pm7xml` |
+| telegram_tickets | Ticket Pricer | `*/10 * * * *` | **paused** | `task-1775995186831-2hmq79` |
+| telegram_tickets | Ticket Discovery | `0 10 * * 0` | **paused** | `task-1775995541819-4v6mwl` |
 
 **Task IDs are load-bearing** — see the Dashboard section below.
 
@@ -109,6 +112,8 @@ data/sessions/
 │   ├── garmin-tokens-sarah-saltz/    # directory — oauth1/oauth2 tokens
 │   ├── strava.db                     # athletes, activities tables
 │   └── strava-credentials.json
+├── telegram_tickets/.claude/
+│   └── tickets.db                    # events, price_snapshots tables
 ├── nanoclaw-dev/.claude/             # dev playground
 ├── recipe-club/.claude/              # recipe club state
 └── telegram_main/.claude/            # framework state only (backups/, plans/, skills/, etc.)
@@ -179,6 +184,8 @@ to bite again.
 | `dashboard/server/routes/garmin.ts:9` | `data/sessions/fitness/.claude/` | `garmin-credentials.json` + per-profile DBs |
 | `dashboard/server/routes/strava.ts:12,15,533` | `data/sessions/fitness/.claude/{strava.db, strava-credentials.json, ask/}` | Strava dashboard tab + ask flow |
 | `dashboard/server/routes/mortgage.ts:10` | `data/sessions/finance/.claude/mortgage-rates.db` | Rate history for the Mortgage dashboard tab |
+| `dashboard/server/routes/tickets.ts:9` | `data/sessions/telegram_tickets/.claude/tickets.db` | Events + price snapshots for the Tickets dashboard tab |
+| `dashboard/server/routes/email-unsubscribe.ts:47` | `groups/email/unsubscribe-history.json` | Unsubscribe history for the Email Unsub dashboard tab |
 
 **When moving per-group state files:**
 

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
-import { getTasks, getTaskRuns, setTaskStatus } from "../db.js";
+import { getTasks, getTaskRuns, setTaskStatus, triggerTaskNow } from "../db.js";
 
 const router = Router();
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(import.meta.dirname, "..");
@@ -99,6 +99,16 @@ router.patch("/api/tasks/:id/status", (req: Request, res: Response) => {
   } catch (err) {
     console.error("Failed to update task status:", err);
     res.status(500).json({ error: "Failed to update task status" });
+  }
+});
+
+router.post("/api/tasks/:id/trigger", (req: Request, res: Response) => {
+  try {
+    const newId = triggerTaskNow(req.params.id as string);
+    res.json({ ok: true, newTaskId: newId });
+  } catch (err: any) {
+    console.error("Failed to trigger task:", err);
+    res.status(err.message === "Task not found" ? 404 : 500).json({ error: err.message });
   }
 });
 
