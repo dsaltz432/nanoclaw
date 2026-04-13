@@ -111,7 +111,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Field Box": "#f59e0b",
   "Loge Box": "#e879f9",
   Grandstand: "#3b82f6",
-  "Green Monster": "#10b981",
+  "Monster Seated": "#10b981",
+  "Monster Standing": "#059669",
   "Right Field / Pavilion": "#06b6d4",
   // Knicks / Rangers (MSG)
   "Floor / Courtside": "#f59e0b",
@@ -138,7 +139,8 @@ const CATEGORY_ORDER = [
   // Red Sox
   "Field Box",
   "Loge Box",
-  "Green Monster",
+  "Monster Seated",
+  "Monster Standing",
   "Grandstand",
   "Right Field / Pavilion",
   // Shared mid-tier
@@ -213,7 +215,7 @@ const VENUE_INFO: Record<
         "L sections (36-43). Second tier, excellent sightlines. Premium mid-level seating.",
       "Grandstand":
         "G sections (1-33). Upper level with full field views. Classic Fenway experience.",
-      "Green Monster":
+      "Monster Seated":
         "M sections (7-10). Iconic left field wall seats atop the 37-foot Green Monster. Limited availability, unique perspective.",
       "Bleachers":
         "B sections (87+). Outfield seating. Lively atmosphere, good value.",
