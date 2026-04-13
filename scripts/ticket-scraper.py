@@ -123,7 +123,10 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
             "days_until": hours_until / 24,
         })
 
-    return due
+    # Sort by soonest game first, cap at 5 to avoid WAF throttling.
+    # Remaining events will be picked up on the next 30-min run.
+    due.sort(key=lambda e: e["hours_until"])
+    return due[:5]
 
 
 def fetch_event_prices(url: str) -> dict | None:
