@@ -338,14 +338,10 @@ def update_weather(conn: sqlite3.Connection) -> int:
 
 
 def load_teams() -> list[dict]:
-    """Load team config from JSON file."""
-    config_path = os.path.join(
-        os.environ.get("NANOCLAW_ROOT", os.path.join(os.path.dirname(__file__), "..")),
-        "data/tickets-config.json",
-    )
-    # Inside container, try the dashboard API config path
-    if not os.path.exists(config_path):
-        config_path = os.path.join(os.path.dirname(__file__), "..", "data", "tickets-config.json")
+    """Load team config from the tickets group .claude/ directory."""
+    # Inside container: /home/node/.claude/tickets-config.json
+    # On host: data/sessions/tickets/.claude/tickets-config.json
+    config_path = os.path.join(os.path.dirname(DB_PATH), "tickets-config.json")
     try:
         with open(config_path) as f:
             return json.load(f).get("teams", [])

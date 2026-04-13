@@ -8,6 +8,7 @@ interface Team {
   name: string;
   sport: string;
   color: string;
+  enabled?: boolean;
 }
 
 interface CategoryPrice {
@@ -106,6 +107,17 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Lower Level End Zone": "#e879f9",
   "Mezzanine / Club": "#3b82f6",
   "General Admission": "#6b7280",
+  // Red Sox
+  "Field Box": "#f59e0b",
+  "Loge Box": "#e879f9",
+  Grandstand: "#3b82f6",
+  "Green Monster": "#10b981",
+  "Right Field / Pavilion": "#06b6d4",
+  // Knicks / Rangers (MSG)
+  "Floor / Courtside": "#f59e0b",
+  "100 Level": "#3b82f6",
+  "200 Level": "#10b981",
+  "Club / Bridge": "#e879f9",
   // Shared
   "Upper Deck": "#10b981",
   "Standing Room": "#6b7280",
@@ -123,6 +135,12 @@ const CATEGORY_ORDER = [
   // Jets
   "Lower Level Sideline",
   "Lower Level End Zone",
+  // Red Sox
+  "Field Box",
+  "Loge Box",
+  "Green Monster",
+  "Grandstand",
+  "Right Field / Pavilion",
   // Shared mid-tier
   "Outfield / Corners",
   "Mid-Level",
@@ -143,6 +161,17 @@ function catColor(cat: string): string {
 function fmtSection(s: string): string {
   if (s === "Pinstripe Pass") return "PP";
   return s;
+}
+
+// Shorten event titles for display
+function fmtTitle(title: string): string {
+  return title
+    .replace(/New York Yankees/g, "Yankees")
+    .replace(/Boston Red Sox/g, "Red Sox")
+    .replace(/New York Knicks/g, "Knicks")
+    .replace(/New York Rangers/g, "Rangers")
+    .replace(/New York Liberty/g, "Liberty")
+    .replace(/New York Jets/g, "Jets");
 }
 
 // Venue descriptions per category — used in the stadium guide
@@ -171,6 +200,27 @@ const VENUE_INFO: Record<
         "Outfield bleacher sections (202-204 in RF, 235-238 in LF). Home of the Bleacher Creatures. Backless benches, unique atmosphere, solid value.",
       "Standing Room":
         "Pinstripe Pass — general admission standing room. Cheapest way in. You can roam the concourses and find a spot.",
+    },
+  },
+  "boston-red-sox": {
+    venue: "Fenway Park",
+    description:
+      "Historic ballpark in Boston. Unique asymmetric layout with the Green Monster in left field. Section prefixes: F (Field Box), G (Grandstand), B (Bleachers/Box), L (Loge), M (Monster), PB (Pavilion Box), R (Roof).",
+    categories: {
+      "Field Box":
+        "F sections (main lower bowl around the field), plus D (Dugout), H (Home Plate), and FBC (Field Box Club). Closest to the action.",
+      "Loge Box":
+        "L sections (36-43). Second tier, excellent sightlines. Premium mid-level seating.",
+      "Grandstand":
+        "G sections (1-33). Upper level with full field views. Classic Fenway experience.",
+      "Green Monster":
+        "M sections (7-10). Iconic left field wall seats atop the 37-foot Green Monster. Limited availability, unique perspective.",
+      "Bleachers":
+        "B sections (87+). Outfield seating. Lively atmosphere, good value.",
+      "Right Field / Pavilion":
+        "PB (Pavilion Box), R (Roof), and AP (State Street Pavilion) sections. Right field elevated seating.",
+      "Standing Room":
+        "Standing room only — general admission areas including Green Monster standing (SRGM) and right field deck (SRRD).",
     },
   },
   "new-york-knicks": {
@@ -331,6 +381,15 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
                 src="/images/yankee-stadium-map.png"
                 alt="Yankee Stadium Seating Map"
                 className="w-full"
+              />
+            </div>
+          )}
+          {teamSlug === "boston-red-sox" && (
+            <div className="mb-4 rounded-lg overflow-hidden bg-white p-2">
+              <img
+                src="/images/fenway-park-map.png"
+                alt="Fenway Park Seating Map"
+                className="w-full max-w-lg mx-auto"
               />
             </div>
           )}
@@ -810,31 +869,31 @@ function EventDetail({
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-2xl rounded-2xl bg-gray-900 border border-gray-800 p-5 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h3 className="font-semibold text-gray-100">{event.title}</h3>
-            <p className="text-sm text-gray-500 mt-0.5">
+        <div className="mb-4">
+          <div className="flex items-start justify-between">
+            <h3 className="font-semibold text-gray-100 pr-2">{fmtTitle(event.title)}</h3>
+            <button
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-300 text-xl leading-none flex-shrink-0"
+            >
+              ×
+            </button>
+          </div>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <p className="text-sm text-gray-500">
               {fmtDate(event.event_datetime)}
               {event.venue && <span> · {event.venue}</span>}
             </p>
-          </div>
-          <div className="flex items-center gap-2 ml-4">
             {event.stubhub_url && (
               <a
                 href={event.stubhub_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs px-2.5 py-1 rounded-lg bg-blue-900/40 text-blue-400 hover:bg-blue-900/60 transition-colors"
+                className="text-xs px-2.5 py-1 rounded-lg bg-blue-900/40 text-blue-400 hover:bg-blue-900/60 transition-colors whitespace-nowrap"
               >
                 StubHub ↗
               </a>
             )}
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-300 text-xl leading-none"
-            >
-              ×
-            </button>
           </div>
         </div>
 
@@ -910,7 +969,7 @@ function EventDetail({
         )}
 
         <p className="mt-3 text-xs text-gray-600">
-          {new Set(history.map((h: any) => h.polled_at)).size} scrape
+          {new Set(history.map((h: any) => h.polled_at)).size} data point
           {new Set(history.map((h: any) => h.polled_at)).size !== 1 ? "s" : ""}{" "}
           collected
         </p>
@@ -980,10 +1039,10 @@ export default function TicketsPage() {
       </div>
 
       {/* Team filter */}
-      <div className="mb-5 flex gap-1 rounded-lg bg-gray-900 p-1 w-fit">
+      <div className="mb-3 flex items-center gap-1 rounded-lg bg-gray-900 p-1 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setTeamFilter("all")}
-          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap flex-shrink-0 ${
             teamFilter === "all"
               ? "bg-gray-800 text-gray-100"
               : "text-gray-400 hover:text-gray-300"
@@ -995,7 +1054,7 @@ export default function TicketsPage() {
           <button
             key={t.slug}
             onClick={() => setTeamFilter(t.slug)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap flex-shrink-0 ${
               teamFilter === t.slug
                 ? "bg-gray-800 text-gray-100"
                 : "text-gray-400 hover:text-gray-300"
@@ -1006,12 +1065,44 @@ export default function TicketsPage() {
         ))}
       </div>
 
-      {/* Stadium guide (team-specific, collapsed by default) */}
-      {teamFilter !== "all" && (
-        <div className="mb-5">
-          <StadiumGuide teamSlug={teamFilter} />
-        </div>
-      )}
+      {/* Enable/disable + stadium guide (team-specific) */}
+      {teamFilter !== "all" && (() => {
+        const team = teams.find((t) => t.slug === teamFilter);
+        return (
+          <div className="mb-5 space-y-2">
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-500">Event Discovery</span>
+              <button
+                onClick={() => {
+                  fetch(`/api/tickets/teams/${teamFilter}/toggle`, {
+                    method: "PATCH",
+                  })
+                    .then((r) => r.json())
+                    .then(() => {
+                      fetch("/api/tickets/teams")
+                        .then((r) => r.json())
+                        .then(setTeams);
+                    });
+                }}
+                className={`relative w-9 h-5 rounded-full transition-colors ${
+                  team?.enabled === false ? "bg-gray-700" : "bg-green-600"
+                }`}
+                title={team?.enabled === false ? "Enable event discovery" : "Disable event discovery"}
+              >
+                <span
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    team?.enabled === false ? "left-0.5" : "left-[18px]"
+                  }`}
+                />
+              </button>
+              <span className="text-xs text-gray-600">
+                {team?.enabled === false ? "Off" : "On"}
+              </span>
+            </div>
+            <StadiumGuide teamSlug={teamFilter} />
+          </div>
+        );
+      })()}
 
       {/* Events grid */}
       {loading ? (
@@ -1039,7 +1130,7 @@ export default function TicketsPage() {
               >
                 <div className="flex items-start gap-4">
                   {/* Left: event info */}
-                  <div className="flex-shrink-0 min-w-0" style={{ width: "220px" }}>
+                  <div className="flex-shrink-0 min-w-0" style={{ width: "150px" }}>
                     <div className="flex items-center gap-2 mb-1">
                       <span
                         className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
@@ -1071,23 +1162,23 @@ export default function TicketsPage() {
                       )}
                     </div>
                     <p className="text-sm font-medium text-gray-200 line-clamp-1">
-                      {ev.title}
+                      {fmtTitle(ev.title)}
                     </p>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500 whitespace-nowrap">
                       {fmtDate(ev.event_datetime)}
-                      {ev.weather_high != null && (
-                        <span className="ml-2 text-gray-500">
-                          {Math.round(ev.weather_high)}°/{Math.round(ev.weather_low!)}°
-                          {ev.weather_precip_pct != null && ev.weather_precip_pct > 0 && (
-                            <span className={ev.weather_precip_pct >= 50 ? "text-blue-400" : "text-gray-600"}>
-                              {" "}{ev.weather_precip_pct}%☂
-                            </span>
-                          )}
-                        </span>
-                      )}
                     </p>
+                    {ev.weather_high != null && (
+                      <p className="text-xs text-gray-500">
+                        {Math.round(ev.weather_high)}°/{Math.round(ev.weather_low!)}°F
+                        {ev.weather_precip_pct != null && ev.weather_precip_pct > 0 && (
+                          <span className={ev.weather_precip_pct >= 50 ? "text-blue-400" : "text-gray-600"}>
+                            {" "}{ev.weather_precip_pct}% rain
+                          </span>
+                        )}
+                      </p>
+                    )}
                     {ev.listing_count != null && (
-                      <p className="text-xs text-gray-600 mt-0.5">
+                      <p className="text-xs text-gray-600">
                         {ev.listing_count.toLocaleString()} listings
                       </p>
                     )}
@@ -1095,7 +1186,7 @@ export default function TicketsPage() {
 
                   {/* Right: category prices stacked vertically */}
                   {sortedCats.length > 0 ? (
-                    <div className="min-w-0 space-y-0.5" style={{ width: "280px" }}>
+                    <div className="min-w-0 space-y-0.5 flex-1">
                       {sortedCats.map((c) => (
                         <div
                           key={c.category}
@@ -1115,7 +1206,7 @@ export default function TicketsPage() {
                           </span>
                           {c.best_section && (
                             <span className="text-xs text-gray-600 whitespace-nowrap w-8 text-right">
-                              §{fmtSection(c.best_section)}
+                              {fmtSection(c.best_section)}
                             </span>
                           )}
                         </div>

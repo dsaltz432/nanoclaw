@@ -11,13 +11,14 @@ const dbPath = path.join(
   nanoclawRoot,
   "data/sessions/tickets/.claude/tickets.db"
 );
-const configPath = path.join(nanoclawRoot, "data/tickets-config.json");
+const configPath = path.join(nanoclawRoot, "data/sessions/tickets/.claude/tickets-config.json");
 
 interface TeamConfig {
   slug: string;
   name: string;
   sport: string;
   color: string;
+  enabled?: boolean;
   stubhub_performer_url: string;
 }
 
@@ -185,6 +186,26 @@ router.get(
 router.get("/api/tickets/teams", (_req: Request, res: Response) => {
   res.json(loadTeams());
 });
+
+// PATCH /api/tickets/teams/:slug/toggle — enable/disable a team
+router.patch(
+  "/api/tickets/teams/:slug/toggle",
+  (req: Request, res: Response) => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const team = raw.teams?.find(
+        (t: TeamConfig) => t.slug === (req.params.slug as string)
+      );
+      if (!team) return res.status(404).json({ error: "Team not found" });
+
+      team.enabled = !team.enabled;
+      fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n");
+      res.json({ slug: team.slug, enabled: team.enabled });
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  }
+);
 
 // GET /api/tickets/categories?team=new-york-yankees — section categories with section lists
 router.get("/api/tickets/categories", (req: Request, res: Response) => {
