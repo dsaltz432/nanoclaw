@@ -126,7 +126,14 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
     # Sort by soonest game first, cap at 5 to avoid WAF throttling.
     # Remaining events will be picked up on the next 30-min run.
     due.sort(key=lambda e: e["hours_until"])
-    return due[:5]
+    total_due = len(due)
+    capped = due[:5]
+
+    if capped:
+        games = ", ".join(f"{e['title'][:30]} ({e['hours_until']:.0f}h)" for e in capped)
+        print(f"Scraping {len(capped)}/{total_due} due games: {games}", file=sys.stderr)
+
+    return capped
 
 
 def fetch_event_prices(url: str) -> dict | None:
