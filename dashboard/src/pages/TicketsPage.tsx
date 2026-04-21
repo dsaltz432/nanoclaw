@@ -830,12 +830,10 @@ function EventDetail({
 }) {
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
+  const catPriceMap = new Map(event.categories.map((c) => [c.category, c.lowest_price]));
   const allCats = [
     ...new Set(event.categories.map((c) => c.category)),
-  ].sort(
-    (a, b) =>
-      (CATEGORY_ORDER.indexOf(a) ?? 99) - (CATEGORY_ORDER.indexOf(b) ?? 99)
-  );
+  ].sort((a, b) => (catPriceMap.get(b) ?? 0) - (catPriceMap.get(a) ?? 0));
   const [selectedCats, setSelectedCats] = useState<Set<string>>(
     new Set(allCats)
   );
@@ -863,10 +861,7 @@ function EventDetail({
   // Available categories from history data
   const histCats = [
     ...new Set(history.map((h) => h.category)),
-  ].sort(
-    (a, b) =>
-      (CATEGORY_ORDER.indexOf(a) ?? 99) - (CATEGORY_ORDER.indexOf(b) ?? 99)
-  );
+  ].sort((a, b) => (catPriceMap.get(b) ?? 0) - (catPriceMap.get(a) ?? 0));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
@@ -902,11 +897,7 @@ function EventDetail({
         {/* Category prices grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
           {event.categories
-            .sort(
-              (a, b) =>
-                (CATEGORY_ORDER.indexOf(a.category) ?? 99) -
-                (CATEGORY_ORDER.indexOf(b.category) ?? 99)
-            )
+            .sort((a, b) => b.lowest_price - a.lowest_price)
             .map((c) => {
               return (
                 <div
@@ -989,9 +980,13 @@ export default function TicketsPage() {
   const [loading, setLoading] = useState(true);
   const [lastPoll, setLastPoll] = useState<string | null>(null);
   const [selected, setSelected] = useState<Event | null>(null);
+  const [showPast, setShowPast] = useState(false);
 
   const loadEvents = useCallback(() => {
-    fetch("/api/tickets/events")
+    const url = showPast
+      ? "/api/tickets/events?include_past=1"
+      : "/api/tickets/events";
+    fetch(url)
       .then((r) => r.json())
       .then((data: Event[]) => {
         setEvents(data);
@@ -1000,19 +995,22 @@ export default function TicketsPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [showPast]);
 
   useEffect(() => {
     fetch("/api/tickets/teams")
       .then((r) => r.json())
       .then(setTeams);
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
     loadEvents();
   }, [loadEvents]);
 
-  const filtered =
-    teamFilter === "all"
-      ? events
-      : events.filter((e) => e.team_slug === teamFilter);
+  const filtered = events
+    .filter((e) => teamFilter === "all" || e.team_slug === teamFilter)
+    .filter((e) => showPast ? e.status === "completed" : e.status !== "completed");
 
   const teamColor = (slug: string) =>
     teams.find((t) => t.slug === slug)?.color ?? "#6b7280";
@@ -1038,6 +1036,13 @@ export default function TicketsPage() {
             </p>
           )}
         </div>
+        <a
+          href="/api/tickets/export/snapshots.csv"
+          download
+          className="rounded-md px-3 py-1.5 text-xs font-medium bg-gray-800 text-gray-300 hover:text-gray-100 transition-colors"
+        >
+          ↓ Export CSV
+        </a>
       </div>
 
       {/* Team filter */}
@@ -1067,41 +1072,63 @@ export default function TicketsPage() {
         ))}
       </div>
 
-      {/* Enable/disable + stadium guide (team-specific) */}
-      {teamFilter !== "all" && (() => {
-        const team = teams.find((t) => t.slug === teamFilter);
+      {/* Controls + stadium guide */}
+      {(() => {
+        const team = teamFilter !== "all" ? teams.find((t) => t.slug === teamFilter) : null;
         return (
           <div className="mb-5 space-y-2">
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-500">Event Discovery</span>
-              <button
-                onClick={() => {
-                  fetch(`/api/tickets/teams/${teamFilter}/toggle`, {
-                    method: "PATCH",
-                  })
-                    .then((r) => r.json())
-                    .then(() => {
-                      fetch("/api/tickets/teams")
-                        .then((r) => r.json())
-                        .then(setTeams);
-                    });
-                }}
-                className={`relative w-9 h-5 rounded-full transition-colors ${
-                  team?.enabled === false ? "bg-gray-700" : "bg-green-600"
-                }`}
-                title={team?.enabled === false ? "Enable event discovery" : "Disable event discovery"}
-              >
-                <span
-                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    team?.enabled === false ? "left-0.5" : "left-[18px]"
+            <div className="flex items-center gap-6">
+              {/* Past Games toggle — always visible */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Past Games</span>
+                <button
+                  onClick={() => setShowPast(!showPast)}
+                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                    showPast ? "bg-blue-600" : "bg-gray-700"
                   }`}
-                />
-              </button>
-              <span className="text-xs text-gray-600">
-                {team?.enabled === false ? "Off" : "On"}
-              </span>
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      showPast ? "left-[18px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Event Discovery toggle — team-specific only */}
+              {team && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">Event Discovery</span>
+                  <button
+                    onClick={() => {
+                      fetch(`/api/tickets/teams/${teamFilter}/toggle`, {
+                        method: "PATCH",
+                      })
+                        .then((r) => r.json())
+                        .then(() => {
+                          fetch("/api/tickets/teams")
+                            .then((r) => r.json())
+                            .then(setTeams);
+                        });
+                    }}
+                    className={`relative w-9 h-5 rounded-full transition-colors ${
+                      team.enabled === false ? "bg-gray-700" : "bg-green-600"
+                    }`}
+                    title={team.enabled === false ? "Enable event discovery" : "Disable event discovery"}
+                  >
+                    <span
+                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                        team.enabled === false ? "left-0.5" : "left-[18px]"
+                      }`}
+                    />
+                  </button>
+                  <span className="text-xs text-gray-600">
+                    {team.enabled === false ? "Off" : "On"}
+                  </span>
+                </div>
+              )}
             </div>
-            <StadiumGuide teamSlug={teamFilter} />
+            {teamFilter !== "all" && <StadiumGuide teamSlug={teamFilter} />}
           </div>
         );
       })()}
@@ -1124,11 +1151,16 @@ export default function TicketsPage() {
                 (CATEGORY_ORDER.indexOf(a.category) ?? 99) -
                 (CATEGORY_ORDER.indexOf(b.category) ?? 99)
             );
+            const isPast = ev.status === "completed";
             return (
               <button
                 key={ev.id}
                 onClick={() => setSelected(ev)}
-                className="w-full rounded-xl border border-gray-800 bg-gray-900 p-3 text-left hover:border-gray-700 transition-colors"
+                className={`w-full rounded-xl border p-3 text-left transition-colors ${
+                  isPast
+                    ? "border-gray-800/50 bg-gray-900/50 opacity-60"
+                    : "border-gray-800 bg-gray-900 hover:border-gray-700"
+                }`}
               >
                 <div className="flex items-start gap-4">
                   {/* Left: event info */}
