@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# One-time setup: creates a dedicated service account for NanoClaw backups
-# with least-privilege access (objectCreator only) to the nanoclaw-backups
-# bucket, and downloads a key to ~/.gcp/nanoclaw-backup.json.
+# Setup: creates a dedicated service account for NanoClaw GCS access
+# with least-privilege access (objectUser) to configured buckets,
+# and downloads a key to ~/.gcp/nanoclaw-backup.json.
+# Idempotent — safe to re-run when adding new buckets.
 #
 # Prereqs: gcloud CLI installed and authenticated as a user with permission
 # to create service accounts and grant bucket IAM in the project.
@@ -10,7 +11,7 @@
 set -euo pipefail
 
 PROJECT_ID="nanoclaw-489701"
-BUCKET="nanoclaw-backups"
+BUCKETS=("nanoclaw-backups" "sports-briefings")
 SA_NAME="nanoclaw-backup"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 KEY_DIR="${HOME}/.gcp"
@@ -41,10 +42,12 @@ fi
 #        a "delete" only marks the object noncurrent, and the lifecycle policy
 #        (keep 7+ newer versions, 14+ days) preserves history. A leaked key
 #        cannot actually destroy past backups.
-echo "==> Granting roles/storage.objectUser on gs://${BUCKET}"
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/storage.objectUser" >/dev/null
+for BUCKET in "${BUCKETS[@]}"; do
+  echo "==> Granting roles/storage.objectUser on gs://${BUCKET}"
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/storage.objectUser" >/dev/null
+done
 
 # 3. Create and download key
 mkdir -p "${KEY_DIR}"
@@ -65,7 +68,7 @@ echo "Done."
 echo
 echo "Service account: ${SA_EMAIL}"
 echo "Key file:        ${KEY_FILE}"
-echo "Bucket access:   gs://${BUCKET} (objectCreator only)"
+echo "Bucket access:   ${BUCKETS[*]} (objectUser)"
 echo
 echo "Next step: the backup script will activate this key with:"
 echo "  gcloud auth activate-service-account --key-file=${KEY_FILE}"

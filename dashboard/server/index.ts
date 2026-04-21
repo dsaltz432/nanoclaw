@@ -44,6 +44,10 @@ app.post("/api/auth/login", loginHandler);
 app.post("/api/auth/logout", logoutHandler);
 app.get("/api/auth/status", statusHandler);
 
+// Public briefings (no auth — meant to be shared)
+const briefingsPath = path.resolve(__dirname, "../../data/briefings");
+app.use("/briefings", express.static(briefingsPath));
+
 // Tickets routes are self-auth (bearer token for writes, open for reads)
 app.use(ticketsRouter);
 
