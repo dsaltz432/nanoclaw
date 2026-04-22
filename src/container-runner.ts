@@ -255,6 +255,12 @@ function buildContainerArgs(
     args.push('-e', `PARALLEL_API_KEY=${process.env.PARALLEL_API_KEY}`);
   }
 
+  // Pass Serper.dev API key for shopping price lookups
+  const serperSecrets = readEnvFile(['SERPER_API_KEY']);
+  if (serperSecrets.SERPER_API_KEY) {
+    args.push('-e', `SERPER_API_KEY=${serperSecrets.SERPER_API_KEY}`);
+  }
+
   // Pass GitHub token for git push and gh CLI (PR creation)
   const ghSecrets = readEnvFile(['GITHUB_TOKEN']);
   if (ghSecrets.GITHUB_TOKEN) {

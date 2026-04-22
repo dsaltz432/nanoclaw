@@ -20,6 +20,7 @@ import emailUnsubscribeRouter from "./routes/email-unsubscribe.js";
 import stravaRouter from "./routes/strava.js";
 import garminRouter from "./routes/garmin.js";
 import ticketsRouter from "./routes/tickets.js";
+import shoppingRouter from "./routes/shopping.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -65,6 +66,7 @@ app.use(mortgageRouter);
 app.use(emailUnsubscribeRouter);
 app.use(stravaRouter);
 app.use(garminRouter);
+app.use(shoppingRouter);
 
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {

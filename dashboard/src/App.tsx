@@ -10,6 +10,7 @@ import EmailUnsubscribePage from "./pages/EmailUnsubscribePage";
 import StravaPage from "./pages/StravaPage";
 import HealthPage from "./pages/HealthPage";
 import TicketsPage from "./pages/TicketsPage";
+import ShoppingPage from "./pages/ShoppingPage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="strava" element={<StravaPage />} />
           <Route path="health" element={<HealthPage />} />
           <Route path="tickets" element={<TicketsPage />} />
+          <Route path="shopping" element={<ShoppingPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
