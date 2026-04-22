@@ -59,6 +59,7 @@ interface SenderAccumulator {
   hasOneClickUnsubscribe: boolean;
   messageId: string;
   labelIds: string[];
+  newestEmailMs: number;
 }
 
 // --- Auth ---
@@ -96,8 +97,8 @@ function getAuthClient() {
 async function fetchMessageMetadata(
   gmail: ReturnType<typeof google.gmail>,
   query: string,
-): Promise<Array<{ id: string; headers: Record<string, string>; labelIds: string[] }>> {
-  const messages: Array<{ id: string; headers: Record<string, string>; labelIds: string[] }> = [];
+): Promise<Array<{ id: string; headers: Record<string, string>; labelIds: string[]; internalDate: number }>> {
+  const messages: Array<{ id: string; headers: Record<string, string>; labelIds: string[]; internalDate: number }> = [];
   let pageToken: string | undefined;
 
   do {
@@ -138,6 +139,7 @@ async function fetchMessageMetadata(
         id: msg.id,
         headers,
         labelIds: detail.data.labelIds || [],
+        internalDate: parseInt(detail.data.internalDate || '0', 10),
       });
     }
   } while (pageToken);
@@ -256,12 +258,17 @@ function updateLastSeen(
     if (entry.result !== 'success') continue;
     const sender = bySender.get(entry.senderEmail?.toLowerCase());
     if (sender) {
-      entry.lastSeen = now;
+      // Only mark as "still seen" if the newest email arrived after unsubscribe
+      const unsubTime = new Date(entry.unsubscribedAt || entry.date || '').getTime();
+      if (sender.newestEmailMs > unsubTime) {
+        entry.lastSeen = now;
+        updated = true;
+      }
       // Backfill unsubscribe URL if missing
       if (!entry.url && sender.unsubscribeUrl) {
         entry.url = sender.unsubscribeUrl;
+        updated = true;
       }
-      updated = true;
     } else if (entry.lastSeen === undefined) {
       // Initialize field for existing entries not seen this scan
       entry.lastSeen = null;
@@ -300,7 +307,7 @@ async function main() {
   console.log('Queries:', queries);
 
   // Fetch all messages
-  const allMessages: Array<{ id: string; headers: Record<string, string>; labelIds: string[] }> = [];
+  const allMessages: Array<{ id: string; headers: Record<string, string>; labelIds: string[]; internalDate: number }> = [];
   for (const query of queries) {
     const msgs = await fetchMessageMetadata(gmail, query);
     console.log(`  Query "${query.slice(0, 60)}..." → ${msgs.length} messages`);
@@ -331,6 +338,9 @@ async function main() {
     if (existing) {
       existing.frequency++;
       existing.subjects.push(subject);
+      if (msg.internalDate > existing.newestEmailMs) {
+        existing.newestEmailMs = msg.internalDate;
+      }
       // Prefer the entry that has an unsubscribe URL
       if (!existing.unsubscribeUrl && unsubUrl) {
         existing.unsubscribeUrl = unsubUrl;
@@ -349,6 +359,7 @@ async function main() {
         hasOneClickUnsubscribe: oneClick,
         messageId: msg.id,
         labelIds: msg.labelIds,
+        newestEmailMs: msg.internalDate,
       });
     }
   }
@@ -408,6 +419,8 @@ async function main() {
     if (!histEntry) continue;
     const unsubTime = new Date(histEntry.unsubscribedAt || histEntry.date || '').getTime();
     if (now - unsubTime < GRACE_PERIOD_MS) continue; // still within grace period
+    // Only flag if the sender's newest email arrived AFTER the unsubscribe date
+    if (sender.newestEmailMs <= unsubTime) continue;
     stillEmailing.push({
       senderName: sender.senderName,
       senderEmail: sender.senderEmail,
