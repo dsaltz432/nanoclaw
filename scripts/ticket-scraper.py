@@ -71,7 +71,7 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
     """Find active events that are due for a price check."""
     now = datetime.now(timezone.utc)
     rows = conn.execute("""
-        SELECT e.id, e.team_slug, e.stubhub_url, e.event_datetime, e.title,
+        SELECT e.id, e.team_slug, e.venue_slug, e.stubhub_url, e.event_datetime, e.title,
                MAX(ps.polled_at) as last_polled
         FROM events e
         LEFT JOIN price_snapshots ps ON e.id = ps.event_id
@@ -82,7 +82,7 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
     """).fetchall()
 
     due = []
-    for eid, team, url, event_dt, title, last_polled in rows:
+    for eid, team, venue_slug, url, event_dt, title, last_polled in rows:
         if not url:
             continue
 
@@ -117,6 +117,7 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
         due.append({
             "id": eid,
             "team_slug": team,
+            "venue_slug": venue_slug,
             "url": url,
             "title": title,
             "hours_until": hours_until,
@@ -221,17 +222,19 @@ def fetch_event_prices(url: str) -> dict | None:
 
 def aggregate_by_category(
     conn: sqlite3.Connection,
-    team_slug: str,
+    venue_slug: str,
     section_prices: dict[str, float],
 ) -> dict[str, dict]:
     """
     Map section prices to categories and compute per-category min price.
     Returns {category: {"lowest_price": float, "section_count": int, "best_section": str}}
     """
+    if not venue_slug:
+        return {}
     cat_map = dict(
         conn.execute(
-            "SELECT section_name, category FROM section_categories WHERE team_slug = ?",
-            (team_slug,),
+            "SELECT section_name, category FROM section_categories WHERE venue_slug = ?",
+            (venue_slug,),
         ).fetchall()
     )
 
@@ -259,15 +262,17 @@ def aggregate_by_category(
 def update_weather(conn: sqlite3.Connection) -> int:
     """
     Fetch weather forecasts from Open-Meteo for outdoor events within the
-    next 7 days. Updates weather columns on the events table.
+    next 7 days. Updates weather columns on the events table. Uses venue
+    coordinates (from venues-config.json) so away games get the correct
+    city's forecast.
     Returns count of events updated.
     """
-    teams = load_teams()
-    outdoor_teams = {
-        t["slug"]: t for t in teams
-        if not t.get("indoor", False) and t.get("latitude")
+    venues = load_venues()
+    outdoor_venues = {
+        v["slug"]: v for v in venues
+        if not v.get("indoor", False) and v.get("latitude")
     }
-    if not outdoor_teams:
+    if not outdoor_venues:
         return 0
 
     now = datetime.now(timezone.utc)
@@ -277,30 +282,30 @@ def update_weather(conn: sqlite3.Connection) -> int:
     # Find outdoor events in the next 7 days that haven't been updated today
     today = now.strftime("%Y-%m-%d")
     events = conn.execute("""
-        SELECT id, team_slug, event_datetime FROM events
+        SELECT id, venue_slug, event_datetime FROM events
         WHERE status != 'completed'
           AND event_datetime IS NOT NULL
           AND event_datetime <= ?
           AND event_datetime > datetime('now')
-          AND team_slug IN ({})
+          AND venue_slug IN ({})
           AND (weather_updated_at IS NULL OR weather_updated_at < ?)
-    """.format(",".join(f"'{s}'" for s in outdoor_teams)), (cutoff_iso, today)).fetchall()
+    """.format(",".join(f"'{s}'" for s in outdoor_venues)), (cutoff_iso, today)).fetchall()
 
     if not events:
         return 0
 
-    # Group events by team (one API call per venue)
-    by_team: dict[str, list] = {}
-    for eid, team_slug, event_dt in events:
-        if team_slug not in by_team:
-            by_team[team_slug] = []
-        by_team[team_slug].append((eid, event_dt))
+    # Group events by venue (one API call per venue)
+    by_venue: dict[str, list] = {}
+    for eid, venue_slug, event_dt in events:
+        if venue_slug not in by_venue:
+            by_venue[venue_slug] = []
+        by_venue[venue_slug].append((eid, event_dt))
 
     updated = 0
-    for team_slug, team_events in by_team.items():
-        team = outdoor_teams[team_slug]
-        lat = team["latitude"]
-        lon = team["longitude"]
+    for venue_slug, venue_events in by_venue.items():
+        venue = outdoor_venues[venue_slug]
+        lat = venue["latitude"]
+        lon = venue["longitude"]
 
         url = (
             f"https://api.open-meteo.com/v1/forecast"
@@ -331,7 +336,7 @@ def update_weather(conn: sqlite3.Connection) -> int:
                 "precip": precip[i] if i < len(precip) else None,
             }
 
-        for eid, event_dt in team_events:
+        for eid, event_dt in venue_events:
             event_date = event_dt[:10]
             w = weather_map.get(event_date)
             if w:
@@ -355,6 +360,16 @@ def load_teams() -> list[dict]:
     try:
         with open(config_path) as f:
             return json.load(f).get("teams", [])
+    except Exception:
+        return []
+
+
+def load_venues() -> list[dict]:
+    """Load venues registry from the tickets group .claude/ directory."""
+    config_path = os.path.join(os.path.dirname(DB_PATH), "venues-config.json")
+    try:
+        with open(config_path) as f:
+            return json.load(f).get("venues", [])
     except Exception:
         return []
 
@@ -433,7 +448,7 @@ def main():
             continue
 
         section_prices = prices.get("section_prices", {})
-        categories = aggregate_by_category(conn, team, section_prices)
+        categories = aggregate_by_category(conn, event.get("venue_slug"), section_prices)
 
         if not categories:
             # No per-category data — skip this event entirely.

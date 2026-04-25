@@ -12,12 +12,15 @@ const dbPath = path.join(
   "data/sessions/tickets/.claude/tickets.db"
 );
 const configPath = path.join(nanoclawRoot, "data/sessions/tickets/.claude/tickets-config.json");
+const venuesConfigPath = path.join(nanoclawRoot, "data/sessions/tickets/.claude/venues-config.json");
 
 interface TeamConfig {
   slug: string;
   name: string;
   sport: string;
   color: string;
+  home_venue?: string;
+  home_venue_slug?: string;
   enabled?: boolean;
   stubhub_performer_url: string;
 }
@@ -66,27 +69,35 @@ function openDb(): Database.Database | null {
 
 const router = Router();
 
-// GET /api/tickets/events?include_past=1 — events with latest per-category prices
+// GET /api/tickets/events?include_past=1&game_type=home|away|all — events with latest per-category prices
 router.get("/api/tickets/events", (req: Request, res: Response) => {
   const db = openDb();
   if (!db) return res.json([]);
   const includePast = req.query.include_past === "1";
+  const gameType = (req.query.game_type as string | undefined) ?? "all";
+  const gameFilter =
+    gameType === "home"
+      ? " AND is_home_game = 1"
+      : gameType === "away"
+        ? " AND (is_home_game = 0)"
+        : "";
   try {
     // Get events
     const events = db
       .prepare(
         includePast
-          ? `SELECT id, team_slug, team_name, sport, title, venue,
-                event_datetime, stubhub_url, status,
+          ? `SELECT id, team_slug, team_name, sport, title, venue, venue_slug,
+                event_datetime, stubhub_url, status, is_home_game,
                 weather_high, weather_low, weather_precip_pct
            FROM events
+           WHERE 1=1${gameFilter}
            ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, event_datetime ASC`
-          : `SELECT id, team_slug, team_name, sport, title, venue,
-                event_datetime, stubhub_url, status,
+          : `SELECT id, team_slug, team_name, sport, title, venue, venue_slug,
+                event_datetime, stubhub_url, status, is_home_game,
                 weather_high, weather_low, weather_precip_pct
            FROM events
            WHERE status IN ('active', 'pending')
-             AND (event_datetime > datetime('now') OR event_datetime IS NULL)
+             AND (event_datetime > datetime('now') OR event_datetime IS NULL)${gameFilter}
            ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, event_datetime ASC`
       )
       .all() as Array<{
@@ -96,9 +107,11 @@ router.get("/api/tickets/events", (req: Request, res: Response) => {
       sport: string;
       title: string;
       venue: string | null;
+      venue_slug: string | null;
       event_datetime: string;
       stubhub_url: string | null;
       status: string;
+      is_home_game: number | null;
     }>;
 
     // Get latest snapshot per event per category
@@ -214,13 +227,43 @@ router.patch(
   }
 );
 
-// GET /api/tickets/categories?team=new-york-yankees — section categories with section lists
+interface VenueConfig {
+  slug: string;
+  name: string;
+  sport: string;
+  home_team_slug?: string;
+  indoor?: boolean;
+  latitude?: number;
+  longitude?: number;
+  aliases?: string[];
+  description?: string;
+}
+
+function loadVenues(): VenueConfig[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(venuesConfigPath, "utf8"));
+    if (Array.isArray(raw.venues)) return raw.venues;
+  } catch {}
+  return [];
+}
+
+// GET /api/tickets/categories?venue=yankee-stadium — section categories with section lists
+// Back-compat: ?team=<slug> resolves to that team's home venue.
 router.get("/api/tickets/categories", (req: Request, res: Response) => {
   const db = openDb();
   if (!db) return res.json([]);
   try {
+    let venue = req.query.venue as string | undefined;
     const team = req.query.team as string | undefined;
-    if (!team) {
+
+    // Back-compat: map team slug to its home venue
+    if (!venue && team) {
+      const venues = loadVenues();
+      const match = venues.find((v) => v.home_team_slug === team);
+      if (match) venue = match.slug;
+    }
+
+    if (!venue) {
       const rows = db
         .prepare(
           `SELECT DISTINCT category FROM section_categories ORDER BY category`
@@ -233,9 +276,9 @@ router.get("/api/tickets/categories", (req: Request, res: Response) => {
     const rows = db
       .prepare(
         `SELECT category, section_name FROM section_categories
-         WHERE team_slug = ? ORDER BY category, section_name`
+         WHERE venue_slug = ? ORDER BY category, section_name`
       )
-      .all(team) as Array<{ category: string; section_name: string }>;
+      .all(venue) as Array<{ category: string; section_name: string }>;
     db.close();
 
     // Group sections by category
@@ -257,20 +300,25 @@ router.get("/api/tickets/categories", (req: Request, res: Response) => {
   }
 });
 
+// GET /api/tickets/venues — venue registry (metadata only, no section lists)
+router.get("/api/tickets/venues", (_req: Request, res: Response) => {
+  res.json(loadVenues());
+});
+
 
 // GET /api/tickets/export/snapshots.csv — all price snapshots joined with event info
 router.get("/api/tickets/export/snapshots.csv", (_req: Request, res: Response) => {
   const db = openDb();
   if (!db) {
     res.setHeader("Content-Type", "text/csv");
-    return res.send("snapshot_id,event_id,team_slug,team_name,sport,title,venue,event_datetime,status,weather_high,weather_low,weather_precip_pct,category,polled_at,days_until,hours_until,lowest_price,listing_count,best_section\n");
+    return res.send("snapshot_id,event_id,team_slug,team_name,sport,title,venue,event_datetime,status,is_home_game,weather_high,weather_low,weather_precip_pct,category,polled_at,days_until,hours_until,lowest_price,listing_count,best_section\n");
   }
   try {
     const rows = db
       .prepare(
         `SELECT ps.id as snapshot_id, ps.event_id,
                 e.team_slug, e.team_name, e.sport,
-                e.title, e.venue, e.event_datetime, e.status,
+                e.title, e.venue, e.event_datetime, e.status, e.is_home_game,
                 e.weather_high, e.weather_low, e.weather_precip_pct,
                 ps.category, ps.polled_at, ps.days_until, ps.hours_until,
                 ps.lowest_price, ps.listing_count, ps.best_section
@@ -281,12 +329,13 @@ router.get("/api/tickets/export/snapshots.csv", (_req: Request, res: Response) =
       .all() as Array<Record<string, unknown>>;
     db.close();
 
-    const header = "snapshot_id,event_id,team_slug,team_name,sport,title,venue,event_datetime,status,weather_high,weather_low,weather_precip_pct,category,polled_at,days_until,hours_until,lowest_price,listing_count,best_section\n";
+    const header = "snapshot_id,event_id,team_slug,team_name,sport,title,venue,event_datetime,status,is_home_game,weather_high,weather_low,weather_precip_pct,category,polled_at,days_until,hours_until,lowest_price,listing_count,best_section\n";
     const csvRow = (r: Record<string, unknown>) =>
       [r.snapshot_id, r.event_id, r.team_slug, r.team_name, r.sport,
         `"${String(r.title ?? "").replace(/"/g, '""')}"`,
         r.venue != null ? `"${String(r.venue).replace(/"/g, '""')}"` : "",
         r.event_datetime ?? "", r.status ?? "",
+        r.is_home_game ?? "",
         r.weather_high ?? "", r.weather_low ?? "", r.weather_precip_pct ?? "",
         r.category ?? "", r.polled_at ?? "", r.days_until ?? "", r.hours_until ?? "",
         r.lowest_price ?? "", r.listing_count ?? "",

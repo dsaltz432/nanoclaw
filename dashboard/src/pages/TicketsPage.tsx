@@ -26,9 +26,11 @@ interface Event {
   sport: string;
   title: string;
   venue: string | null;
+  venue_slug: string | null;
   event_datetime: string | null;
   stubhub_url: string | null;
   status: string;
+  is_home_game: number | null;
   categories: CategoryPrice[];
   overall_lowest: number | null;
   listing_count: number | null;
@@ -36,6 +38,14 @@ interface Event {
   weather_high: number | null;
   weather_low: number | null;
   weather_precip_pct: number | null;
+}
+
+interface Venue {
+  slug: string;
+  name: string;
+  sport: string;
+  home_team_slug?: string;
+  description?: string;
 }
 
 interface Snapshot {
@@ -89,68 +99,136 @@ function fmtHours(h: number): string {
   return `${Math.round(h / 24 / 7)}w`;
 }
 
-// Category display order + colors (all venues)
+// Category display order + colors (all venues, all sports).
+// Colors map premium (amber/pink) → upper (emerald/teal) → standing (gray).
 const CATEGORY_COLORS: Record<string, string> = {
-  // Yankees
-  "Field Level": "#f59e0b",
-  "Premium Main Level": "#e879f9",
-  "Outfield / Corners": "#3b82f6",
-  Bleachers: "#8b5cf6",
-  // Liberty
-  "Courtside / Floor": "#f59e0b",
-  "Lower Bowl": "#e879f9",
-  "Club / VIP": "#ec4899",
-  "Mid-Level": "#3b82f6",
-  "Upper Bowl": "#10b981",
-  // Jets
-  "Lower Level Sideline": "#f59e0b",
-  "Lower Level End Zone": "#e879f9",
-  "Mezzanine / Club": "#3b82f6",
-  "General Admission": "#6b7280",
-  // Red Sox
-  "Field Box": "#f59e0b",
-  "Loge Box": "#e879f9",
-  Grandstand: "#3b82f6",
-  "Monster Seated": "#10b981",
-  "Monster Standing": "#059669",
-  "Right Field / Pavilion": "#06b6d4",
-  // Knicks / Rangers (MSG)
+  // Floor / Courtside tier — most premium
   "Floor / Courtside": "#f59e0b",
+  "Courtside / Floor": "#f59e0b",
+
+  // Field / Lower Sideline / Premium lower — premium
+  "Field Level": "#f59e0b",
+  "Field Box": "#f59e0b",
+  "Lower Sideline": "#f59e0b",
+  "Lower Level Sideline": "#f59e0b",
+  "Lower Prime (50-yd line)": "#fbbf24",
+  "Premium": "#ec4899",
+  "Premium Main Level": "#e879f9",
+  "Monster Seated": "#f472b6",
+  "Dawg Pound": "#f97316",
+
+  // Club / Loge / Mezzanine / Bridge
+  "Club Level": "#e879f9",
+  "Club / Loge": "#e879f9",
+  "Club / VIP": "#ec4899",
+  "Club / Bridge": "#d946ef",
+  "Loge Box": "#e879f9",
+  "Mezzanine / Club": "#a855f7",
+  "Mid-Level": "#a78bfa",
+
+  // Lower bowl / 100 level / Lower End Zone
+  "Lower Bowl": "#3b82f6",
   "100 Level": "#3b82f6",
-  "200 Level": "#10b981",
-  "Club / Bridge": "#e879f9",
-  // Shared
+  "Lower End Zone": "#60a5fa",
+  "Lower Level End Zone": "#60a5fa",
+  "Lower Reserved": "#93c5fd",
+  "Lower Corner": "#60a5fa",
+  "Lower Corner / Club": "#818cf8",
+
+  // Outfield / Corners (MLB)
+  "Field Outfield / Corners": "#06b6d4",
+  "Outfield / Corners": "#06b6d4",
+  "Grandstand": "#22d3ee",
+  "Right Field / Pavilion": "#06b6d4",
+  "Pavilion": "#06b6d4",
+  "Top Deck": "#14b8a6",
+  "Rooftop": "#14b8a6",
+  "Western Metal Building": "#0891b2",
+  "Crawford Boxes": "#0891b2",
+  "Left Field Deck": "#0891b2",
+  "Right Field Terrace": "#0891b2",
+  "Outfield Berm": "#22d3ee",
+  "Rockpile": "#0e7490",
+  "Fountain View": "#0891b2",
+  "Arcade": "#06b6d4",
+
+  // Upper tiers
+  "Upper Bowl": "#10b981",
+  "Upper Level": "#10b981",
   "Upper Deck": "#10b981",
+  "200 Level": "#10b981",
+  "Upper Sideline": "#10b981",
+  "Upper End Zone": "#34d399",
+  "Upper Reserved": "#6ee7b7",
+  "Suites": "#5eead4",
+
+  // Bleachers / Standing Room / GA
+  "Bleachers": "#8b5cf6",
+  "Monster Standing": "#6366f1",
   "Standing Room": "#6b7280",
+  "General Admission": "#6b7280",
+
   Overall: "#ef4444",
 };
 
 const CATEGORY_ORDER = [
-  // Yankees
-  "Field Level",
-  "Premium Main Level",
-  // Liberty
+  // Floor / Courtside (most premium)
+  "Floor / Courtside",
   "Courtside / Floor",
-  "Lower Bowl",
-  "Club / VIP",
-  // Jets
-  "Lower Level Sideline",
-  "Lower Level End Zone",
-  // Red Sox
+  // Premium lower / sideline
+  "Field Level",
   "Field Box",
-  "Loge Box",
+  "Premium",
+  "Premium Main Level",
   "Monster Seated",
-  "Monster Standing",
-  "Grandstand",
-  "Right Field / Pavilion",
-  // Shared mid-tier
-  "Outfield / Corners",
-  "Mid-Level",
+  "Dawg Pound",
+  "Lower Prime (50-yd line)",
+  "Lower Sideline",
+  "Lower Level Sideline",
+  // Club / Loge
+  "Club Level",
+  "Club / Loge",
+  "Club / VIP",
+  "Club / Bridge",
+  "Loge Box",
   "Mezzanine / Club",
+  "Mid-Level",
+  // Lower bowl / 100s / Lower End Zone
+  "Lower Bowl",
+  "100 Level",
+  "Lower End Zone",
+  "Lower Level End Zone",
+  "Lower Reserved",
+  "Lower Corner",
+  "Lower Corner / Club",
+  // Outfield / ballpark specialty
+  "Outfield / Corners",
+  "Field Outfield / Corners",
+  "Grandstand",
+  "Crawford Boxes",
+  "Western Metal Building",
+  "Right Field / Pavilion",
+  "Pavilion",
+  "Left Field Deck",
+  "Right Field Terrace",
+  "Arcade",
+  "Fountain View",
+  "Rockpile",
+  "Top Deck",
+  "Rooftop",
+  "Outfield Berm",
   // Upper tiers
-  "Upper Deck",
   "Upper Bowl",
+  "Upper Level",
+  "Upper Deck",
+  "200 Level",
+  "Upper Sideline",
+  "Upper End Zone",
+  "Upper Reserved",
+  "Suites",
+  // Bleachers / Standing Room
   "Bleachers",
+  "Monster Standing",
   "Standing Room",
   "General Admission",
 ];
@@ -176,7 +254,9 @@ function fmtTitle(title: string): string {
     .replace(/New York Jets/g, "Jets");
 }
 
-// Venue descriptions per category — used in the stadium guide
+// Venue descriptions per category — used in the stadium guide.
+// Keyed by venue_slug. Only covers home venues we have detailed mappings for;
+// opponent venues fall back to the generic tier labels from venues-config.json.
 const VENUE_INFO: Record<
   string,
   {
@@ -185,7 +265,7 @@ const VENUE_INFO: Record<
     categories: Record<string, string>;
   }
 > = {
-  "new-york-yankees": {
+  "yankee-stadium": {
     venue: "Yankee Stadium",
     description:
       "Horseshoe layout with home plate at the south end. Section numbers increase from the right-field side (1B) to left-field side (3B). Lower numbers = closer to the field.",
@@ -204,7 +284,7 @@ const VENUE_INFO: Record<
         "Pinstripe Pass — general admission standing room. Cheapest way in. You can roam the concourses and find a spot.",
     },
   },
-  "boston-red-sox": {
+  "fenway-park": {
     venue: "Fenway Park",
     description:
       "Historic ballpark in Boston. Unique asymmetric layout with the Green Monster in left field. Section prefixes: F (Field Box), G (Grandstand), B (Bleachers/Box), L (Loge), M (Monster), PB (Pavilion Box), R (Roof).",
@@ -225,7 +305,7 @@ const VENUE_INFO: Record<
         "Standing room only — general admission areas including Green Monster standing (SRGM) and right field deck (SRRD).",
     },
   },
-  "new-york-knicks": {
+  "madison-square-garden": {
     venue: "Madison Square Garden",
     description:
       "Iconic arena in Midtown Manhattan. Circular layout with the court/rink at center. Four main levels: Floor/Courtside, 100 Level (lower bowl), 200 Level (upper bowl), and Chase Bridges (suspended club seating).",
@@ -240,22 +320,7 @@ const VENUE_INFO: Record<
         "Chase Bridge sections — suspended club seating above the 100 level with unique overhead perspective and premium amenities.",
     },
   },
-  "new-york-rangers": {
-    venue: "Madison Square Garden",
-    description:
-      "Iconic arena in Midtown Manhattan. Same layout as Knicks — circular with four main levels. Section numbers are the same for hockey and basketball.",
-    categories: {
-      "Floor / Courtside":
-        "Rink-level seating closest to the ice. Single-digit sections (1-4) with lettered rows.",
-      "100 Level":
-        "Lower bowl sections 101-120. Great views of the ice.",
-      "200 Level":
-        "Upper bowl sections 201-230. Full rink view from above.",
-      "Club / Bridge":
-        "Chase Bridge sections — suspended club seating with unique overhead perspective.",
-    },
-  },
-  "new-york-liberty": {
+  "barclays-center": {
     venue: "Barclays Center",
     description:
       "Octagonal arena in Brooklyn. Court is centered with seating on all sides. Single-digit sections (1-31) are the closest tier, 100-series is mid-level, 200-series is upper bowl.",
@@ -272,7 +337,7 @@ const VENUE_INFO: Record<
         "200-series sections (202-230). Top level of the arena. Full court view from above.",
     },
   },
-  "new-york-jets": {
+  "metlife-stadium": {
     venue: "MetLife Stadium",
     description:
       "Open-air stadium in East Rutherford, NJ. Oval layout with the field running north-south. Three main concourses: 100s (lower), 200s (mezzanine/club), 300s (upper deck).",
@@ -299,14 +364,14 @@ interface CategoryInfo {
   count: number;
 }
 
-function StadiumGuide({ teamSlug }: { teamSlug: string }) {
+function StadiumGuide({ venueSlug, venueName }: { venueSlug: string; venueName?: string }) {
   const [open, setOpen] = useState(false);
   const [categories, setCategories] = useState<CategoryInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!open || loaded) return;
-    fetch(`/api/tickets/categories?team=${teamSlug}`)
+    fetch(`/api/tickets/categories?venue=${venueSlug}`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0 && data[0].sections) {
@@ -321,16 +386,20 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
       })
       .catch(() => {})
       .finally(() => setLoaded(true));
-  }, [open, loaded, teamSlug]);
+  }, [open, loaded, venueSlug]);
 
-  // Reset when team changes
+  // Reset when venue changes
   useEffect(() => {
     setLoaded(false);
     setCategories([]);
     setOpen(false);
-  }, [teamSlug]);
+  }, [venueSlug]);
 
-  const info = VENUE_INFO[teamSlug];
+  const info = VENUE_INFO[venueSlug] ?? (venueName ? {
+    venue: venueName,
+    description: "Generic seating tiers (Lower / Club / Upper) based on section numbering. Specific section mappings for this venue have not been curated yet.",
+    categories: {},
+  } : null);
   if (!info) return null;
 
   return (
@@ -377,7 +446,7 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
           </p>
 
           {/* Stadium map */}
-          {teamSlug === "new-york-yankees" && (
+          {venueSlug === "yankee-stadium" && (
             <div className="mb-4 rounded-lg overflow-hidden bg-white">
               <img
                 src="/images/yankee-stadium-map.png"
@@ -386,7 +455,7 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
               />
             </div>
           )}
-          {teamSlug === "boston-red-sox" && (
+          {venueSlug === "fenway-park" && (
             <div className="mb-4 rounded-lg overflow-hidden bg-white p-2">
               <img
                 src="/images/fenway-park-map.png"
@@ -395,7 +464,7 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
               />
             </div>
           )}
-          {(teamSlug === "new-york-knicks" || teamSlug === "new-york-rangers") && (
+          {venueSlug === "madison-square-garden" && (
             <div className="mb-4 rounded-lg overflow-hidden bg-white p-2">
               <img
                 src="/images/msg-map.png"
@@ -404,7 +473,7 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
               />
             </div>
           )}
-          {teamSlug === "new-york-liberty" && (
+          {venueSlug === "barclays-center" && (
             <div className="mb-4 rounded-lg overflow-hidden bg-white p-2">
               <img
                 src="/images/barclays-center-map.png"
@@ -413,7 +482,7 @@ function StadiumGuide({ teamSlug }: { teamSlug: string }) {
               />
             </div>
           )}
-          {teamSlug === "new-york-jets" && (
+          {venueSlug === "metlife-stadium" && (
             <div className="mb-4 rounded-lg overflow-hidden bg-white">
               <img
                 src="/images/metlife-stadium-map.png"
@@ -880,6 +949,11 @@ function EventDetail({
             <p className="text-sm text-gray-500">
               {fmtDate(event.event_datetime)}
               {event.venue && <span> · {event.venue}</span>}
+              {event.is_home_game != null && (
+                <span className={event.is_home_game === 1 ? " text-emerald-400" : " text-amber-400"}>
+                  {" "}· {event.is_home_game === 1 ? "Home" : "Away"}
+                </span>
+              )}
             </p>
             {event.stubhub_url && (
               <a
@@ -976,11 +1050,22 @@ function EventDetail({
 export default function TicketsPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
   const [teamFilter, setTeamFilter] = useState("all");
+  const [gameTypeFilter, setGameTypeFilter] = useState<"all" | "home" | "away">("all");
   const [loading, setLoading] = useState(true);
   const [lastPoll, setLastPoll] = useState<string | null>(null);
   const [selected, setSelected] = useState<Event | null>(null);
   const [showPast, setShowPast] = useState(false);
+
+  // team_slug -> home venue_slug (from venues registry)
+  const homeVenueForTeam: Record<string, string> = {};
+  for (const v of venues) {
+    if (v.home_team_slug) homeVenueForTeam[v.home_team_slug] = v.slug;
+  }
+  // venue_slug -> venue name
+  const venueName: Record<string, string> = {};
+  for (const v of venues) venueName[v.slug] = v.name;
 
   const loadEvents = useCallback(() => {
     const url = showPast
@@ -1001,6 +1086,10 @@ export default function TicketsPage() {
     fetch("/api/tickets/teams")
       .then((r) => r.json())
       .then(setTeams);
+    fetch("/api/tickets/venues")
+      .then((r) => r.json())
+      .then(setVenues)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1010,7 +1099,12 @@ export default function TicketsPage() {
 
   const filtered = events
     .filter((e) => teamFilter === "all" || e.team_slug === teamFilter)
-    .filter((e) => showPast ? e.status === "completed" : e.status !== "completed");
+    .filter((e) => showPast ? e.status === "completed" : e.status !== "completed")
+    .filter((e) => {
+      if (gameTypeFilter === "all") return true;
+      if (gameTypeFilter === "home") return e.is_home_game === 1;
+      return e.is_home_game === 0;
+    });
 
   const teamColor = (slug: string) =>
     teams.find((t) => t.slug === slug)?.color ?? "#6b7280";
@@ -1077,7 +1171,7 @@ export default function TicketsPage() {
         const team = teamFilter !== "all" ? teams.find((t) => t.slug === teamFilter) : null;
         return (
           <div className="mb-5 space-y-2">
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-6 flex-wrap">
               {/* Past Games toggle — always visible */}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500">Past Games</span>
@@ -1093,6 +1187,23 @@ export default function TicketsPage() {
                     }`}
                   />
                 </button>
+              </div>
+
+              {/* Home/Away filter — always visible */}
+              <div className="flex items-center gap-1 rounded-md bg-gray-900 p-0.5">
+                {(["all", "home", "away"] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => setGameTypeFilter(opt)}
+                    className={`px-2.5 py-1 text-xs font-medium rounded transition-colors capitalize ${
+                      gameTypeFilter === opt
+                        ? "bg-gray-800 text-gray-100"
+                        : "text-gray-500 hover:text-gray-300"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
               </div>
 
               {/* Event Discovery toggle — team-specific only */}
@@ -1128,7 +1239,12 @@ export default function TicketsPage() {
                 </div>
               )}
             </div>
-            {teamFilter !== "all" && <StadiumGuide teamSlug={teamFilter} />}
+            {teamFilter !== "all" && homeVenueForTeam[teamFilter] && (
+              <StadiumGuide
+                venueSlug={homeVenueForTeam[teamFilter]!}
+                venueName={teams.find((t) => t.slug === teamFilter)?.name}
+              />
+            )}
           </div>
         );
       })()}
@@ -1175,6 +1291,18 @@ export default function TicketsPage() {
                       >
                         {ev.team_name}
                       </span>
+                      {ev.is_home_game != null && (
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                            ev.is_home_game === 1
+                              ? "bg-emerald-900/50 text-emerald-400"
+                              : "bg-amber-900/50 text-amber-400"
+                          }`}
+                          title={ev.is_home_game === 1 ? "Home game" : "Away game"}
+                        >
+                          {ev.is_home_game === 1 ? "H" : "A"}
+                        </span>
+                      )}
                       <span className="text-xs text-gray-500 flex-shrink-0">
                         {fmtCountdown(ev.event_datetime)}
                       </span>
