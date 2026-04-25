@@ -26,13 +26,17 @@ Browser is a last resort only.
 2. **For each product**, run these phases in order. Record snapshots
    after EACH phase — don't batch them.
 
-   ### Phase 1 — Cached URLs via JSON-LD (~2 min)
+   ### Phase 1 — Cached URLs (~2 min)
 
    ```bash
    python3 /home/node/nanoclaw/scripts/shopping-db.py cached-urls <product_id>
    ```
 
-   For each URL returned:
+   Each cached URL has a `fetch_method` field. Use the matching strategy:
+
+   #### `json-ld` (default)
+
+   Fetch the page and parse structured data from `<script type="application/ld+json">`:
    ```bash
    curl -s -L -H "User-Agent: Mozilla/5.0" "<url>" | python3 -c "
    import sys, json, re
@@ -53,20 +57,97 @@ Browser is a last resort only.
    "
    ```
 
-   If a price is found, record a **verified** snapshot and mark success:
+   #### `shopify-json`
+
+   For Shopify-powered stores. Append `.json` to the product URL:
    ```bash
-   python3 shopping-db.py snapshot '{"product_id":1, "source":"amazon", "price":189.99, "source_url":"<url>", "in_stock":1, "verified":1, "snapshot_source":"json-ld"}'
-   python3 shopping-db.py cache-url '{"product_id":1, "source":"amazon", "canonical_url":"<url>", "success":1}'
+   curl -s -H "User-Agent: Mozilla/5.0" "<canonical_url>.json" | python3 -c "
+   import sys, json
+   data = json.load(sys.stdin)
+   p = data.get('product', {})
+   for v in p.get('variants', []):
+       print(json.dumps({
+           'price': float(v['price']),
+           'in_stock': 1 if v.get('available') else 0,
+           'sku': v.get('sku', ''),
+           'title': v.get('title', '')
+       }))
+   "
+   ```
+   If the product has multiple variants, match by SKU or title against
+   the product's `match_tokens`. If no match, use the first variant.
+
+   **Detecting new Shopify stores:** When caching a new retailer URL
+   from Phase 2, try fetching `<url>.json`. If it returns valid JSON
+   with a `product` key, cache it with `fetch_method=shopify-json`.
+
+   #### `target-redsky`
+
+   Target's public Redsky API. The `source_product_id` field stores
+   the TCIN (Target product ID):
+   ```bash
+   curl -s "https://redsky.target.com/redsky_aggregations/v1/web/pdp_client_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&tcin=<source_product_id>&pricing_store_id=1379&channel=WEB" | python3 -c "
+   import sys, json
+   data = json.load(sys.stdin)
+   product = data.get('data', {}).get('product', {})
+   price = product.get('price', {}).get('current_retail')
+   avail = product.get('fulfillment', {}).get('shipping_options', {}).get('availability_status', '')
+   if price:
+       print(json.dumps({'price': float(price), 'in_stock': 1 if avail != 'OUT_OF_STOCK' else 0}))
+   "
    ```
 
-   If fetch fails or no JSON-LD found, mark failure:
+   **Finding TCINs for new products:** When Phase 2 finds a Target
+   result, search Redsky to get the TCIN:
+   ```bash
+   curl -s "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&channel=WEB&count=5&keyword=<search_terms>&pricing_store_id=1379&visitor_id=test" | python3 -c "
+   import sys, json
+   data = json.load(sys.stdin)
+   for p in data.get('data', {}).get('search', {}).get('products', []):
+       tcin = p.get('tcin')
+       title = p.get('item', {}).get('product_description', {}).get('title', '')
+       price = p.get('price', {}).get('current_retail')
+       url = p.get('item', {}).get('enrichment', {}).get('buy_url', '')
+       print(json.dumps({'tcin': tcin, 'title': title, 'price': price, 'url': url}))
+   "
+   ```
+   Match results against the product's `match_tokens` / name, then cache:
+   ```bash
+   python3 shopping-db.py cache-url '{"product_id":1, "source":"target", "canonical_url":"<buy_url>", "source_product_id":"<tcin>", "fetch_method":"target-redsky", "success":1}'
+   ```
+
+   #### Recording results (all methods)
+
+   If a price is found, record a **verified** snapshot and mark success:
+   ```bash
+   python3 shopping-db.py snapshot '{"product_id":1, "source":"target", "price":189.99, "source_url":"<canonical_url>", "in_stock":1, "verified":1, "snapshot_source":"<fetch_method>"}'
+   python3 shopping-db.py cache-url '{"product_id":1, "source":"target", "canonical_url":"<url>", "success":1}'
+   ```
+
+   If fetch fails or no price found, mark failure:
    ```bash
    python3 shopping-db.py cache-url '{"product_id":1, "source":"amazon", "canonical_url":"<url>", "success":0}'
    ```
 
    ### Phase 2 — Serper Shopping API (~1 min)
 
-   Run **2-3 queries** to maximize retailer coverage:
+   **First, re-check competitive sources from the previous run** that
+   aren't already in `retailer_urls` (e.g. a retailer that had a great
+   price last time but can't be verified via Phase 1):
+   ```bash
+   python3 /home/node/nanoclaw/scripts/shopping-db.py previous-best <product_id>
+   ```
+   This returns sources within $5 of the previous best price that have
+   no cached URL. For each one, run a targeted site-scoped query:
+   ```bash
+   python3 /home/node/nanoclaw/scripts/serper.py shopping "<product name> site:<retailer_domain>"
+   ```
+   For example, if Birch Lane had the best price last run:
+   ```bash
+   python3 /home/node/nanoclaw/scripts/serper.py shopping "Zojirushi NS-LGC05 site:birchlane.com"
+   ```
+
+   **Then run the standard broad queries** to find new sources:
    ```bash
    # Query 1: exact model number (catches niche retailers with SKU in title)
    python3 /home/node/nanoclaw/scripts/serper.py shopping "<model number>"
@@ -103,9 +184,16 @@ Browser is a last resort only.
       ```bash
       python3 shopping-db.py snapshot '{"product_id":1, "source":"walmart", "price":189.99, "source_url":null, "in_stock":1, "verified":0, "snapshot_source":"serper-shopping", "retailer_slug":"walmart", "retailer_display":"Walmart"}'
       ```
-   5. For new retailers not yet in the URL cache, try to find their
-      canonical product URL via the title and retailer name, then cache
-      it for Phase 1 on the next run.
+   5. For new retailers not yet in the URL cache, try to cache them
+      for Phase 1 on the next run. Use the right `fetch_method`:
+      - **Target:** Search the Redsky API (see Phase 1 `target-redsky`
+        section) to find the TCIN, then cache with
+        `fetch_method=target-redsky` and `source_product_id=<tcin>`.
+      - **Other retailers:** Try to find the canonical product page URL
+        from the result title + retailer name. Then test if it's a
+        Shopify store by fetching `<url>.json` — if it returns valid
+        JSON with a `product` key, cache with `fetch_method=shopify-json`.
+        Otherwise cache with `fetch_method=json-ld` (the default).
 
    ### Phase 3 — Reddit deals (~1 min, best-effort)
 

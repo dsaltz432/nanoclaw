@@ -117,6 +117,44 @@ async function fetchMetadata(
   }
 }
 
+/** Strip query string to compare URLs by origin+path */
+function urlBase(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+/** Is this snapshot from the same site as the product's original link? */
+function isOriginalSource(
+  snapUrl: string | null,
+  productUrl: string
+): boolean {
+  if (!snapUrl) return false;
+  return urlBase(snapUrl) === urlBase(productUrl);
+}
+
+/**
+ * Pick the "best" price from a list. Prefers the original source if its price
+ * is within $1 of the absolute cheapest.
+ */
+function pickBest<T extends { price: number; source_url: string | null }>(
+  candidates: T[],
+  productUrl: string
+): T | null {
+  if (candidates.length === 0) return null;
+  const cheapest = candidates.reduce((a, b) =>
+    a.price < b.price ? a : b
+  );
+  const original = candidates.find((c) =>
+    isOriginalSource(c.source_url, productUrl)
+  );
+  if (original && original.price <= cheapest.price + 1) return original;
+  return cheapest;
+}
+
 const router = Router();
 
 // GET /api/shopping/products — all active products with latest prices per source
@@ -202,12 +240,10 @@ router.get("/api/shopping/products", (_req: Request, res: Response) => {
     const result = products.map((p) => {
       const prices = snapsByProduct.get(p.id) || [];
       const inStockPrices = prices.filter((s) => s.in_stock);
-      const best =
-        inStockPrices.length > 0
-          ? inStockPrices.reduce((a, b) => (a.price < b.price ? a : b))
-          : prices.length > 0
-            ? prices.reduce((a, b) => (a.price < b.price ? a : b))
-            : null;
+      const best = pickBest(
+        inStockPrices.length > 0 ? inStockPrices : prices,
+        p.source_url
+      );
       return {
         ...p,
         prices,
@@ -215,6 +251,7 @@ router.get("/api/shopping/products", (_req: Request, res: Response) => {
         best_source: best?.source ?? null,
         best_source_url: best?.source_url ?? null,
         best_retailer_display: best?.retailer_display ?? null,
+        best_retailer_slug: best?.retailer_slug ?? null,
       };
     });
 

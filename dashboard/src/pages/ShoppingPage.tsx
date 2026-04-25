@@ -30,6 +30,7 @@ interface Product {
   best_source: string | null;
   best_source_url: string | null;
   best_retailer_display: string | null;
+  best_retailer_slug: string | null;
 }
 
 interface Snapshot {
@@ -68,8 +69,9 @@ function sourceColor(source: string): string {
   return SOURCE_COLORS[source.toLowerCase()] ?? "#6b7280";
 }
 
-function sourceLabel(source: string, retailerDisplay?: string | null): string {
-  if (retailerDisplay) return retailerDisplay;
+function sourceLabel(source: string, retailerDisplay?: string | null, retailerSlug?: string | null): string {
+  if (retailerDisplay && retailerDisplay.toLowerCase() !== "other") return retailerDisplay;
+  if (retailerSlug) return retailerSlug.charAt(0).toUpperCase() + retailerSlug.slice(1);
   return SOURCE_LABELS[source.toLowerCase()] ?? source;
 }
 
@@ -118,7 +120,7 @@ function fmtChartDateTime(polledAt: string): string {
   });
 }
 
-// ── Price Chart (multi-source) ───────────────────────────────────────────────
+// ── Price Chart (lowest price across sources) ────────────────────────────────
 
 const TIME_RANGES = [
   { label: "All", hours: Infinity },
@@ -129,24 +131,40 @@ const TIME_RANGES = [
   { label: "1mo", hours: 720 },
 ];
 
-function PriceChart({
-  data,
-  sources,
-}: {
-  data: Snapshot[];
-  sources: string[];
-}) {
+interface LowestPoint {
+  time: number;
+  price: number;
+  source: string;
+  displaySource: string;
+  polledAt: string;
+}
+
+const SCRAPE_BUCKET_MS = 30 * 60 * 1000; // 30 minutes
+const ORIGINAL_PREFERENCE_THRESHOLD = 1; // prefer original if within $1
+
+function urlBase(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+function isOriginalSource(snapUrl: string | null, productUrl: string): boolean {
+  if (!snapUrl) return false;
+  return urlBase(snapUrl) === urlBase(productUrl);
+}
+
+function PriceChart({ data, productUrl }: { data: Snapshot[]; productUrl: string }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [hov, setHov] = useState<{ idx: number; source: string } | null>(null);
+  const [hovIdx, setHovIdx] = useState<number | null>(null);
   const [timeRange, setTimeRange] = useState(Infinity);
 
-  const allTimestamps = [...new Set(data.map((d) => d.polled_at))].sort();
-  if (allTimestamps.length < 2) {
+  if (data.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-gray-600">
-        {allTimestamps.length === 0
-          ? "No price data yet"
-          : "Chart needs 2+ data points — check back after the next price check"}
+        No price data yet
       </div>
     );
   }
@@ -164,46 +182,67 @@ function PriceChart({
   });
 
   const timestamps = [...new Set(filtered.map((d) => d.polled_at))].sort();
-  const showRangeFilter = allTimestamps.length > 10;
 
-  // Build per-source time series
-  const series: Record<
-    string,
-    { time: number; price: number; polledAt: string }[]
-  > = {};
-  for (const src of sources) series[src] = [];
-  for (const snap of filtered) {
-    if (snap.price != null && sources.includes(snap.source)) {
-      if (!series[snap.source]) series[snap.source] = [];
-      const t = new Date(
-        snap.polled_at.includes("+") || snap.polled_at.endsWith("Z")
-          ? snap.polled_at
-          : snap.polled_at + "Z"
-      ).getTime();
-      series[snap.source].push({ time: t, price: snap.price, polledAt: snap.polled_at });
+  // Bucket snapshots from the same scrape (within 10 min) and pick the lowest price per bucket
+  const withTime = filtered
+    .filter((d) => d.price != null)
+    .map((d) => ({
+      ...d,
+      _t: new Date(
+        d.polled_at.includes("+") || d.polled_at.endsWith("Z")
+          ? d.polled_at
+          : d.polled_at + "Z"
+      ).getTime(),
+    }))
+    .sort((a, b) => a._t - b._t);
+
+  const buckets: typeof withTime[] = [];
+  for (const snap of withTime) {
+    const last = buckets[buckets.length - 1];
+    if (last && snap._t - last[0]._t < SCRAPE_BUCKET_MS) {
+      last.push(snap);
+    } else {
+      buckets.push([snap]);
     }
   }
-  for (const src of sources) series[src]?.sort((a, b) => a.time - b.time);
 
-  const allPrices = filtered
-    .filter((d) => d.price != null && sources.includes(d.source))
-    .map((d) => d.price);
+  const points: LowestPoint[] = buckets.map((bucket) => {
+    const cheapest = bucket.reduce((a, b) => (a.price < b.price ? a : b));
+    const original = bucket.find((s) =>
+      isOriginalSource(s.source_url, productUrl)
+    );
+    const best =
+      original && original.price <= cheapest.price + ORIGINAL_PREFERENCE_THRESHOLD
+        ? original
+        : cheapest;
+    return {
+      time: best._t,
+      price: best.price,
+      source: best.source,
+      displaySource: best.retailer_display || best.retailer_slug || best.source,
+      polledAt: best.polled_at,
+    };
+  });
 
-  if (allPrices.length === 0) {
+  if (points.length < 2) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-gray-600">
-        No price data for selected sources in this range
+        {points.length === 0
+          ? "No price data in this range"
+          : "Chart needs 2+ scrapes — check back after the next price check"}
       </div>
     );
   }
 
-  const allTimes = Object.values(series).flat().map((p) => p.time);
-  const minTime = Math.min(...allTimes);
-  const maxTime = Math.max(...allTimes);
+  const showRangeFilter = points.length > 10;
+
+  const minTime = points[0].time;
+  const maxTime = points[points.length - 1].time;
   const timeSpan = maxTime - minTime || 1;
 
-  const minP = Math.min(...allPrices) * 0.95;
-  const maxP = Math.max(...allPrices) * 1.05;
+  const prices = points.map((p) => p.price);
+  const minP = Math.min(...prices) * 0.95;
+  const maxP = Math.max(...prices) * 1.05;
   const pRange = maxP - minP || 1;
 
   const W = 560,
@@ -263,27 +302,21 @@ function PriceChart({
       const rect = svgRef.current?.getBoundingClientRect();
       if (!rect) return;
       const x = ((e.clientX - rect.left) / rect.width) * W;
-      const y = ((e.clientY - rect.top) / rect.height) * H;
       let bestDist = Infinity;
-      let bestSrc = "";
-      let bestIdx = 0;
-      for (const src of sources) {
-        for (let i = 0; i < (series[src]?.length ?? 0); i++) {
-          const pt = series[src][i];
-          const dx = Math.abs(toX(pt.time) - x);
-          const dy = Math.abs(toY(pt.price) - y);
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestSrc = src;
-            bestIdx = i;
-          }
+      let bestIdx = -1;
+      for (let i = 0; i < points.length; i++) {
+        const dx = Math.abs(toX(points[i].time) - x);
+        if (dx < bestDist) {
+          bestDist = dx;
+          bestIdx = i;
         }
       }
-      setHov(bestDist < 40 ? { idx: bestIdx, source: bestSrc } : null);
+      setHovIdx(bestDist < 40 ? bestIdx : null);
     },
-    [sources, series]
+    [points]
   );
+
+  const LINE_COLOR = "#10b981"; // emerald-500
 
   return (
     <div>
@@ -310,7 +343,7 @@ function PriceChart({
         viewBox={`0 0 ${W} ${H}`}
         className="w-full cursor-crosshair"
         onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHov(null)}
+        onMouseLeave={() => setHovIdx(null)}
       >
         {/* Grid lines + Y labels */}
         {yTicks.map((v, i) => (
@@ -360,48 +393,35 @@ function PriceChart({
           </g>
         ))}
 
-        {/* Lines + dots per source */}
-        {sources.map((src) => {
-          const pts = series[src] ?? [];
-          if (pts.length === 0) return null;
-          const color = sourceColor(src);
-          const isHovered = hov?.source === src;
-          const isDimmed = hov && !isHovered;
-
-          return (
-            <g key={src} opacity={isDimmed ? 0.2 : 1}>
-              {pts.length >= 2 && (
-                <polyline
-                  points={pts
-                    .map((p) => `${toX(p.time)},${toY(p.price)}`)
-                    .join(" ")}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={2}
-                  strokeLinejoin="round"
-                />
-              )}
-              {pts.map((p, i) => (
-                <circle
-                  key={i}
-                  cx={toX(p.time)}
-                  cy={toY(p.price)}
-                  r={isHovered && hov?.idx === i ? 5 : 3}
-                  fill={color}
-                  stroke="#111827"
-                  strokeWidth={1}
-                />
-              ))}
-            </g>
-          );
-        })}
+        {/* Single lowest-price line */}
+        {points.length >= 2 && (
+          <polyline
+            points={points
+              .map((p) => `${toX(p.time)},${toY(p.price)}`)
+              .join(" ")}
+            fill="none"
+            stroke={LINE_COLOR}
+            strokeWidth={2}
+            strokeLinejoin="round"
+          />
+        )}
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={toX(p.time)}
+            cy={toY(p.price)}
+            r={hovIdx === i ? 5 : 3}
+            fill={sourceColor(p.source)}
+            stroke="#111827"
+            strokeWidth={1}
+          />
+        ))}
 
         {/* Hover tooltip */}
-        {hov &&
+        {hovIdx != null &&
           (() => {
-            const pts = series[hov.source];
-            if (!pts || !pts[hov.idx]) return null;
-            const pt = pts[hov.idx];
+            const pt = points[hovIdx];
+            if (!pt) return null;
             const cx = toX(pt.time);
             const cy = toY(pt.price);
             const TW = 160,
@@ -423,7 +443,7 @@ function PriceChart({
                   cx={cx}
                   cy={cy}
                   r={5}
-                  fill={sourceColor(hov.source)}
+                  fill={sourceColor(pt.source)}
                   stroke="#f9fafb"
                   strokeWidth={2}
                 />
@@ -441,9 +461,9 @@ function PriceChart({
                     y={14}
                     textAnchor="middle"
                     fontSize={9}
-                    fill={sourceColor(hov.source)}
+                    fill={sourceColor(pt.source)}
                   >
-                    {sourceLabel(hov.source)}
+                    {pt.displaySource}
                   </text>
                   <text
                     x={TW / 2}
@@ -491,46 +511,6 @@ function PriceChart({
   );
 }
 
-// ── Source Legend ──────────────────────────────────────────────────────────────
-
-function SourceLegend({
-  sources,
-  selected,
-  onToggle,
-}: {
-  sources: string[];
-  selected: Set<string>;
-  onToggle: (src: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2 mb-3">
-      {sources.map((src) => {
-        const active = selected.has(src);
-        return (
-          <button
-            key={src}
-            onClick={() => onToggle(src)}
-            className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-md transition-colors ${
-              active
-                ? "bg-gray-800 text-gray-200"
-                : "bg-gray-900 text-gray-600"
-            }`}
-          >
-            <span
-              className="w-2.5 h-2.5 rounded-full inline-block"
-              style={{
-                backgroundColor: sourceColor(src),
-                opacity: active ? 1 : 0.3,
-              }}
-            />
-            {sourceLabel(src)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ─�� Product Detail Modal ────────────────────────────────────────────────────
 
 function ProductDetail({
@@ -543,13 +523,6 @@ function ProductDetail({
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const allSources = [
-    ...new Set(product.prices.map((p) => p.source)),
-  ].sort();
-  const [selectedSources, setSelectedSources] = useState<Set<string>>(
-    new Set(allSources)
-  );
-
   useEffect(() => {
     fetch(`/api/shopping/products/${product.id}/history`)
       .then((r) => r.json())
@@ -557,27 +530,6 @@ function ProductDetail({
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [product.id]);
-
-  const toggleSource = (src: string) => {
-    setSelectedSources((prev) => {
-      const next = new Set(prev);
-      if (next.has(src)) {
-        if (next.size > 1) next.delete(src);
-      } else {
-        next.add(src);
-      }
-      return next;
-    });
-  };
-
-  const histSources = [...new Set(history.map((h) => h.source))].sort();
-
-  // Update selected sources when history loads
-  useEffect(() => {
-    if (histSources.length > 0 && selectedSources.size === 0) {
-      setSelectedSources(new Set(histSources));
-    }
-  }, [histSources.length]);
 
   return (
     <div
@@ -613,19 +565,11 @@ function ProductDetail({
               x
             </button>
           </div>
-          <div className="flex items-center gap-3 mt-2 flex-wrap">
-            <a
-              href={product.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs px-2.5 py-1 rounded-lg bg-blue-900/40 text-blue-400 hover:bg-blue-900/60 transition-colors"
-            >
-              Original Link
-            </a>
-            {product.category && (
+          {product.category && (
+            <div className="mt-2">
               <span className="text-xs text-gray-600">{product.category}</span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Source comparison table */}
@@ -655,7 +599,7 @@ function ProductDetail({
                     }}
                   />
                   <span className={`text-sm flex-1 ${p.verified ? "text-gray-300" : "text-gray-500"}`}>
-                    {sourceLabel(p.source, p.retailer_display)}
+                    {sourceLabel(p.source, p.retailer_display, p.retailer_slug)}
                   </span>
                   {!p.verified && (
                     <span className="text-xs text-yellow-500/70">unverified</span>
@@ -716,16 +660,7 @@ function ProductDetail({
             Loading...
           </div>
         ) : (
-          <>
-            {histSources.length > 1 && (
-              <SourceLegend
-                sources={histSources}
-                selected={selectedSources}
-                onToggle={toggleSource}
-              />
-            )}
-            <PriceChart data={history} sources={[...selectedSources]} />
-          </>
+          <PriceChart data={history} productUrl={product.source_url} />
         )}
 
         <p className="mt-3 text-xs text-gray-600">
@@ -1038,7 +973,7 @@ export default function ShoppingPage() {
                                   color: sourceColor(product.best_source),
                                 }}
                               >
-                                {sourceLabel(product.best_source, product.best_retailer_display)}
+                                {sourceLabel(product.best_source, product.best_retailer_display, product.best_retailer_slug)}
                               </span>
                             </p>
                           )}
@@ -1068,7 +1003,7 @@ export default function ShoppingPage() {
                                 }}
                               />
                               <span className="text-xs text-gray-400 w-20 flex-shrink-0 truncate">
-                                {sourceLabel(p.source, p.retailer_display)}
+                                {sourceLabel(p.source, p.retailer_display, p.retailer_slug)}
                               </span>
                               <span
                                 className={`text-xs font-medium flex-shrink-0 ${

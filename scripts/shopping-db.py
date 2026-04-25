@@ -21,6 +21,7 @@ Commands:
   update-checked <id>   Update last_checked timestamp for a product
   cached-urls <id>      List cached retailer URLs for a product (failure_count < 5)
   cache-url '<json>'    Upsert a retailer URL cache entry (success/failure tracking)
+  previous-best <id>    Competitive sources from last scrape not in retailer_urls
 
 Outputs JSON to stdout for the calling agent to parse.
 """
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS retailer_urls (
   retailer_slug TEXT NOT NULL,
   canonical_url TEXT NOT NULL,
   source_product_id TEXT,
+  fetch_method TEXT DEFAULT 'json-ld',
   last_success TEXT,
   last_failure TEXT,
   failure_count INTEGER DEFAULT 0,
@@ -163,7 +165,7 @@ def cmd_list():
 
 
 def cmd_due():
-    """List products due for a price check (tracking enabled, last checked > 6h ago or never)."""
+    """List products due for a price check (all active + tracking enabled)."""
     if not os.path.exists(DB_PATH):
         print(json.dumps({"due": []}))
         return
@@ -172,7 +174,6 @@ def cmd_due():
         SELECT * FROM products
         WHERE status = 'active'
           AND tracking_enabled = 1
-          AND (last_checked IS NULL OR last_checked < datetime('now', '-5 hours'))
         ORDER BY last_checked ASC NULLS FIRST
     """).fetchall()
     conn.close()
@@ -290,7 +291,7 @@ def cmd_cached_urls(product_id: str):
     conn = get_conn()
     rows = conn.execute(
         """SELECT source, retailer_slug, canonical_url, source_product_id,
-                  last_success, last_failure, failure_count
+                  fetch_method, last_success, last_failure, failure_count
            FROM retailer_urls
            WHERE product_id = ? AND failure_count < 5
            ORDER BY last_success DESC NULLS LAST""",
@@ -326,31 +327,96 @@ def cmd_cache_url(json_str: str):
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_conn()
 
+    fetch_method = data.get("fetch_method", "json-ld")
+
     if success:
         conn.execute(
-            """INSERT INTO retailer_urls (product_id, source, retailer_slug, canonical_url, source_product_id, last_success, failure_count)
-               VALUES (?, ?, ?, ?, ?, ?, 0)
+            """INSERT INTO retailer_urls (product_id, source, retailer_slug, canonical_url, source_product_id, fetch_method, last_success, failure_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                ON CONFLICT(product_id, retailer_slug) DO UPDATE SET
                  canonical_url = excluded.canonical_url,
                  source_product_id = COALESCE(excluded.source_product_id, source_product_id),
+                 fetch_method = excluded.fetch_method,
                  last_success = excluded.last_success,
                  failure_count = 0""",
-            (product_id, source, r_slug, canonical_url, data.get("source_product_id"), now_iso),
+            (product_id, source, r_slug, canonical_url, data.get("source_product_id"), fetch_method, now_iso),
         )
     else:
         conn.execute(
-            """INSERT INTO retailer_urls (product_id, source, retailer_slug, canonical_url, source_product_id, last_failure, failure_count)
-               VALUES (?, ?, ?, ?, ?, ?, 1)
+            """INSERT INTO retailer_urls (product_id, source, retailer_slug, canonical_url, source_product_id, fetch_method, last_failure, failure_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                ON CONFLICT(product_id, retailer_slug) DO UPDATE SET
                  last_failure = ?,
                  failure_count = failure_count + 1""",
-            (product_id, source, r_slug, canonical_url, data.get("source_product_id"), now_iso, now_iso),
+            (product_id, source, r_slug, canonical_url, data.get("source_product_id"), fetch_method, now_iso, now_iso),
         )
 
     conn.commit()
     conn.close()
     action = "success" if success else "failure"
     print(json.dumps({"ok": True, "product_id": product_id, "retailer_slug": r_slug, "action": action}))
+
+
+def cmd_previous_best(product_id: str):
+    """Return competitive sources from the most recent scrape that aren't in retailer_urls.
+
+    "Competitive" = within $5 of the lowest price in that scrape.
+    These are sources the agent should actively re-check via targeted Serper queries.
+    """
+    if not os.path.exists(DB_PATH):
+        print(json.dumps({"sources": []}))
+        return
+    conn = get_conn()
+    # Get the most recent polled_at timestamp for this product
+    row = conn.execute(
+        "SELECT MAX(polled_at) as latest FROM price_snapshots WHERE product_id = ?",
+        (int(product_id),),
+    ).fetchone()
+    if not row or not row["latest"]:
+        conn.close()
+        print(json.dumps({"sources": []}))
+        return
+
+    latest = row["latest"]
+    # Get all snapshots from that scrape (within 10 min of latest)
+    snaps = conn.execute(
+        """SELECT retailer_slug, retailer_display, price, source_url
+           FROM price_snapshots
+           WHERE product_id = ?
+             AND polled_at >= datetime(?, '-10 minutes')
+             AND polled_at <= ?
+           ORDER BY price ASC""",
+        (int(product_id), latest, latest),
+    ).fetchall()
+
+    if not snaps:
+        conn.close()
+        print(json.dumps({"sources": []}))
+        return
+
+    best_price = snaps[0]["price"]
+    threshold = best_price + 5.0
+
+    # Get cached retailer slugs
+    cached = set(
+        r["retailer_slug"]
+        for r in conn.execute(
+            "SELECT retailer_slug FROM retailer_urls WHERE product_id = ?",
+            (int(product_id),),
+        ).fetchall()
+    )
+    conn.close()
+
+    sources = []
+    for s in snaps:
+        if s["price"] <= threshold and s["retailer_slug"] not in cached:
+            sources.append({
+                "retailer_slug": s["retailer_slug"],
+                "retailer_display": s["retailer_display"],
+                "price": s["price"],
+            })
+
+    print(json.dumps({"sources": sources, "best_price": best_price, "threshold": threshold}))
 
 
 def main():
@@ -391,6 +457,11 @@ def main():
             print(json.dumps({"error": "cache-url requires a JSON argument"}))
             sys.exit(1)
         cmd_cache_url(sys.argv[2])
+    elif cmd == "previous-best":
+        if len(sys.argv) < 3:
+            print(json.dumps({"error": "previous-best requires a product_id"}))
+            sys.exit(1)
+        cmd_previous_best(sys.argv[2])
     else:
         print(json.dumps({"error": f"Unknown command: {cmd}"}))
         sys.exit(1)
