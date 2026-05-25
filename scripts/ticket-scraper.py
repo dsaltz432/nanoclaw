@@ -70,15 +70,19 @@ def get_poll_interval_minutes(hours_until: float) -> int:
 def get_due_events(conn: sqlite3.Connection) -> list[dict]:
     """Find active events that are due for a price check."""
     now = datetime.now(timezone.utc)
+    # Exclude events currently in WAF cooldown. After N consecutive WAF blocks
+    # the scraper sets waf_muted_until to skip them for a few hours, so one
+    # consistently-blocked URL can't permanently block the catch-up queue.
     rows = conn.execute("""
         SELECT e.id, e.team_slug, e.venue_slug, e.stubhub_url, e.event_datetime, e.title,
                MAX(ps.polled_at) as last_polled
         FROM events e
         LEFT JOIN price_snapshots ps ON e.id = ps.event_id
         WHERE e.status != 'completed'
-          AND (e.event_datetime > datetime('now') OR e.event_datetime IS NULL)
+          AND (datetime(e.event_datetime) > datetime('now') OR e.event_datetime IS NULL)
+          AND (e.waf_muted_until IS NULL OR datetime(e.waf_muted_until) <= datetime('now'))
         GROUP BY e.id
-        ORDER BY e.event_datetime
+        ORDER BY datetime(e.event_datetime)
     """).fetchall()
 
     due = []
@@ -114,6 +118,11 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
             if minutes_since < interval:
                 continue
 
+        if last_polled:
+            overdue_ratio = minutes_since / interval
+        else:
+            overdue_ratio = float("inf")
+
         due.append({
             "id": eid,
             "team_slug": team,
@@ -122,17 +131,40 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
             "title": title,
             "hours_until": hours_until,
             "days_until": hours_until / 24,
+            "overdue_ratio": overdue_ratio,
         })
 
-    # Sort by soonest game first, cap at 5 to avoid WAF throttling.
-    # Remaining events will be picked up on the next 30-min run.
-    due.sort(key=lambda e: e["hours_until"])
+    # Cap per run to avoid WAF throttling. We split the budget so close games
+    # always get first cut (CLOSE_RESERVE slots, sorted by hours_until ASC) and
+    # the remainder is reserved for catch-up — most-overdue events first
+    # (overdue_ratio = minutes_since_last_poll / tier_interval). This stops far
+    # events from starving when the front of the queue is full of recurring
+    # close games.
+    PER_RUN_CAP = 7
+    CLOSE_RESERVE = 5
+
+    by_close = sorted(due, key=lambda e: e["hours_until"])
+    close_picks = by_close[:CLOSE_RESERVE]
+    close_ids = {e["id"] for e in close_picks}
+    catchup = sorted(
+        (e for e in due if e["id"] not in close_ids),
+        key=lambda e: e["overdue_ratio"],
+        reverse=True,
+    )
+    catchup_picks = catchup[: PER_RUN_CAP - len(close_picks)]
+    capped = close_picks + catchup_picks
     total_due = len(due)
-    capped = due[:5]
 
     if capped:
-        games = ", ".join(f"{e['title'][:30]} ({e['hours_until']:.0f}h)" for e in capped)
-        print(f"Scraping {len(capped)}/{total_due} due games: {games}", file=sys.stderr)
+        games = ", ".join(
+            f"{e['title'][:28]} ({e['hours_until']:.0f}h{', overdue ' + format(e['overdue_ratio'], '.1f') + 'x' if e['overdue_ratio'] > 5 else ''})"
+            for e in capped
+        )
+        print(
+            f"Scraping {len(capped)}/{total_due} due games "
+            f"({len(close_picks)} closest + {len(catchup_picks)} catch-up): {games}",
+            file=sys.stderr,
+        )
 
     return capped
 
@@ -220,6 +252,38 @@ def fetch_event_prices(url: str) -> dict | None:
     return result
 
 
+# "Cheap-end mixed-bag" categories: StubHub uses one section label to cover
+# both real GA inventory and premium variants (suite passes, multi-game
+# packages, hospitality bundles). When the cheap listings sell out, the only
+# remaining listing in the category can spike 10-50× the real GA price, so
+# we drop those snapshots rather than record fake floors.
+#
+# Members: cheap GA standing room (Yankees Pinstripe Pass, Fenway SRRD,
+# generic GA), Fenway's Monster Standing deck (SRGM contaminated by
+# premium variants), and World Cup national-team Supporters tiers (Value
+# tier sells out → Premium Tier becomes the floor).
+#
+# Premium-by-design categories (Monster Seated, Floor/Courtside, Diamond
+# Club, Crown Club, Chop House, Premium, etc.) are NOT in this set — they
+# are supposed to be expensive.
+SR_LIKE_CATEGORIES = {
+    "Standing Room",
+    "General Admission",
+    "Supporters",
+    "Monster Standing",
+}
+SR_OUTLIER_RATIO = 5.0
+
+# Pattern-based category fallbacks. When a section_name has no explicit
+# venue mapping, try these regexes (in order) before treating it as unmapped.
+# First match wins. Used for tournament-style sections (World Cup national
+# supporter blocks) whose team names change as the bracket fills, so a static
+# enumeration in venues-config.json would go stale.
+PATTERN_CATEGORY_FALLBACKS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bSupporters\b", re.IGNORECASE), "Supporters"),
+]
+
+
 def aggregate_by_category(
     conn: sqlite3.Connection,
     venue_slug: str,
@@ -244,6 +308,11 @@ def aggregate_by_category(
     for section, price in section_prices.items():
         cat = cat_map.get(section)
         if not cat:
+            for pat, fallback_cat in PATTERN_CATEGORY_FALLBACKS:
+                if pat.search(section):
+                    cat = fallback_cat
+                    break
+        if not cat:
             unmapped.append(section)
             continue
         if cat not in categories:
@@ -255,6 +324,21 @@ def aggregate_by_category(
 
     if unmapped:
         print(f"  Warning: {len(unmapped)} unmapped sections: {unmapped}", file=sys.stderr)
+
+    # Drop SR/GA categories whose lowest_price exceeds SR_OUTLIER_RATIO * the
+    # cheapest seated category. See SR_LIKE_CATEGORIES comment above.
+    sr_in_play = SR_LIKE_CATEGORIES & categories.keys()
+    others = {c: d for c, d in categories.items() if c not in SR_LIKE_CATEGORIES}
+    if sr_in_play and others:
+        cheapest_other = min(d["lowest_price"] for d in others.values())
+        for sr_cat in list(sr_in_play):
+            if categories[sr_cat]["lowest_price"] > SR_OUTLIER_RATIO * cheapest_other:
+                print(
+                    f"  Dropping outlier {sr_cat} ${categories[sr_cat]['lowest_price']:.0f} "
+                    f"({categories[sr_cat]['lowest_price']/cheapest_other:.0f}x cheapest seated ${cheapest_other:.0f})",
+                    file=sys.stderr,
+                )
+                del categories[sr_cat]
 
     return categories
 
@@ -276,20 +360,23 @@ def update_weather(conn: sqlite3.Connection) -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     cutoff = now + timedelta(days=7)
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Find outdoor events in the next 7 days that haven't been updated today
-    today = now.strftime("%Y-%m-%d")
+    # Refresh weather for every outdoor event in the next 7 days every run.
+    # Open-Meteo's underlying model only updates every 6-12h, so most calls
+    # return the same numbers — but snapshotting always-fresh values is what
+    # we want for the per-snapshot weather column. Free tier (~10K calls/day)
+    # easily accommodates ~5-10 venues × 48 runs/day = ~240-480 calls.
     events = conn.execute("""
         SELECT id, venue_slug, event_datetime FROM events
         WHERE status != 'completed'
           AND event_datetime IS NOT NULL
-          AND event_datetime <= ?
-          AND event_datetime > datetime('now')
+          AND datetime(event_datetime) <= datetime(?)
+          AND datetime(event_datetime) > datetime('now')
           AND venue_slug IN ({})
-          AND (weather_updated_at IS NULL OR weather_updated_at < ?)
-    """.format(",".join(f"'{s}'" for s in outdoor_venues)), (cutoff_iso, today)).fetchall()
+    """.format(",".join(f"'{s}'" for s in outdoor_venues)), (cutoff_iso,)).fetchall()
 
     if not events:
         return 0
@@ -345,7 +432,7 @@ def update_weather(conn: sqlite3.Connection) -> int:
                     SET weather_high = ?, weather_low = ?, weather_precip_pct = ?,
                         weather_updated_at = ?
                     WHERE id = ?
-                """, (w["high"], w["low"], w["precip"], today, eid))
+                """, (w["high"], w["low"], w["precip"], now_iso, eid))
                 updated += 1
 
     conn.commit()
@@ -375,10 +462,15 @@ def load_venues() -> list[dict]:
 
 
 def mark_completed_events(conn: sqlite3.Connection) -> int:
-    """Mark past events as completed. Returns count of events archived."""
+    """Mark past events as completed. Returns count of events archived.
+
+    Includes pending events: a pending event that's already past its start
+    time will never go active (StubHub never published a listing page for it),
+    so it should be archived too.
+    """
     cur = conn.execute("""
         UPDATE events SET status = 'completed'
-        WHERE event_datetime < datetime('now') AND status = 'active'
+        WHERE datetime(event_datetime) < datetime('now') AND status IN ('active', 'pending')
     """)
     conn.commit()
     return cur.rowcount
@@ -395,6 +487,11 @@ def main():
     # Archive completed events
     completed = mark_completed_events(conn)
 
+    # Update weather BEFORE the scrape loop so each new price snapshot can be
+    # written alongside the freshest forecast. (Prior order updated weather at
+    # the end, leaving snapshots tagged with the previous run's forecast.)
+    weather_updated = update_weather(conn)
+
     # Find due events
     due = get_due_events(conn)
 
@@ -407,17 +504,42 @@ def main():
         "errors": 0,
         "error_details": [],
         "results": [],
+        "weather_updated": weather_updated,
     }
 
     if not due:
-        # Still update weather even if no prices are due
-        weather_updated = update_weather(conn)
-        summary["weather_updated"] = weather_updated
         print(json.dumps(summary))
         conn.close()
         return
 
-    REQUEST_DELAY = 5  # seconds between requests to avoid WAF
+    REQUEST_DELAY = 7  # seconds between requests to avoid WAF (bumped 5→7 after cap=10 raised WAF rate)
+    # After this many consecutive WAF blocks on the same event, mute it for
+    # WAF_COOLDOWN_HOURS so the catch-up queue isn't permanently blocked by
+    # one bad URL. Resets to 0 on any successful scrape.
+    WAF_FAIL_THRESHOLD = 3
+    WAF_COOLDOWN_HOURS = 6
+
+    def record_waf_failure(event_id: int) -> None:
+        new_count = (conn.execute(
+            "SELECT consecutive_waf_count FROM events WHERE id = ?", (event_id,)
+        ).fetchone() or [0])[0] + 1
+        if new_count >= WAF_FAIL_THRESHOLD:
+            mute_until = (datetime.now(timezone.utc) + timedelta(hours=WAF_COOLDOWN_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            conn.execute(
+                "UPDATE events SET consecutive_waf_count = ?, waf_muted_until = ? WHERE id = ?",
+                (new_count, mute_until, event_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE events SET consecutive_waf_count = ? WHERE id = ?",
+                (new_count, event_id),
+            )
+
+    def record_scrape_success(event_id: int) -> None:
+        conn.execute(
+            "UPDATE events SET consecutive_waf_count = 0, waf_muted_until = NULL WHERE id = ?",
+            (event_id,),
+        )
 
     for i, event in enumerate(due):
         eid = event["id"]
@@ -445,6 +567,10 @@ def main():
                     "UPDATE events SET status = 'pending' WHERE id = ?", (eid,)
                 )
                 conn.commit()
+            # WAF or network errors: bump the fail counter; auto-mute after threshold
+            elif err_type in ("waf", "network") or err_type.startswith("5"):
+                record_waf_failure(eid)
+                conn.commit()
             continue
 
         section_prices = prices.get("section_prices", {})
@@ -460,21 +586,34 @@ def main():
                 "error": "no_sections",
                 "detail": "Page loaded but no per-section pricing extracted (likely WAF or missing section data)",
             })
+            # Treat no_sections like WAF for cooldown — usually a tiny placeholder page
+            record_waf_failure(eid)
+            conn.commit()
             continue
 
-        # Flip pending → active on successful scrape
+        # Successful scrape — clear cooldown / fail counter and flip status
+        record_scrape_success(eid)
         conn.execute(
             "UPDATE events SET status = 'active' WHERE id = ? AND status = 'pending'",
             (eid,),
         )
+
+        # Snapshot the event's current weather alongside the price reading so
+        # historical correlations between forecast and price are preserved.
+        # NULL for indoor venues / events outside the 7-day forecast window.
+        weather_row = conn.execute(
+            "SELECT weather_high, weather_low, weather_precip_pct FROM events WHERE id = ?",
+            (eid,),
+        ).fetchone() or (None, None, None)
 
         # Write snapshots — one row per category
         for cat, data in categories.items():
             conn.execute(
                 """INSERT INTO price_snapshots
                    (event_id, category, polled_at, days_until, hours_until,
-                    lowest_price, listing_count, best_section)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    lowest_price, listing_count, best_section,
+                    weather_high, weather_low, weather_precip_pct)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     eid,
                     cat,
@@ -484,6 +623,9 @@ def main():
                     data["lowest_price"],
                     prices.get("total_listings"),
                     data.get("best_section"),
+                    weather_row[0],
+                    weather_row[1],
+                    weather_row[2],
                 ),
             )
 
@@ -499,10 +641,6 @@ def main():
             },
             "total_listings": prices.get("total_listings"),
         })
-
-    # Update weather for outdoor events in the next 7 days
-    weather_updated = update_weather(conn)
-    summary["weather_updated"] = weather_updated
 
     print(json.dumps(summary))
     conn.close()

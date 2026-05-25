@@ -23,8 +23,8 @@ for i, slug in enumerate(UNVERIFIED):
     row = conn.execute("""
         SELECT id, stubhub_url FROM events
         WHERE venue_slug = ? AND is_home_game = 0 AND status != 'completed'
-          AND stubhub_url IS NOT NULL AND event_datetime > datetime('now')
-        ORDER BY event_datetime LIMIT 1
+          AND stubhub_url IS NOT NULL AND datetime(event_datetime) > datetime('now')
+        ORDER BY datetime(event_datetime) LIMIT 1
     """, (slug,)).fetchone()
     if not row:
         print(f"[{i+1}/12] {slug}: no event"); continue

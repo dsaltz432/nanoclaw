@@ -9,6 +9,9 @@ store/
 data/
 logs/
 
+# Runtime lock file written by the agent harness
+.claude/scheduled_tasks.lock
+
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
 !groups/main/

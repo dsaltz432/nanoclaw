@@ -22,7 +22,10 @@ interface TeamConfig {
   home_venue?: string;
   home_venue_slug?: string;
   enabled?: boolean;
-  stubhub_performer_url: string;
+  // Either a performer URL (per-team page) or a grouping URL (tournament/event
+  // group page like World Cup). Discovery picks based on which is present.
+  stubhub_performer_url?: string;
+  stubhub_grouping_url?: string;
 }
 
 function loadTeams(): TeamConfig[] {
@@ -91,14 +94,14 @@ router.get("/api/tickets/events", (req: Request, res: Response) => {
                 weather_high, weather_low, weather_precip_pct
            FROM events
            WHERE 1=1${gameFilter}
-           ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, event_datetime ASC`
+           ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, datetime(event_datetime) ASC`
           : `SELECT id, team_slug, team_name, sport, title, venue, venue_slug,
                 event_datetime, stubhub_url, status, is_home_game,
                 weather_high, weather_low, weather_precip_pct
            FROM events
            WHERE status IN ('active', 'pending')
-             AND (event_datetime > datetime('now') OR event_datetime IS NULL)${gameFilter}
-           ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, event_datetime ASC`
+             AND (datetime(event_datetime) > datetime('now') OR event_datetime IS NULL)${gameFilter}
+           ORDER BY CASE WHEN event_datetime IS NULL THEN 1 ELSE 0 END, datetime(event_datetime) ASC`
       )
       .all() as Array<{
       id: number;
@@ -188,7 +191,8 @@ router.get(
       const rows = db
         .prepare(
           `SELECT category, polled_at, days_until, hours_until,
-                lowest_price, listing_count, best_section
+                lowest_price, listing_count, best_section,
+                weather_high, weather_low, weather_precip_pct
          FROM price_snapshots
          WHERE event_id = ?
          ORDER BY polled_at ASC, category`
@@ -306,6 +310,196 @@ router.get("/api/tickets/venues", (_req: Request, res: Response) => {
 });
 
 
+// GET /api/tickets/health — Pricer run health summary (24h + 7d) plus stale-event counts
+const messagesDbPath = path.join(nanoclawRoot, "store/messages.db");
+const PRICER_TASK_ID_LIKE = "%2hmq79%"; // matches the Ticket Pricer scheduled_task id
+router.get("/api/tickets/health", (_req: Request, res: Response) => {
+  const result: Record<string, unknown> = {};
+
+  // Pricer run-log signals
+  try {
+    const msgDb = new Database(messagesDbPath, { readonly: true });
+
+    const lastRun = msgDb
+      .prepare(
+        `SELECT run_at, status, duration_ms, substr(result, 1, 240) AS summary
+           FROM task_run_logs WHERE task_id LIKE ?
+          ORDER BY run_at DESC LIMIT 1`
+      )
+      .get(PRICER_TASK_ID_LIKE) as
+      | { run_at: string; status: string; duration_ms: number; summary: string | null }
+      | undefined;
+    result.last_run = lastRun ?? null;
+
+    // Recent failure tally — last 12 runs is two failed Pricer cycles (1h)
+    result.recent_runs = msgDb
+      .prepare(
+        `SELECT run_at, status, duration_ms, substr(result, 1, 240) AS summary
+           FROM task_run_logs WHERE task_id LIKE ?
+          ORDER BY run_at DESC LIMIT 12`
+      )
+      .all(PRICER_TASK_ID_LIKE);
+
+    msgDb.close();
+  } catch (e) {
+    result.run_log_error = String(e);
+  }
+
+  // Per-event signals (the actionable stuff)
+  const db = openDb();
+  if (db) {
+    try {
+      // Game-day events: should be polled every 30 min — flag any whose last
+      // poll is more than 60 min old, or never polled
+      result.game_day = db
+        .prepare(
+          `SELECT e.id, e.title, e.event_datetime,
+                  ROUND((julianday(e.event_datetime) - julianday('now')) * 24, 1) AS hours_until,
+                  (SELECT MAX(polled_at) FROM price_snapshots WHERE event_id = e.id) AS last_polled,
+                  ROUND((julianday('now') - julianday((SELECT MAX(polled_at) FROM price_snapshots WHERE event_id = e.id))) * 24 * 60, 0) AS minutes_since_poll
+             FROM events e
+            WHERE e.status != 'completed'
+              AND datetime(e.event_datetime) > datetime('now')
+              AND (julianday(e.event_datetime) - julianday('now')) * 24 < 24
+            ORDER BY e.event_datetime`
+        )
+        .all();
+
+      // Recurring failure detection: events that are >3x past their tier
+      // interval (or never polled). These are the ones that need attention.
+      // Tier intervals (minutes): <1h=10, 1-6h=30, 6-24h=120, 1-7d=360,
+      // 7-30d=1440, 30-90d=1440, >90d=10080.
+      result.stuck_events = db
+        .prepare(
+          `WITH last_poll AS (
+             SELECT event_id, MAX(polled_at) AS lp,
+                    (julianday('now') - julianday(MAX(polled_at))) * 24 * 60 AS minutes_since
+               FROM price_snapshots GROUP BY event_id
+           ),
+           classified AS (
+             SELECT e.id, e.title, e.team_slug, e.venue_slug,
+                    (julianday(e.event_datetime) - julianday('now')) * 24 AS h_until,
+                    lp.minutes_since,
+                    CASE
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 1 THEN 10
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 6 THEN 30
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 24 THEN 120
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 168 THEN 360
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 720 THEN 1440
+                      WHEN (julianday(e.event_datetime)-julianday('now'))*24 < 2160 THEN 1440
+                      ELSE 10080
+                    END AS interval_min
+               FROM events e
+               LEFT JOIN last_poll lp ON lp.event_id = e.id
+              WHERE e.status != 'completed'
+                AND datetime(e.event_datetime) > datetime('now')
+                AND e.stubhub_url IS NOT NULL
+           )
+           SELECT id, title, team_slug, venue_slug,
+                  ROUND(h_until, 1) AS hours_until,
+                  ROUND(minutes_since / NULLIF(interval_min, 0), 1) AS overdue_ratio,
+                  CASE WHEN minutes_since IS NULL THEN 'never' ELSE 'overdue' END AS kind
+             FROM classified
+            WHERE (minutes_since IS NULL OR minutes_since > 3 * interval_min)
+            ORDER BY (minutes_since IS NULL) DESC, overdue_ratio DESC NULLS LAST
+            LIMIT 20`
+        )
+        .all();
+
+      // Counts (cheap sanity numbers)
+      result.counts = db
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*) FROM events WHERE status != 'completed' AND datetime(event_datetime) > datetime('now')) AS active_or_pending,
+             (SELECT COUNT(*) FROM events e WHERE e.status != 'completed' AND datetime(e.event_datetime) > datetime('now') AND NOT EXISTS (SELECT 1 FROM price_snapshots WHERE event_id=e.id)) AS never_polled,
+             (SELECT COUNT(DISTINCT event_id) FROM price_snapshots WHERE datetime(polled_at) > datetime('now','-60 minutes')) AS events_polled_60min`
+        )
+        .get();
+    } catch (e) {
+      result.events_error = String(e);
+    }
+  }
+
+  res.json(result);
+});
+
+
+// GET /api/tickets/errors-timeseries?hours=N — bucketed run counts (success / WAF / failed)
+// Buckets are sized so each window returns ~24-30 data points: enough resolution
+// to see trends without rendering hundreds of bars.
+router.get("/api/tickets/errors-timeseries", (req: Request, res: Response) => {
+  const hours = Math.max(1, Math.min(720, parseInt(String(req.query.hours ?? "24"), 10) || 24));
+  // Pick a bucket size that gives ~24-36 buckets across the window.
+  const bucketMinutes =
+    hours <= 3 ? 10
+      : hours <= 12 ? 30
+        : hours <= 24 ? 60
+          : hours <= 72 ? 180
+            : hours <= 168 ? 360 // 1w → 6h buckets (28 points)
+              : hours <= 720 ? 1440 // 1mo → 1d (30 points)
+                : 1440;
+  const bucketSeconds = bucketMinutes * 60;
+
+  try {
+    const msgDb = new Database(messagesDbPath, { readonly: true });
+    const cutoffIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+
+    // Pull raw run rows; we parse scraped/errors counts from the result text
+    // in JS rather than SQL because the run summaries are free-form.
+    const rawRuns = msgDb
+      .prepare(
+        `SELECT
+           (CAST(strftime('%s', run_at) AS INTEGER) / ${bucketSeconds}) * ${bucketSeconds} AS bucket_ts,
+           result, status
+         FROM task_run_logs
+         WHERE task_id LIKE ? AND run_at > ?
+         ORDER BY bucket_ts ASC`
+      )
+      .all(PRICER_TASK_ID_LIKE, cutoffIso) as Array<{
+        bucket_ts: number; result: string | null; status: string;
+      }>;
+
+    // Parse "N scraped" / "scraped: N" and "N errors" / "errors: N" patterns.
+    // We aggregate at event-level (not run-level) so a run with 6/7 success
+    // counts as 6 successes + 1 failure, not "1 failed run".
+    const parseCount = (text: string, ...patterns: RegExp[]): number => {
+      for (const re of patterns) {
+        const m = text.match(re);
+        if (m) {
+          for (let i = 1; i < m.length; i++) {
+            if (m[i] != null) return parseInt(m[i], 10);
+          }
+        }
+      }
+      return 0;
+    };
+
+    const bucketed = new Map<number, { runs: number; events_scraped: number; events_failed: number }>();
+    for (const r of rawRuns) {
+      const txt = r.result ?? "";
+      const scraped = parseCount(txt, /scraped:\s*(\d+)/i, /(\d+)\s+(?:events?\s+)?scraped/i);
+      const errors = parseCount(txt, /errors:\s*(\d+)/i, /(\d+)\s+(?:WAF\s+)?errors?/i);
+      const b = bucketed.get(r.bucket_ts) ?? { runs: 0, events_scraped: 0, events_failed: 0 };
+      b.runs += 1;
+      b.events_scraped += scraped;
+      // Treat task-level failure (status != success) as 1 failed event so the
+      // catastrophic-run case still shows up in the chart.
+      b.events_failed += errors + (r.status !== "success" && scraped === 0 && errors === 0 ? 1 : 0);
+      bucketed.set(r.bucket_ts, b);
+    }
+
+    const buckets = Array.from(bucketed.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([bucket_ts, v]) => ({ bucket_ts, ...v }));
+
+    msgDb.close();
+    res.json({ bucket_minutes: bucketMinutes, hours, buckets });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
 // GET /api/tickets/export/snapshots.csv — all price snapshots joined with event info
 router.get("/api/tickets/export/snapshots.csv", (_req: Request, res: Response) => {
   const db = openDb();
@@ -316,10 +510,17 @@ router.get("/api/tickets/export/snapshots.csv", (_req: Request, res: Response) =
   try {
     const rows = db
       .prepare(
+        // Weather columns come from price_snapshots (per-snapshot forecast)
+        // for rows captured after the per-snapshot weather change. Older rows
+        // fall back to the event's current forecast via COALESCE so the CSV
+        // never has gaps for historical data even though it loses snapshot-
+        // time fidelity for those.
         `SELECT ps.id as snapshot_id, ps.event_id,
                 e.team_slug, e.team_name, e.sport,
                 e.title, e.venue, e.event_datetime, e.status, e.is_home_game,
-                e.weather_high, e.weather_low, e.weather_precip_pct,
+                COALESCE(ps.weather_high, e.weather_high) AS weather_high,
+                COALESCE(ps.weather_low, e.weather_low) AS weather_low,
+                COALESCE(ps.weather_precip_pct, e.weather_precip_pct) AS weather_precip_pct,
                 ps.category, ps.polled_at, ps.days_until, ps.hours_until,
                 ps.lowest_price, ps.listing_count, ps.best_section
          FROM price_snapshots ps

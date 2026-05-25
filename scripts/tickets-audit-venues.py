@@ -55,8 +55,8 @@ def main():
           AND venue_slug IS NOT NULL
           AND status != 'completed'
           AND stubhub_url IS NOT NULL
-          AND event_datetime > datetime('now')
-        ORDER BY venue_slug, event_datetime
+          AND datetime(event_datetime) > datetime('now')
+        ORDER BY venue_slug, datetime(event_datetime)
     """).fetchall()
 
     one_per_venue = {}
