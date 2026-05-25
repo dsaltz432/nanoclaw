@@ -60,6 +60,7 @@ interface SenderAccumulator {
   messageId: string;
   labelIds: string[];
   newestEmailMs: number;
+  newestLabelIds: string[];
 }
 
 // --- Auth ---
@@ -221,6 +222,20 @@ const HISTORY_PATHS = [
   path.join(PROJECT_ROOT, 'groups', 'email', 'unsubscribe-history.json'),
 ];
 
+const SEEN_PATH = path.join(PROJECT_ROOT, 'groups', 'email', 'unsubscribe-seen.json');
+
+/** Load skip-list of sender emails the user has previously dismissed. */
+function loadSeenSenders(): Set<string> {
+  if (!fs.existsSync(SEEN_PATH)) return new Set();
+  try {
+    const data = JSON.parse(fs.readFileSync(SEEN_PATH, 'utf-8'));
+    const emails = data.seenSenderEmails || [];
+    return new Set(emails.map((e: string) => e.toLowerCase()));
+  } catch {
+    return new Set();
+  }
+}
+
 function loadUnsubscribeHistory(): { emails: Set<string>; entries: HistoryEntry[]; filePath: string | null } {
   const unsubscribedEmails = new Set<string>();
   let allEntries: HistoryEntry[] = [];
@@ -259,8 +274,12 @@ function updateLastSeen(
     const sender = bySender.get(entry.senderEmail?.toLowerCase());
     if (sender) {
       // Only mark as "still seen" if the newest email arrived after unsubscribe
+      // and isn't purely transactional (return/order/shipping notifications often
+      // come from the same address as marketing — Gmail labels them CATEGORY_UPDATES).
       const unsubTime = new Date(entry.unsubscribedAt || entry.date || '').getTime();
-      if (sender.newestEmailMs > unsubTime) {
+      const newest = sender.newestLabelIds;
+      const isTransactional = newest.includes('CATEGORY_UPDATES') && !newest.includes('CATEGORY_PROMOTIONS');
+      if (sender.newestEmailMs > unsubTime && !isTransactional) {
         entry.lastSeen = now;
         updated = true;
       }
@@ -340,6 +359,7 @@ async function main() {
       existing.subjects.push(subject);
       if (msg.internalDate > existing.newestEmailMs) {
         existing.newestEmailMs = msg.internalDate;
+        existing.newestLabelIds = msg.labelIds;
       }
       // Prefer the entry that has an unsubscribe URL
       if (!existing.unsubscribeUrl && unsubUrl) {
@@ -360,12 +380,14 @@ async function main() {
         messageId: msg.id,
         labelIds: msg.labelIds,
         newestEmailMs: msg.internalDate,
+        newestLabelIds: msg.labelIds,
       });
     }
   }
 
   // Filter out already-unsubscribed senders and update lastSeen
   const { emails: unsubscribedEmails, entries: historyEntries, filePath: historyPath } = loadUnsubscribeHistory();
+  const seenSenders = loadSeenSenders();
 
   // Update lastSeen for senders still emailing after unsubscribe
   if (historyPath) {
@@ -377,6 +399,7 @@ async function main() {
 
   for (const sender of bySender.values()) {
     if (unsubscribedEmails.has(sender.senderEmail)) continue;
+    if (seenSenders.has(sender.senderEmail)) continue;
 
     // Use the most recent/representative subject
     const subject = sender.subjects[0];
@@ -421,6 +444,13 @@ async function main() {
     if (now - unsubTime < GRACE_PERIOD_MS) continue; // still within grace period
     // Only flag if the sender's newest email arrived AFTER the unsubscribe date
     if (sender.newestEmailMs <= unsubTime) continue;
+    // Skip transactional follow-ups: order/return/shipping notifications often come
+    // from the same address as marketing. Gmail labels these CATEGORY_UPDATES.
+    // Only flag as "still emailing" if the newest message looks promotional —
+    // either CATEGORY_PROMOTIONS or no UPDATES label at all (i.e. a list:* newsletter).
+    const newest = sender.newestLabelIds;
+    const isTransactional = newest.includes('CATEGORY_UPDATES') && !newest.includes('CATEGORY_PROMOTIONS');
+    if (isTransactional) continue;
     stillEmailing.push({
       senderName: sender.senderName,
       senderEmail: sender.senderEmail,
@@ -430,6 +460,9 @@ async function main() {
   }
 
   console.log(`Candidates after filtering: ${candidates.length}`);
+  if (seenSenders.size > 0) {
+    console.log(`Skipped ${seenSenders.size} sender(s) on the seen-list`);
+  }
   if (stillEmailing.length > 0) {
     console.log(`Still emailing after unsubscribe: ${stillEmailing.length}`);
   }
