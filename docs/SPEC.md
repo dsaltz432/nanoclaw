@@ -295,7 +295,8 @@ nanoclaw/
 │       └── add-parallel/SKILL.md       # /add-parallel - Parallel agents
 │
 ├── groups/
-│   ├── CLAUDE.md                  # Global memory (all groups read this)
+│   ├── global/
+│   │   └── CLAUDE.md              # Global memory (injected into non-main groups)
 │   ├── {channel}_main/             # Main control channel (e.g., whatsapp_main/)
 │   │   ├── CLAUDE.md              # Main channel memory
 │   │   └── logs/                  # Task execution logs
@@ -426,30 +427,40 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
 
 ### Memory Hierarchy
 
-| Level | Location | Read By | Written By | Purpose |
-|-------|----------|---------|------------|---------|
-| **Global** | `groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
-| **Group** | `groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
-| **Files** | `groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
+| Level | Location | Read By | Writable from containers? | Purpose |
+|-------|----------|---------|---------------------------|---------|
+| **Global** | `groups/global/CLAUDE.md` | Non-main groups only | No (read-only mount; curated host-side) | Preferences, facts, context shared across conversations |
+| **Group** | `groups/{name}/CLAUDE.md` | That group | Yes (that group) | Group-specific context, conversation memory |
+| **Files** | `groups/{name}/*.md` | That group | Yes (that group) | Notes, research, documents created during conversation |
+
+> The repo-root `CLAUDE.md` is **not** part of this hierarchy — it is Claude Code project
+> instructions for developers working on the repo, and is never loaded into a runtime agent.
 
 ### How Memory Works
 
-1. **Agent Context Loading**
-   - Agent runs with `cwd` set to `groups/{group-name}/`
-   - Claude Agent SDK with `settingSources: ['project']` automatically loads:
-     - `../CLAUDE.md` (parent directory = global memory)
-     - `./CLAUDE.md` (current directory = group memory)
+1. **Agent Context Loading** (see `container/agent-runner/src/index.ts`)
+   - The agent runs with `cwd` set to `/workspace/group` (the group folder is bind-mounted
+     there). With `settingSources: ['project', 'user']`, the Claude Agent SDK auto-loads
+     `./CLAUDE.md` — the **group memory**. The cwd's parent (`/workspace`) holds no CLAUDE.md,
+     so the upward walk picks up nothing else.
+   - **Global memory** is handled separately: for non-main groups, `groups/global/CLAUDE.md`
+     is bind-mounted read-only at `/workspace/global`, read by the agent-runner, and **appended
+     to the `claude_code` preset system prompt**. It is *not* loaded via the directory walk.
+   - Main does **not** receive global memory (the global mount lives only in the non-main
+     branch of `buildVolumeMounts`).
 
 2. **Writing Memory**
-   - When user says "remember this", agent writes to `./CLAUDE.md`
-   - When user says "remember this globally" (main channel only), agent writes to `../CLAUDE.md`
-   - Agent can create files like `notes.md`, `research.md` in the group folder
+   - When user says "remember this", the agent writes to `./CLAUDE.md` (its own group memory).
+   - The agent can create files like `notes.md`, `research.md` in the group folder.
+   - **Global memory is read-only to every container** (the mount is read-only for non-main,
+     and main never mounts it). Edit `groups/global/CLAUDE.md` on the host to change it.
 
 3. **Main Channel Privileges**
-   - Only the "main" group (self-chat) can write to global memory
-   - Main can manage registered groups and schedule tasks for any group
-   - Main can configure additional directory mounts for any group
-   - All groups have Bash access (safe because it runs inside container)
+   - Main can manage registered groups and schedule tasks for any group.
+   - Main can configure additional directory mounts for any group.
+   - Main gets the project root bind-mounted read-only at `/workspace/project` (it can `Read`
+     repo files as a tool action, but they are not loaded as ambient memory).
+   - All groups have Bash access (safe because it runs inside the container).
 
 ---
 

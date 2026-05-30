@@ -93,10 +93,10 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - Unregistered groups are ignored completely
 
 ### Memory System
-- **Per-group memory**: Each group has a folder with its own `CLAUDE.md`
-- **Global memory**: Root `CLAUDE.md` is read by all groups, but only writable from "main" (self-chat)
+- **Per-group memory**: Each group has a folder with its own `CLAUDE.md`, auto-loaded because the agent's `cwd` is that folder
+- **Global memory**: `groups/global/CLAUDE.md`, injected into **non-main** groups only (appended to the system prompt); read-only to containers, so it's curated host-side. The repo-root `CLAUDE.md` is **not** runtime memory — it's Claude Code project instructions for developers.
 - **Files**: Groups can create/read files in their folder and reference them
-- Agent runs in the group's folder, automatically inherits both CLAUDE.md files
+- See [SPEC.md](SPEC.md#memory-system) for the exact loading mechanism
 
 ### Session Management
 - Each group maintains a conversation session (via Claude Agent SDK)
@@ -127,7 +127,7 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 
 ### Main Channel Privileges
 - Main channel is the admin/control group (typically self-chat)
-- Can write to global memory (`groups/CLAUDE.md`)
+- Gets the project root mounted read-only (other groups don't); global memory (`groups/global/CLAUDE.md`) is read-only to all containers and curated host-side
 - Can schedule tasks for any group
 - Can view and manage tasks from all groups
 - Can configure additional directory mounts for any group

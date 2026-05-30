@@ -1,6 +1,6 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions. See [docs/host-cronjobs.md](docs/host-cronjobs.md) for the host-side launchd cronjob pattern (templates, install scripts, scheduling flavors).
 
 ## Quick Context
 
@@ -21,6 +21,10 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 | `dashboard/` | Command Center web dashboard (separate process) |
+
+## Memory
+
+Group and global memory are CLAUDE.md files loaded into the *runtime agent containers* — distinct from this file. Global memory is `groups/global/CLAUDE.md`, injected into non-main groups only; per-group memory is `groups/{name}/CLAUDE.md`. **This root `CLAUDE.md` is not loaded by runtime agents** — it's project instructions for Claude Code dev sessions. Full mechanics: [docs/SPEC.md](docs/SPEC.md#memory-system) and [groups/README.md](groups/README.md).
 
 ## Skills
 
@@ -67,132 +71,19 @@ systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
 ```
 
-## Sleep Prevention
+## Operational Subsystems
 
-macOS can enter "Maintenance Sleep" even with "prevent sleep" checked in Energy Saver, which kills scheduled tasks overnight. A `caffeinate -s` launchd service prevents this while on AC power.
+Each subsystem has a dedicated doc with its component table, schedule, service-management commands, and new-machine setup. The shared host launchd plist pattern lives in [docs/host-cronjobs.md](docs/host-cronjobs.md).
 
-| Component | Location |
-|-----------|----------|
-| Plist | `com.nanoclaw.caffeinate.plist` |
-| LaunchAgent | `~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist` |
+| Subsystem | Doc | At a glance |
+|-----------|-----|-------------|
+| Health Watchdog | [docs/health-watchdog.md](docs/health-watchdog.md) | Heartbeat + HC.io dead-man's switch; alerts to Telegram `Alerts` (`tg:-5235132441`). Scheduled task `Health Watchdog`, cron `*/30 * * * *`. |
+| Email Unsubscribe Curator | [docs/email-unsubscribe.md](docs/email-unsubscribe.md) | Host script scans Gmail metadata; agent does browser unsubscribes. Scheduled task `Email Unsubscribe Analyzer`, cron `25 6 * * *`. |
+| Sports Briefing | [docs/sports-briefing.md](docs/sports-briefing.md) | Daily HTML sports briefing → `gs://sports-briefings/`. Scheduled task `Sports Briefing Scout`, cron `15 21 * * *`. |
+| Strava Trips | [docs/strava-trips.md](docs/strava-trips.md) | Publish grouped Strava activities as public HTML → `gs://strava-trips/`. Re-render: `npx tsx scripts/republish-trips.ts`. |
+| Dashboard (Command Center) | [docs/dashboard.md](docs/dashboard.md) | React monitoring UI at `http://<host-ip>:3100`. Separate process. |
 
-```bash
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist    # start
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.caffeinate.plist  # stop
-```
-
-## Health Watchdog
-
-Continuous self-monitoring. A host-side heartbeat script (every 5 min) dumps `launchctl` + disk state to a snapshot file and pings Healthchecks.io as a dead-man's switch. A NanoClaw scheduled task (every 30 min) reads that snapshot, the SQLite task history, recent container logs, and service error logs — and messages the dedicated `Alerts` Telegram chat *only* when something is off. No daily "all clear" heartbeat: silence in `Alerts` means healthy. HC.io covers the case where the host or NanoClaw itself goes silent.
-
-Alerts go to their own chat / group folder (`telegram_ops`) so the watchdog never queues behind `telegram_main` user activity.
-
-| Component | Location |
-|-----------|----------|
-| Heartbeat script | `scripts/heartbeat.sh` |
-| Heartbeat plist template | `launchd/com.nanoclaw.heartbeat.plist` |
-| LaunchAgent (installed) | `~/Library/LaunchAgents/com.nanoclaw.heartbeat.plist` |
-| HC.io ping URL | `~/.config/nanoclaw/healthchecks-ping-url` (not in repo) |
-| Host snapshot | `data/health-probe/{launchctl,disk,timestamp}.txt` |
-| Alerts chat | Telegram "Alerts" group, JID `tg:-5235132441` |
-| Group folder | `groups/telegram_ops/` (CLAUDE.md + watchdog-state.json) |
-| Heartbeat logs | `logs/heartbeat.log`, `logs/heartbeat.error.log` |
-
-**Scheduled task in SQLite:** `Health Watchdog` — cron `*/30 * * * *`, `context_mode: isolated`, `group_folder: telegram_ops`, `chat_jid: tg:-5235132441`.
-
-**Topology:** Three layers cover three failure modes.
-1. **HC.io alerts** = host machine is down, NanoClaw service is dead, or heartbeat plist itself is wedged (no pings in 10+ min).
-2. **Watchdog alerts** = a sub-process / scheduled task / container run is misbehaving while everything else is fine.
-3. **Daily ✓ heartbeat at 08:00 ET** = positive signal that the watchdog itself is running. Silence + no ✓ = watchdog is dead.
-
-```bash
-# Service management (macOS)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.heartbeat.plist     # start
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.heartbeat.plist   # stop
-
-# Manual test
-bash scripts/heartbeat.sh && cat data/health-probe/launchctl.txt
-
-# Full setup on new machine
-# 1. Create a Healthchecks.io check (5-min schedule, 10-min grace) and save the
-#    ping URL to ~/.config/nanoclaw/healthchecks-ping-url
-# 2. Install the plist with project-root + home substituted (same pattern as
-#    the email-metadata plist).
-# 3. The scheduled task is in SQLite; if missing on a new machine, recreate it.
-```
-
-## Email Unsubscribe Curator
-
-Daily email cleanup: a host-side script scans Gmail metadata (no bodies, no LLM), then the agent analyzes candidates and handles browser-based unsubscribes.
-
-| Component | Location |
-|-----------|----------|
-| Metadata extractor script | `scripts/email-metadata-extractor.ts` |
-| Gmail auth script | `scripts/gmail-auth.ts` |
-| Launchd plist template | `launchd/com.nanoclaw.email-metadata.plist` |
-| LaunchAgent (installed) | `~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist` |
-| Agent instructions | `groups/main/CLAUDE.md` (Email Unsubscribe Curator section) |
-| Setup skill | `.claude/skills/email-unsubscribe/SKILL.md` |
-| Scan output | `data/email-unsubscribe/` |
-| Unsubscribe history | `groups/email/unsubscribe-history.json` |
-| Gmail credentials | `~/.gmail-mcp/` (not in repo) |
-| Logs | `logs/email-metadata.log`, `logs/email-metadata.error.log` |
-
-**Scheduled task in SQLite:** `Email Unsubscribe Analyzer` — cron `25 6 * * *` (6:25 AM ET), `context_mode: isolated`, `group_folder: email`. Must be recreated on new machine via `/email-unsubscribe`.
-
-```bash
-# Service management (macOS)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist    # start
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.email-metadata.plist  # stop
-
-# Manual test
-npx tsx scripts/email-metadata-extractor.ts
-
-# Full setup on new machine
-# 1. Run /email-unsubscribe (installs plist + creates scheduled task)
-# 2. If Gmail token expired: npx tsx scripts/gmail-auth.ts
-```
-
-## Sports Briefing
-
-Daily scout (9:15 PM ET) checks for upcoming sporting events and offers to generate a shareable HTML briefing. Agent saves HTML to `data/briefings/`, a launchd `WatchPaths` job uploads it to `gs://sports-briefings/`, and the agent sends the public URL.
-
-| Component | Location |
-|-----------|----------|
-| Container skill | `container/skills/sports-briefing/SKILL.md` |
-| Upload script | `scripts/upload-briefing.sh` |
-| Upload watcher plist | `launchd/com.nanoclaw.briefing-upload.plist` |
-| GCS bucket (public) | `gs://sports-briefings/` |
-
-**Scheduled task in SQLite:** `Sports Briefing Scout` — cron `15 21 * * *`, `context_mode: group`, `group_folder: sports-briefings`.
-
-## Dashboard (Command Center)
-
-Separate Node.js process serving a React web UI for monitoring NanoClaw. Accessible on the local network at `http://<host-ip>:3100`.
-
-| Component | Location |
-|-----------|----------|
-| Frontend (React/Vite) | `dashboard/src/` |
-| Backend (Express) | `dashboard/server/` |
-| Launchd plist | `dashboard/com.nanoclaw.dashboard.plist` |
-| Logs | `dashboard/logs/` |
-
-Sections: Scheduled Tasks (Daily/Weekly/Ad-Hoc), Groups, Containers (live), Projects, Beacon Intel, Mortgage Rates, Email Unsub.
-
-```bash
-# Development
-cd dashboard && npm run dev
-
-# Rebuild frontend after changes
-cd dashboard && npx vite build
-
-# Service management (macOS)
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw.dashboard  # restart
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.dashboard.plist  # stop
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.dashboard.plist    # start
-```
-
-Config: password via `DASHBOARD_PASSWORD` env var, port via `DASHBOARD_PORT` (default 3100). Reads NanoClaw's SQLite DB (read-only) and shells out to `docker ps` for live container status.
+**Sleep Prevention:** a `caffeinate -s` launchd service (`com.nanoclaw.caffeinate.plist`) keeps macOS from entering "Maintenance Sleep" (which kills overnight scheduled tasks) while on AC power. Listed in [docs/host-cronjobs.md](docs/host-cronjobs.md).
 
 ## Troubleshooting
 
