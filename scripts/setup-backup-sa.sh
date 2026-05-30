@@ -11,7 +11,7 @@
 set -euo pipefail
 
 PROJECT_ID="nanoclaw-489701"
-BUCKETS=("nanoclaw-backups" "sports-briefings")
+BUCKETS=("nanoclaw-backups" "sports-briefings" "strava-trips")
 SA_NAME="nanoclaw-backup"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 KEY_DIR="${HOME}/.gcp"

@@ -87,6 +87,82 @@ function sportColor(type: string) {
   return SPORT_COLORS[type] ?? "#6b7280";
 }
 
+const SPORT_ICONS: Record<string, string> = {
+  Run: "🏃",
+  TrailRun: "🏃",
+  Ride: "🚴",
+  VirtualRide: "🚴",
+  Swim: "🏊",
+  Walk: "🚶",
+  Hike: "🥾",
+  WeightTraining: "🏋️",
+  Yoga: "🧘",
+  Workout: "💪",
+  Soccer: "⚽",
+  Pickleball: "🏓",
+  NordicSki: "⛷️",
+  Tennis: "🎾",
+  Snowshoe: "🥾",
+  Kayaking: "🛶",
+};
+
+function sportIcon(type: string) {
+  return SPORT_ICONS[type] ?? "🏃";
+}
+
+const LEG_COLORS = [
+  "#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4",
+  "#a855f7", "#ec4899", "#14b8a6", "#f97316", "#3b82f6",
+];
+
+function legColor(i: number): string {
+  return LEG_COLORS[i % LEG_COLORS.length] ?? "#6366f1";
+}
+
+// Per-trip sport-text overrides. Only changes the displayed label (icon and
+// color still derive from the underlying Strava `sport_type`). Mirrors the
+// same map in server/lib/render-trip-html.ts — keep in sync if you add trips.
+const TRIP_SPORT_LABEL_OVERRIDES: Record<number, Record<string, string>> = {
+  6: { Run: "Hike" }, // Climbing Kilimanjaro
+};
+function overrideSportLabel(tripId: number, sport: string): string {
+  return TRIP_SPORT_LABEL_OVERRIDES[tripId]?.[sport] ?? sport;
+}
+
+function formatDateRange(start: string | null, end: string | null): string {
+  if (!start) return "";
+  const s = new Date(start + "T00:00:00");
+  if (!end || start === end) {
+    return s.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+  const e = new Date(end + "T00:00:00");
+  const sameYear = s.getFullYear() === e.getFullYear();
+  const sameMonth = sameYear && s.getMonth() === e.getMonth();
+  if (sameMonth) {
+    return `${s.toLocaleDateString("en-US", { month: "short", day: "numeric" })}–${e.getDate()}, ${e.getFullYear()}`;
+  }
+  if (sameYear) {
+    return `${s.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${e.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${e.getFullYear()}`;
+  }
+  return `${s.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} – ${e.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
+// Day number of a leg within its trip (1-indexed, calendar-based — multiple
+// legs on the same calendar date all return the same number).
+function dayNumber(legDate: string, anchor: string | null | undefined): number {
+  if (!anchor) return 1;
+  const leg = new Date(legDate.substr(0, 10) + "T00:00:00").getTime();
+  const start = new Date(anchor.substr(0, 10) + "T00:00:00").getTime();
+  return Math.max(1, Math.round((leg - start) / 86400000) + 1);
+}
+
+function countDays(start: string | null, end: string | null): number {
+  if (!start || !end) return 1;
+  const s = new Date(start + "T00:00:00").getTime();
+  const e = new Date(end + "T00:00:00").getTime();
+  return Math.max(1, Math.round((e - s) / 86400000) + 1);
+}
+
 function fmtDistance(meters: number) {
   return (meters / 1000).toFixed(1) + " km";
 }
@@ -244,6 +320,61 @@ function PolylineMap({ encoded }: { encoded: string }) {
   );
 }
 
+function MultiLegMap({
+  polylines,
+  height,
+}: {
+  polylines: { encoded: string; color: string; label?: string }[];
+  height?: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    if (!polylines.length) return;
+
+    const map = L.map(containerRef.current, {
+      zoomControl: true,
+      scrollWheelZoom: false,
+      attributionControl: false,
+      // Fractional zoom so fitBounds can land between integer levels and pack
+      // the routes tighter against the visible area.
+      zoomSnap: 0.1,
+    });
+    mapRef.current = map;
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+    }).addTo(map);
+
+    let union: L.LatLngBounds | null = null;
+    polylines.forEach(({ encoded, color }) => {
+      const pts = decodePolyline(encoded);
+      if (pts.length < 2) return;
+      const line = L.polyline(pts, { color, weight: 3.5, opacity: 0.85 }).addTo(map);
+      const b = line.getBounds();
+      union = union ? union.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+    });
+    if (union) {
+      map.fitBounds(union, { padding: [4, 4] });
+    }
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [polylines]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full overflow-hidden"
+      style={{ height: height ?? 220 }}
+    />
+  );
+}
+
 // ── Activity Streams Chart ────────────────────────────────────────────────────
 
 interface Streams {
@@ -296,7 +427,8 @@ function StreamsChart({ activityId, sportType }: { activityId: number; sportType
   }
 
   // Only show elevation if there's meaningful gain/loss (>5m range)
-  const altRaw = streams.altitude;
+  // Floor altitude at 0 — GPS noise can produce negative values for sea-level activities
+  const altRaw = streams.altitude ? streams.altitude.map((v) => Math.max(0, v)) : null;
   const altRange = altRaw ? Math.max(...altRaw) - Math.min(...altRaw) : 0;
   const alt = altRaw && altRange > 5 ? normalize(altRaw) : null;
   const hr  = streams.heartrate ? normalize(streams.heartrate) : null;
@@ -317,7 +449,7 @@ function StreamsChart({ activityId, sportType }: { activityId: number; sportType
   const hov = hovIdx !== null ? hovIdx : null;
   const distKm = hov !== null && streams.distance ? (streams.distance[hov] / 1000).toFixed(2) : null;
   const hovHr  = hov !== null && streams.heartrate ? Math.round(streams.heartrate[hov]) : null;
-  const hovAlt = hov !== null && streams.altitude  ? Math.round(streams.altitude[hov])  : null;
+  const hovAlt = hov !== null && altRaw ? Math.round(altRaw[hov] ?? 0) : null;
   const hovVel = hov !== null && velRaw            ? velRaw[hov]                         : null;
   const hovPaceStr = hovVel && hovVel > 0.5 && running
     ? `${Math.floor(1000/(hovVel*60))}:${String(Math.round((1000/(hovVel*60) % 1)*60)).padStart(2,"0")}/km`
@@ -479,7 +611,7 @@ function ActivityDetailModal({ activityId, onClose }: { activityId: number; onCl
   const running = detail ? isRun(detail.sport_type) : false;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className="fixed inset-0 z-[2000] flex items-end sm:items-center justify-center p-0 sm:p-4">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
@@ -557,16 +689,13 @@ function ActivityDetailModal({ activityId, onClose }: { activityId: number; onCl
             {/* Secondary stats */}
             <div className="grid grid-cols-2 gap-2 mb-4">
               {detail.total_elevation_gain > 0 && (
-                <Stat icon="⬆️" label="Elevation" value={`${Math.round(detail.total_elevation_gain)} m`} />
+                <Stat icon="⬆️" label="Elevation" value={`${Math.round(detail.total_elevation_gain).toLocaleString()} m`} />
               )}
               {detail.average_heartrate != null && (
                 <Stat icon="❤️" label="Avg HR" value={`${Math.round(detail.average_heartrate)} bpm`} />
               )}
               {detail.max_heartrate != null && (
                 <Stat icon="💓" label="Max HR" value={`${Math.round(detail.max_heartrate)} bpm`} />
-              )}
-              {detail.max_speed > 0 && (
-                <Stat icon="⚡" label="Max Speed" value={fmtSpeed(detail.max_speed)} />
               )}
               {detail.average_watts != null && detail.average_watts > 0 && (
                 <Stat icon="⚡" label="Avg Power" value={`${Math.round(detail.average_watts)} W`} />
@@ -679,7 +808,7 @@ function ActivityCard({ activity, onOpen }: { activity: Activity; onOpen: (id: n
           )}
           {activity.total_elevation_gain > 0 && (
             <span className="text-xs text-gray-500">
-              ⬆️ {Math.round(activity.total_elevation_gain)}m
+              ⬆️ {Math.round(activity.total_elevation_gain).toLocaleString()}m
             </span>
           )}
           {activity.suffer_score != null && activity.suffer_score > 0 && (
@@ -1364,14 +1493,1412 @@ function TrendsTab({ athleteId }: { athleteId: number }) {
 
 // ── Athlete Section ───────────────────────────────────────────────────────────
 
-type AthleteTab = "calendar" | "stats" | "activities" | "trends" | "ask";
+type AthleteTab = "calendar" | "stats" | "activities" | "trips" | "trends" | "ask";
 const ATHLETE_TABS: { key: AthleteTab; label: string; icon: string }[] = [
   { key: "calendar", label: "Calendar", icon: "📅" },
   { key: "stats", label: "Breakdown", icon: "📊" },
   { key: "activities", label: "Activities", icon: "🏃" },
+  { key: "trips", label: "Trips", icon: "🗺️" },
   { key: "trends", label: "Trends", icon: "📈" },
   { key: "ask", label: "Ask", icon: "🤖" },
 ];
+
+// ── Trips Tab ─────────────────────────────────────────────────────────────────
+
+interface TripGroupSummary {
+  id: number;
+  athlete_id: number;
+  name: string;
+  description: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  leg_count: number;
+  total_distance_m: number;
+  total_moving_time_s: number;
+  total_elapsed_time_s: number;
+  total_elevation_m: number;
+  sport_types: string[];
+  polylines: string[];
+}
+
+interface TripGroupMember {
+  id: number;
+  name: string;
+  sport_type: string;
+  start_date_local: string;
+  distance: number | null;
+  moving_time: number | null;
+  elapsed_time: number | null;
+  total_elevation_gain: number | null;
+  average_heartrate: number | null;
+  map_summary_polyline: string | null;
+  leg_order: number;
+}
+
+interface TripTravelLeg {
+  id: number;
+  mode: string;            // 'train' | 'ferry' | 'plane' | 'bus' | 'car'
+  start_date: string;
+  start_lat: number;
+  start_lng: number;
+  start_label: string | null;
+  end_lat: number;
+  end_lng: number;
+  end_label: string | null;
+  notes: string | null;
+}
+
+const TRAVEL_MODES = ["train", "ferry", "plane", "bus", "car"] as const;
+const TRAVEL_MODE_ICON: Record<string, string> = {
+  train: "🚂", ferry: "⛴", plane: "✈️", bus: "🚌", car: "🚗",
+};
+const travelIcon = (mode: string) => TRAVEL_MODE_ICON[mode] ?? "→";
+
+interface TripGroupDetail {
+  id: number;
+  athlete_id: number;
+  name: string;
+  description: string | null;
+  photos_url: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  updated_at: string;
+  published_slug: string | null;
+  published_at: string | null;
+  members: TripGroupMember[];
+  travel_legs?: TripTravelLeg[];
+  totals: {
+    distance_m: number;
+    moving_time_s: number;
+    elapsed_time_s: number;
+    elevation_m: number;
+    kilojoules: number;
+    avg_hr: number | null;
+    calories: number;
+  };
+  sport_breakdown: Record<string, number>;
+}
+
+function isMultiSportSummary(g: TripGroupSummary): boolean {
+  return g.sport_types.length > 1 && g.start_date === g.end_date;
+}
+
+function isMultiSportDetail(members: TripGroupMember[]): boolean {
+  if (members.length < 2) return false;
+  const dates = new Set(members.map((m) => m.start_date_local.substr(0, 10)));
+  const sports = new Set(members.map((m) => m.sport_type));
+  return dates.size === 1 && sports.size > 1;
+}
+
+function TripsTab({ athleteId }: { athleteId: number }) {
+  const [groups, setGroups] = useState<TripGroupSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetch(`/api/strava/groups?athlete_id=${athleteId}`)
+      .then((r) => r.json())
+      .then(setGroups)
+      .catch(() => setGroups([]))
+      .finally(() => setLoading(false));
+  }, [athleteId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (selectedId != null) {
+    return (
+      <TripDetailView
+        groupId={selectedId}
+        athleteId={athleteId}
+        onBack={() => {
+          setSelectedId(null);
+          load();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-gray-400">
+          {groups.length} {groups.length === 1 ? "trip" : "trips"}
+        </h3>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="rounded-lg bg-indigo-500/20 border border-indigo-500/40 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/30 transition-colors"
+        >
+          + New Trip
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-gray-500 py-4">Loading...</div>
+      ) : groups.length === 0 ? (
+        <div className="py-12 text-center text-sm text-gray-500">
+          No trips yet.<br />
+          Click <span className="text-indigo-400">+ New Trip</span> to combine activities into a multi-day adventure or multi-sport event.
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {groups.map((g) => (
+            <TripCard
+              key={g.id}
+              group={g}
+              onOpen={() => setSelectedId(g.id)}
+              onDeleted={() => load()}
+            />
+          ))}
+        </div>
+      )}
+
+      {showCreate && (
+        <CreateGroupModal
+          athleteId={athleteId}
+          onClose={() => setShowCreate(false)}
+          onCreated={(newId) => {
+            setShowCreate(false);
+            load();
+            setSelectedId(newId);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TripCard({
+  group,
+  onOpen,
+  onDeleted,
+}: {
+  group: TripGroupSummary;
+  onOpen: () => void;
+  onDeleted: () => void;
+}) {
+  const multisport = isMultiSportSummary(group);
+  const polylines = group.polylines.map((encoded, i) => ({
+    encoded,
+    color: multisport ? sportColor(group.sport_types[i] ?? "") : legColor(i),
+  }));
+  const dateRange = formatDateRange(group.start_date, group.end_date);
+  const days = countDays(group.start_date, group.end_date);
+
+  async function handleDelete(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm(`Delete "${group.name}"? Underlying activities are not affected.`)) return;
+    const r = await fetch(`/api/strava/groups/${group.id}`, { method: "DELETE" });
+    if (r.ok) onDeleted();
+  }
+
+  return (
+    <div
+      onClick={onOpen}
+      className="group relative text-left rounded-xl border border-gray-800 bg-gray-900 overflow-hidden hover:border-indigo-500/50 transition-colors cursor-pointer"
+    >
+      {/* Delete button — appears on hover, top-right corner */}
+      <button
+        type="button"
+        onClick={handleDelete}
+        title="Delete trip"
+        aria-label="Delete trip"
+        className="absolute top-2 right-2 z-10 w-6 h-6 rounded-full bg-gray-900/80 border border-gray-700 text-gray-400 hover:bg-red-500/20 hover:border-red-500/40 hover:text-red-300 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity flex items-center justify-center text-xs"
+      >
+        ✕
+      </button>
+      {polylines.length ? (
+        <div className="border-b border-gray-800">
+          <MultiLegMap polylines={polylines} height={128} />
+        </div>
+      ) : (
+        <div className="h-32 bg-gray-800/40 flex items-center justify-center text-xs text-gray-500 border-b border-gray-800">
+          No map data
+        </div>
+      )}
+      <div className="p-3">
+        <h4 className="text-sm font-semibold text-gray-100 truncate">
+          {group.name}
+        </h4>
+        <p className="text-xs text-gray-500 mt-0.5">
+          {dateRange}
+          {days > 1 ? ` · ${days} days` : ""}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {group.sport_types.map((st) => (
+            <span
+              key={st}
+              className="text-[10px] rounded-full px-1.5 py-0.5 border"
+              style={{ color: sportColor(st), borderColor: sportColor(st) + "55" }}
+            >
+              {sportIcon(st)} {overrideSportLabel(group.id, st)}
+            </span>
+          ))}
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <div>
+            <p className="text-gray-500 text-[10px]">Distance</p>
+            <p className="font-semibold text-gray-200">
+              {fmtDistance(group.total_distance_m)}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-500 text-[10px]">Moving Time</p>
+            <p className="font-semibold text-gray-200">
+              {fmtTime(group.total_moving_time_s)}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-500 text-[10px]">Elevation Gain</p>
+            <p className="font-semibold text-gray-200">
+              {Math.round(group.total_elevation_m).toLocaleString()} m
+            </p>
+          </div>
+        </div>
+        <p className="text-[10px] text-gray-600 mt-2">
+          {group.leg_count} {group.leg_count === 1 ? "leg" : "legs"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TripDetailView({
+  groupId,
+  athleteId,
+  onBack,
+}: {
+  groupId: number;
+  athleteId: number;
+  onBack: () => void;
+}) {
+  const [group, setGroup] = useState<TripGroupDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showEdit, setShowEdit] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [iframeHeight, setIframeHeight] = useState(900);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetch(`/api/strava/groups/${groupId}`)
+      .then((r) => r.json())
+      .then((d) => setGroup(d.error ? null : d))
+      .catch(() => setGroup(null))
+      .finally(() => setLoading(false));
+  }, [groupId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Listen for iframe self-reported height so we can size it to its content
+  // and avoid an inner scrollbar.
+  useEffect(() => {
+    function handler(e: MessageEvent) {
+      const d = e.data;
+      if (d && d.type === "trip-page-height" && typeof d.height === "number") {
+        setIframeHeight(Math.max(600, Math.ceil(d.height)));
+      }
+    }
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  async function handlePublish() {
+    setPublishing(true);
+    try {
+      const r = await fetch(`/api/strava/groups/${groupId}/publish`, { method: "POST" });
+      if (r.ok) load();
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleUnpublish() {
+    if (!confirm("Unpublish this trip? The public URL will stop working.")) return;
+    setPublishing(true);
+    try {
+      const r = await fetch(`/api/strava/groups/${groupId}/publish`, { method: "DELETE" });
+      if (r.ok) load();
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  function copyPublicUrl(url: string) {
+    const flash = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url).then(flash).catch(() => fallback(url, flash));
+    } else {
+      fallback(url, flash);
+    }
+  }
+
+  function fallback(url: string, onSuccess: () => void) {
+    const ta = document.createElement("textarea");
+    ta.value = url;
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      const ok = document.execCommand("copy");
+      if (ok) onSuccess();
+      else alert("Copy unsupported — select the URL manually.");
+    } catch {
+      alert("Copy unsupported — select the URL manually.");
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
+  if (loading)
+    return <div className="text-sm text-gray-500 py-4">Loading...</div>;
+  if (!group)
+    return (
+      <div className="text-sm text-gray-500 py-4">
+        Trip not found.{" "}
+        <button onClick={onBack} className="text-indigo-400 hover:underline">
+          ← Back
+        </button>
+      </div>
+    );
+
+  const dateRange = formatDateRange(group.start_date, group.end_date);
+  const days = countDays(group.start_date, group.end_date);
+  // Cache-bust the iframe whenever the trip is edited so the preview reflects latest data
+  const previewSrc = `/api/strava/groups/${groupId}/preview?v=${encodeURIComponent(group.updated_at)}`;
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="mb-4 flex items-start gap-3">
+        <button
+          onClick={onBack}
+          className="text-gray-400 hover:text-gray-200 text-sm pt-1"
+        >
+          ←
+        </button>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-lg font-semibold text-gray-100">{group.name}</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {dateRange}
+            {days > 1 ? ` · ${days} days` : ""} · {group.members.length} legs
+          </p>
+        </div>
+        <button
+          onClick={() => setShowEdit(true)}
+          className="text-xs text-indigo-400 hover:text-indigo-300 pt-1 px-2 py-1 rounded hover:bg-gray-800"
+        >
+          ✎ Edit
+        </button>
+      </div>
+
+      {/* Publish status strip — simplified: once published, edits auto-sync */}
+      {(() => {
+        const slug = group.published_slug;
+        const publicUrl = slug
+          ? `https://storage.googleapis.com/strava-trips/${slug}.html`
+          : null;
+
+        if (!slug) {
+          return (
+            <div className="mb-4 flex items-center gap-2">
+              <button
+                onClick={handlePublish}
+                disabled={publishing}
+                className="rounded-lg bg-indigo-500/20 border border-indigo-500/40 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/30 disabled:opacity-50 transition-colors"
+              >
+                {publishing ? "Publishing…" : "🔗 Publish public link"}
+              </button>
+              <span className="text-[11px] text-gray-500">
+                Generates a shareable read-only page; future edits auto-sync
+              </span>
+            </div>
+          );
+        }
+
+        return (
+          <div className="mb-4 rounded-lg border border-gray-800 bg-gray-900/40 p-2.5 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 font-medium bg-emerald-500/15 text-emerald-400">
+              Published ✓
+            </span>
+            <a
+              href={publicUrl!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 min-w-0 text-xs text-gray-300 hover:text-indigo-300 truncate"
+            >
+              {publicUrl}
+            </a>
+            <button
+              onClick={() => copyPublicUrl(publicUrl!)}
+              className="text-[11px] text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800"
+            >
+              {copied ? "Copied ✓" : "Copy"}
+            </button>
+            <button
+              onClick={handleUnpublish}
+              disabled={publishing}
+              className="text-[11px] text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-gray-800 disabled:opacity-50"
+            >
+              Unpublish
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* The trip view itself — same HTML that the public bucket serves. */}
+      <iframe
+        title={group.name}
+        src={previewSrc}
+        style={{ width: "100%", height: iframeHeight, border: "none", display: "block" }}
+        className="rounded-lg"
+      />
+
+      {showEdit && (
+        <EditTripModal
+          group={group}
+          athleteId={athleteId}
+          onClose={() => setShowEdit(false)}
+          onChanged={() => {
+            load();
+            setShowEdit(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditTripModal({
+  group,
+  athleteId,
+  onClose,
+  onChanged,
+}: {
+  group: TripGroupDetail;
+  athleteId: number;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [name, setName] = useState(group.name);
+  const [description, setDescription] = useState(group.description ?? "");
+  const [photosUrl, setPhotosUrl] = useState(group.photos_url ?? "");
+  // Local working copy of members so the user can stage removes/adds before saving
+  const [members, setMembers] = useState(group.members);
+  // Local working copy of travel legs (mutations write to server immediately,
+  // then we reflect the change here so the UI stays in sync without re-fetching).
+  const [travelLegs, setTravelLegs] = useState<TripTravelLeg[]>(group.travel_legs ?? []);
+  const [editingTravelLeg, setEditingTravelLeg] = useState<TripTravelLeg | "new" | null>(null);
+  const [showAddMembers, setShowAddMembers] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const dirty =
+    name.trim() !== group.name ||
+    (description || "").trim() !== (group.description ?? "").trim() ||
+    (photosUrl || "").trim() !== (group.photos_url ?? "").trim() ||
+    JSON.stringify(members.map((m) => m.id)) !==
+      JSON.stringify(group.members.map((m) => m.id));
+
+  function removeMember(id: number) {
+    if (members.length <= 1) {
+      alert("A trip must have at least one leg.");
+      return;
+    }
+    setMembers(members.filter((m) => m.id !== id));
+  }
+
+  async function save() {
+    setError(null);
+    if (!name.trim()) {
+      setError("Name cannot be empty");
+      return;
+    }
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {};
+      if (name.trim() !== group.name) body.name = name.trim();
+      if ((description || "").trim() !== (group.description ?? "").trim())
+        body.description = description.trim() || null;
+      if ((photosUrl || "").trim() !== (group.photos_url ?? "").trim())
+        body.photos_url = photosUrl.trim() || null;
+      const oldIds = group.members.map((m) => m.id);
+      const newIds = members.map((m) => m.id);
+      if (JSON.stringify(oldIds) !== JSON.stringify(newIds))
+        body.activity_ids = newIds;
+      if (Object.keys(body).length === 0) {
+        onChanged();
+        return;
+      }
+      const r = await fetch(`/api/strava/groups/${group.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        onChanged();
+      } else {
+        const data = await r.json().catch(() => ({}));
+        setError(data.error ?? "Save failed");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[2000] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div
+        className="w-full sm:max-w-2xl bg-gray-900 sm:rounded-xl border border-gray-700 flex flex-col"
+        style={{ maxHeight: "90vh" }}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <h3 className="text-base font-semibold text-gray-100">Edit Trip</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4 space-y-4">
+          <div>
+            <label className="text-xs font-medium text-gray-400">Name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-400">Description (optional)</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-400">Photo album URL</label>
+            <input
+              type="url"
+              value={photosUrl}
+              onChange={(e) => setPhotosUrl(e.target.value)}
+              placeholder="https://photos.app.goo.gl/..."
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-400">
+                Legs ({members.length})
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowAddMembers(true)}
+                className="text-[11px] text-indigo-400 hover:text-indigo-300"
+              >
+                + Add legs
+              </button>
+            </div>
+            <div className="rounded-lg border border-gray-800 divide-y divide-gray-800 max-h-72 overflow-auto">
+              {members.map((m, i) => (
+                <div
+                  key={m.id}
+                  className="px-3 py-2 hover:bg-gray-800/40 flex items-center gap-2 text-xs"
+                >
+                  <span className="w-6 text-gray-500">#{i + 1}</span>
+                  <span className="w-6">{sportIcon(m.sport_type)}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="text-gray-200 truncate block">{m.name}</span>
+                    <span className="text-gray-500">{fmtDate(m.start_date_local)}</span>
+                  </span>
+                  <button
+                    onClick={() => removeMember(m.id)}
+                    title="Remove from trip"
+                    className="text-gray-500 hover:text-red-400 px-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-400">
+                Travel Legs ({travelLegs.length})
+              </label>
+              <button
+                type="button"
+                onClick={() => setEditingTravelLeg("new")}
+                className="text-[11px] text-indigo-400 hover:text-indigo-300"
+              >
+                + Add travel leg
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-500 mb-2">
+              Trains, ferries, etc. — drawn as dashed lines on the map. Don't count toward trip totals.
+            </p>
+            {travelLegs.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-800 px-3 py-4 text-center text-xs text-gray-500">
+                No travel legs yet.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-gray-800 divide-y divide-gray-800 max-h-48 overflow-auto">
+                {[...travelLegs].sort((a, b) => a.start_date.localeCompare(b.start_date)).map((tl) => (
+                  <div
+                    key={tl.id}
+                    className="px-3 py-2 hover:bg-gray-800/40 flex items-center gap-2 text-xs"
+                  >
+                    <span className="w-6">{travelIcon(tl.mode)}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="text-gray-200 truncate block">
+                        {(tl.start_label || `${tl.start_lat.toFixed(2)},${tl.start_lng.toFixed(2)}`) +
+                          " → " +
+                          (tl.end_label || `${tl.end_lat.toFixed(2)},${tl.end_lng.toFixed(2)}`)}
+                      </span>
+                      <span className="text-gray-500">{fmtDate(tl.start_date)} · {tl.mode}</span>
+                    </span>
+                    <button
+                      onClick={() => setEditingTravelLeg(tl)}
+                      title="Edit"
+                      className="text-gray-500 hover:text-indigo-400 px-1"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!confirm("Delete this travel leg?")) return;
+                        const r = await fetch(
+                          `/api/strava/groups/${group.id}/travel-legs/${tl.id}`,
+                          { method: "DELETE" }
+                        );
+                        if (r.ok) {
+                          setTravelLegs(travelLegs.filter((x) => x.id !== tl.id));
+                          onChanged();
+                        }
+                      }}
+                      title="Delete"
+                      className="text-gray-500 hover:text-red-400 px-1"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {error && <div className="text-xs text-red-400">{error}</div>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-800">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800/40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving || !dirty || !name.trim()}
+            className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600 disabled:opacity-40"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+
+      {editingTravelLeg && (
+        <TravelLegModal
+          groupId={group.id}
+          members={members}
+          existing={editingTravelLeg === "new" ? null : editingTravelLeg}
+          onClose={() => setEditingTravelLeg(null)}
+          onSaved={(saved) => {
+            setTravelLegs((prev) => {
+              const without = prev.filter((x) => x.id !== saved.id);
+              return [...without, saved];
+            });
+            setEditingTravelLeg(null);
+            onChanged();
+          }}
+        />
+      )}
+
+      {showAddMembers && (
+        <AddMembersModal
+          athleteId={athleteId}
+          existingMemberIds={members.map((m) => m.id)}
+          initialDateFrom={group.start_date}
+          initialDateTo={group.end_date}
+          onClose={() => setShowAddMembers(false)}
+          onSubmit={(newActivities) => {
+            const additions: TripGroupMember[] = newActivities.map((a) => ({
+              id: a.id,
+              name: a.name,
+              sport_type: a.sport_type,
+              start_date_local: a.start_date_local,
+              distance: a.distance,
+              moving_time: a.moving_time,
+              elapsed_time: null,
+              total_elevation_gain: a.total_elevation_gain,
+              average_heartrate: a.average_heartrate,
+              map_summary_polyline: null,
+              leg_order: 0, // server resequences on save
+            }));
+            const merged = [...members, ...additions].sort((a, b) =>
+              a.start_date_local.localeCompare(b.start_date_local)
+            );
+            setMembers(merged);
+            setShowAddMembers(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TravelLegModal({
+  groupId,
+  members,
+  existing,
+  onClose,
+  onSaved,
+}: {
+  groupId: number;
+  members: TripGroupMember[];
+  existing: TripTravelLeg | null;
+  onClose: () => void;
+  onSaved: (saved: TripTravelLeg) => void;
+}) {
+  const [mode, setMode] = useState<string>(existing?.mode ?? "train");
+  const [startDate, setStartDate] = useState(existing?.start_date.slice(0, 10) ?? "");
+  const [startLabel, setStartLabel] = useState(existing?.start_label ?? "");
+  const [startLat, setStartLat] = useState<string>(existing ? String(existing.start_lat) : "");
+  const [startLng, setStartLng] = useState<string>(existing ? String(existing.start_lng) : "");
+  const [endLabel, setEndLabel] = useState(existing?.end_label ?? "");
+  const [endLat, setEndLat] = useState<string>(existing ? String(existing.end_lat) : "");
+  const [endLng, setEndLng] = useState<string>(existing ? String(existing.end_lng) : "");
+  const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Endpoint-from-activity picker: derive start/end coords from a member's polyline.
+  type EndpointOption = { key: string; label: string; lat: number; lng: number };
+  const endpointOptions: EndpointOption[] = members.flatMap((m) => {
+    if (!m.map_summary_polyline) return [];
+    const pts = decodePolyline(m.map_summary_polyline);
+    if (pts.length < 2) return [];
+    const start = pts[0]!;
+    const end = pts[pts.length - 1]!;
+    return [
+      {
+        key: `${m.id}-start`,
+        label: `Start of "${m.name}" (${fmtDate(m.start_date_local)})`,
+        lat: start[0],
+        lng: start[1],
+      },
+      {
+        key: `${m.id}-end`,
+        label: `End of "${m.name}" (${fmtDate(m.start_date_local)})`,
+        lat: end[0],
+        lng: end[1],
+      },
+    ];
+  });
+
+  function applyEndpoint(which: "start" | "end", key: string) {
+    if (!key) return;
+    const opt = endpointOptions.find((o) => o.key === key);
+    if (!opt) return;
+    if (which === "start") {
+      setStartLat(opt.lat.toFixed(5));
+      setStartLng(opt.lng.toFixed(5));
+    } else {
+      setEndLat(opt.lat.toFixed(5));
+      setEndLng(opt.lng.toFixed(5));
+    }
+  }
+
+  async function save() {
+    setError(null);
+    const sLat = Number(startLat), sLng = Number(startLng);
+    const eLat = Number(endLat), eLng = Number(endLng);
+    if (!startDate) return setError("Date is required");
+    if (Number.isNaN(sLat) || Number.isNaN(sLng) || Number.isNaN(eLat) || Number.isNaN(eLng))
+      return setError("All four coordinates are required");
+    const body = {
+      mode,
+      start_date: startDate,
+      start_lat: sLat,
+      start_lng: sLng,
+      start_label: startLabel.trim() || null,
+      end_lat: eLat,
+      end_lng: eLng,
+      end_label: endLabel.trim() || null,
+      notes: notes.trim() || null,
+    };
+    setSaving(true);
+    try {
+      const url = existing
+        ? `/api/strava/groups/${groupId}/travel-legs/${existing.id}`
+        : `/api/strava/groups/${groupId}/travel-legs`;
+      const r = await fetch(url, {
+        method: existing ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setError(data.error ?? "Save failed");
+        return;
+      }
+      const saved = await r.json();
+      onSaved({
+        id: existing?.id ?? saved.id,
+        mode: saved.mode,
+        start_date: saved.start_date,
+        start_lat: saved.start_lat,
+        start_lng: saved.start_lng,
+        start_label: saved.start_label,
+        end_lat: saved.end_lat,
+        end_lng: saved.end_lng,
+        end_label: saved.end_label,
+        notes: saved.notes,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[2100] bg-black/70 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-gray-900 rounded-xl border border-gray-700 flex flex-col" style={{ maxHeight: "90vh" }}>
+        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <h3 className="text-base font-semibold text-gray-100">
+            {existing ? "Edit travel leg" : "Add travel leg"}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200">✕</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3 text-xs">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-gray-400">Mode</label>
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              >
+                {TRAVEL_MODES.map((m) => (
+                  <option key={m} value={m}>{travelIcon(m)} {m}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-gray-400">Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-800 p-3 space-y-2">
+            <div className="text-gray-400 font-medium">From</div>
+            {endpointOptions.length > 0 && (
+              <select
+                onChange={(e) => { applyEndpoint("start", e.target.value); e.target.value = ""; }}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-300"
+                defaultValue=""
+              >
+                <option value="">Pre-fill from activity endpoint…</option>
+                {endpointOptions.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            )}
+            <input
+              placeholder="Label (e.g. Perpignan)"
+              value={startLabel}
+              onChange={(e) => setStartLabel(e.target.value)}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                placeholder="Latitude"
+                value={startLat}
+                onChange={(e) => setStartLat(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              />
+              <input
+                placeholder="Longitude"
+                value={startLng}
+                onChange={(e) => setStartLng(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-800 p-3 space-y-2">
+            <div className="text-gray-400 font-medium">To</div>
+            {endpointOptions.length > 0 && (
+              <select
+                onChange={(e) => { applyEndpoint("end", e.target.value); e.target.value = ""; }}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-300"
+                defaultValue=""
+              >
+                <option value="">Pre-fill from activity endpoint…</option>
+                {endpointOptions.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            )}
+            <input
+              placeholder="Label (e.g. Lunel)"
+              value={endLabel}
+              onChange={(e) => setEndLabel(e.target.value)}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                placeholder="Latitude"
+                value={endLat}
+                onChange={(e) => setEndLat(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              />
+              <input
+                placeholder="Longitude"
+                value={endLng}
+                onChange={(e) => setEndLng(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-gray-400">Notes (optional)</label>
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Bike malfunction forced this train"
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-2 py-1.5 text-gray-200"
+            />
+          </div>
+
+          {error && <div className="text-red-400">{error}</div>}
+        </div>
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-800">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800/40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600 disabled:opacity-40"
+          >
+            {saving ? "Saving…" : existing ? "Save" : "Add"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateGroupModal({
+  athleteId,
+  onClose,
+  onCreated,
+}: {
+  athleteId: number;
+  onClose: () => void;
+  onCreated: (id: number) => void;
+}) {
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      athlete_id: String(athleteId),
+      limit: "100",
+    });
+    if (search) params.set("search", search);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", `${dateTo}T23:59:59`);
+    fetch(`/api/strava/activities?${params}`)
+      .then((r) => r.json())
+      .then((acts: Activity[]) => setActivities(acts))
+      .catch(() => setActivities([]));
+  }, [athleteId, search, dateFrom, dateTo]);
+
+  function toggle(id: number) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  }
+
+  async function submit() {
+    setError(null);
+    if (!name.trim()) {
+      setError("Name required");
+      return;
+    }
+    if (selected.size < 1) {
+      setError("Select at least one activity");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/strava/groups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          athlete_id: athleteId,
+          name: name.trim(),
+          description: description.trim() || null,
+          activity_ids: Array.from(selected),
+        }),
+      });
+      const data = await r.json();
+      if (r.ok && data.id) {
+        onCreated(data.id);
+      } else {
+        setError(data.error ?? "Failed to create trip");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[2000] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div
+        className="w-full sm:max-w-2xl bg-gray-900 sm:rounded-xl border border-gray-700 flex flex-col"
+        style={{ maxHeight: "90vh" }}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <h3 className="text-base font-semibold text-gray-100">New Trip</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-200"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4 space-y-4">
+          <div>
+            <label className="text-xs font-medium text-gray-400">Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Vermont Bike Trip"
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-400">
+              Description (optional)
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-400">
+                Activities ({selected.size} selected · {activities.length} matching)
+              </label>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search..."
+                className="text-xs rounded border border-gray-700 bg-gray-800 px-2 py-1 text-gray-200 focus:border-indigo-500 focus:outline-none w-32"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <label className="text-xs text-gray-400">
+                From
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none"
+                />
+              </label>
+              <label className="text-xs text-gray-400">
+                To
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none"
+                />
+              </label>
+            </div>
+            {(dateFrom || dateTo) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFrom("");
+                  setDateTo("");
+                }}
+                className="mb-2 text-[10px] text-indigo-400 hover:text-indigo-300"
+              >
+                Clear dates
+              </button>
+            )}
+            <div className="max-h-72 overflow-auto rounded-lg border border-gray-800 divide-y divide-gray-800">
+              {activities.length === 0 ? (
+                <div className="p-3 text-xs text-gray-500">
+                  No activities found.
+                </div>
+              ) : (
+                activities.map((a) => (
+                  <label
+                    key={a.id}
+                    className="flex items-center gap-2 p-2 hover:bg-gray-800/40 cursor-pointer text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(a.id)}
+                      onChange={() => toggle(a.id)}
+                      className="rounded border-gray-700"
+                    />
+                    <span className="w-6">{sportIcon(a.sport_type)}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="text-gray-200 truncate block">
+                        {a.name}
+                      </span>
+                      <span className="text-gray-500">
+                        {fmtDate(a.start_date_local)} ·{" "}
+                        {fmtDistance(a.distance)}
+                      </span>
+                    </span>
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
+
+          {error && <div className="text-xs text-red-400">{error}</div>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-800">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800/40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || selected.size < 1 || !name.trim()}
+            className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600 disabled:opacity-40"
+          >
+            {submitting ? "Creating..." : "Create Trip"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddMembersModal({
+  athleteId,
+  existingMemberIds,
+  initialDateFrom,
+  initialDateTo,
+  onClose,
+  onSubmit,
+}: {
+  athleteId: number;
+  existingMemberIds: number[];
+  initialDateFrom?: string | null;
+  initialDateTo?: string | null;
+  onClose: () => void;
+  // Returns the FULL Activity objects (not just IDs) so the caller doesn't
+  // need to re-fetch — picking an activity from outside the recent window
+  // (e.g. an old trip from a prior year) still includes its data.
+  onSubmit: (activities: Activity[]) => void;
+}) {
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState(initialDateFrom ?? "");
+  const [dateTo, setDateTo] = useState(initialDateTo ?? "");
+  const existingSet = new Set(existingMemberIds);
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      athlete_id: String(athleteId),
+      limit: "100",
+    });
+    if (search) params.set("search", search);
+    if (dateFrom) params.set("date_from", dateFrom);
+    // Make the to-date inclusive of the whole day (start_date_local is full ISO)
+    if (dateTo) params.set("date_to", `${dateTo}T23:59:59`);
+    fetch(`/api/strava/activities?${params}`)
+      .then((r) => r.json())
+      .then((acts: Activity[]) =>
+        setActivities(acts.filter((a) => !existingSet.has(a.id)))
+      )
+      .catch(() => setActivities([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [athleteId, search, dateFrom, dateTo]);
+
+  function toggle(id: number) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[2000] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div
+        className="w-full sm:max-w-2xl bg-gray-900 sm:rounded-xl border border-gray-700 flex flex-col"
+        style={{ maxHeight: "90vh" }}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <h3 className="text-base font-semibold text-gray-100">Add Legs</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-200"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search activities..."
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-gray-400">
+              From
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+            <label className="text-xs text-gray-400">
+              To
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+          </div>
+          {(dateFrom || dateTo) && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="text-[10px] text-indigo-400 hover:text-indigo-300"
+            >
+              Clear dates
+            </button>
+          )}
+          <div className="text-xs text-gray-500">
+            {selected.size} selected · {activities.length} matching
+          </div>
+          <div className="max-h-96 overflow-auto rounded-lg border border-gray-800 divide-y divide-gray-800">
+            {activities.length === 0 ? (
+              <div className="p-3 text-xs text-gray-500">
+                No additional activities.
+              </div>
+            ) : (
+              activities.map((a) => (
+                <label
+                  key={a.id}
+                  className="flex items-center gap-2 p-2 hover:bg-gray-800/40 cursor-pointer text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(a.id)}
+                    onChange={() => toggle(a.id)}
+                    className="rounded border-gray-700"
+                  />
+                  <span className="w-6">{sportIcon(a.sport_type)}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="text-gray-200 truncate block">
+                      {a.name}
+                    </span>
+                    <span className="text-gray-500">
+                      {fmtDate(a.start_date_local)} · {fmtDistance(a.distance)}
+                    </span>
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-800">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800/40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(activities.filter((a) => selected.has(a.id)))}
+            disabled={selected.size < 1}
+            className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600 disabled:opacity-40"
+          >
+            Add {selected.size > 0 ? `(${selected.size})` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function AthleteSection({ athlete }: { athlete: Athlete }) {
   const [tab, setTab] = useState<AthleteTab>("calendar");
@@ -1474,6 +3001,9 @@ function AthleteSection({ athlete }: { athlete: Athlete }) {
         {tab === "calendar" && <CalendarTab athleteId={athlete.athlete_id} />}
         {tab === "stats" && <StatsTab athleteId={athlete.athlete_id} />}
         {tab === "activities" && <ActivitiesTab athleteId={athlete.athlete_id} />}
+        {tab === "trips" && (
+          <TripsTab key={athlete.athlete_id} athleteId={athlete.athlete_id} />
+        )}
         {tab === "trends" && <TrendsTab athleteId={athlete.athlete_id} />}
         {tab === "ask" && <AiSearch athleteId={athlete.athlete_id} />}
       </div>

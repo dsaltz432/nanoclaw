@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
+import { renderTripHtml, renderIndexHtml, IndexTrip } from "../lib/render-trip-html.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nanoclawRoot = process.env.NANOCLAW_ROOT || path.resolve(__dirname, "../..");
@@ -34,6 +35,192 @@ function getDb(): Database.Database | null {
     return null;
   }
 }
+
+function getDbWrite(): Database.Database | null {
+  if (!fs.existsSync(dbPath)) return null;
+  try {
+    const db = new Database(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    return db;
+  } catch {
+    return null;
+  }
+}
+
+function ensureGroupTables(): void {
+  const db = getDbWrite();
+  if (!db) return;
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS activity_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        athlete_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        -- Stored as ISO 8601 UTC (e.g. "2026-05-25T20:18:20.123Z"). SQLite's
+        -- CURRENT_TIMESTAMP returns space-separated UTC which JS Date parses
+        -- inconsistently across browsers; strftime gives us a portable string.
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        published_slug TEXT,
+        published_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS activity_group_members (
+        group_id INTEGER NOT NULL,
+        activity_id INTEGER NOT NULL,
+        leg_order INTEGER NOT NULL,
+        PRIMARY KEY (group_id, activity_id),
+        FOREIGN KEY (group_id) REFERENCES activity_groups(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_group_members_activity
+        ON activity_group_members(activity_id);
+
+      CREATE TABLE IF NOT EXISTS activity_streams (
+        activity_id INTEGER PRIMARY KEY,
+        time_json TEXT,
+        distance_json TEXT,
+        altitude_json TEXT,
+        heartrate_json TEXT,
+        velocity_json TEXT,
+        latlng_json TEXT,
+        fetched_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      -- Non-Strava transit segments (trains, ferries, etc.). Rendered as
+      -- dashed lines on the trip map and as interleaved rows in the legs
+      -- table, but excluded from totals, sport breakdown, and profile chart.
+      CREATE TABLE IF NOT EXISTS activity_group_travel_legs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL REFERENCES activity_groups(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL,            -- 'train' | 'ferry' | 'plane' | 'bus' | 'car'
+        start_date TEXT NOT NULL,      -- ISO local date — drives ordering
+        start_lat REAL NOT NULL,
+        start_lng REAL NOT NULL,
+        start_label TEXT,
+        end_lat REAL NOT NULL,
+        end_lng REAL NOT NULL,
+        end_label TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_travel_legs_group
+        ON activity_group_travel_legs(group_id);
+    `);
+    // Idempotent migrations. better-sqlite3 bundles a recent SQLite that
+    // supports ALTER TABLE DROP COLUMN (3.35+), so failures here are real bugs
+    // worth surfacing rather than silently swallowing.
+    const cols = db
+      .prepare("PRAGMA table_info(activity_groups)")
+      .all() as { name: string }[];
+    const colNames = new Set(cols.map((c) => c.name));
+    if (colNames.has("kind")) {
+      db.exec("ALTER TABLE activity_groups DROP COLUMN kind");
+    }
+    if (colNames.has("color")) {
+      db.exec("ALTER TABLE activity_groups DROP COLUMN color");
+    }
+    if (!colNames.has("published_slug")) {
+      db.exec("ALTER TABLE activity_groups ADD COLUMN published_slug TEXT");
+    }
+    if (!colNames.has("published_at")) {
+      db.exec("ALTER TABLE activity_groups ADD COLUMN published_at TEXT");
+    }
+    if (!colNames.has("photos_url")) {
+      db.exec("ALTER TABLE activity_groups ADD COLUMN photos_url TEXT");
+    }
+    // Normalize legacy SQLite-format timestamps ("2026-05-25 20:18:20") to
+    // ISO 8601 with Z suffix. New rows already use the strftime default; this
+    // catches rows inserted before the format switch.
+    db.exec(`
+      UPDATE activity_groups
+         SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+       WHERE created_at IS NOT NULL AND created_at NOT LIKE '%T%Z';
+      UPDATE activity_groups
+         SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
+       WHERE updated_at IS NOT NULL AND updated_at NOT LIKE '%T%Z';
+      UPDATE activity_streams
+         SET fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ', fetched_at)
+       WHERE fetched_at IS NOT NULL AND fetched_at NOT LIKE '%T%Z';
+    `);
+
+    // Rewrite column defaults: SQLite has no ALTER COLUMN SET DEFAULT, so we
+    // recreate the table when its stored defaults still reference the legacy
+    // CURRENT_TIMESTAMP. Detect via sqlite_master and skip if already rewritten.
+    //
+    // CRITICAL: foreign_keys must be disabled around the rebuild, otherwise
+    // DROP TABLE fires `ON DELETE CASCADE` on any tables that reference this
+    // one (e.g. activity_group_members → activity_groups), nuking child rows
+    // before the rename completes. See SQLite docs:
+    //   https://sqlite.org/lang_altertable.html#otheralter
+    function rewriteIfLegacy(table: string, ddl: string, copyCols: string) {
+      const row = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
+        .get(table) as { sql: string } | undefined;
+      if (!row || !row.sql.includes("CURRENT_TIMESTAMP")) return;
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE ${table}__new ${ddl};
+          INSERT INTO ${table}__new (${copyCols}) SELECT ${copyCols} FROM ${table};
+          DROP TABLE ${table};
+          ALTER TABLE ${table}__new RENAME TO ${table};
+          COMMIT;
+        `);
+        // Sanity check: no dangling references after the rewrite.
+        const violations = db.prepare("PRAGMA foreign_key_check").all();
+        if (violations.length > 0) {
+          throw new Error(
+            `Foreign-key violations after rewriting ${table}: ${JSON.stringify(violations)}`
+          );
+        }
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+    }
+    rewriteIfLegacy(
+      "activity_groups",
+      `(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        athlete_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        published_slug TEXT,
+        published_at TEXT,
+        photos_url TEXT
+      )`,
+      "id, athlete_id, name, description, start_date, end_date, created_at, updated_at, published_slug, published_at, photos_url"
+    );
+    rewriteIfLegacy(
+      "activity_streams",
+      `(
+        activity_id INTEGER PRIMARY KEY,
+        time_json TEXT,
+        distance_json TEXT,
+        altitude_json TEXT,
+        heartrate_json TEXT,
+        velocity_json TEXT,
+        latlng_json TEXT,
+        fetched_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      )`,
+      "activity_id, time_json, distance_json, altitude_json, heartrate_json, velocity_json, latlng_json, fetched_at"
+    );
+  } finally {
+    db.close();
+  }
+}
+
+ensureGroupTables();
 
 function getCredentials(): StravaCredential[] {
   try {
@@ -621,5 +808,997 @@ router.get("/api/strava/ask/:taskId", (req: Request, res: Response) => {
   }
   res.json({ status: "pending" });
 });
+
+// ── Grouped Activities (Trips) ────────────────────────────────────────────────
+
+// Fetch + cache streams for every uncached member of a group. Used to prefetch
+// in the background after create/edit so the detail view loads instantly.
+async function prefetchGroupStreams(groupId: number): Promise<void> {
+  const db = getDbWrite();
+  if (!db) return;
+  try {
+    const members = db
+      .prepare(
+        `SELECT m.activity_id, a.athlete_id
+         FROM activity_group_members m
+         JOIN activities a ON a.id = m.activity_id
+         WHERE m.group_id = ?`
+      )
+      .all(groupId) as { activity_id: number; athlete_id: number }[];
+
+    const creds = getCredentials();
+    const credByAthlete = new Map(creds.map((c) => [c.athlete_id, c]));
+    const selectStream = db.prepare(
+      "SELECT 1 FROM activity_streams WHERE activity_id = ?"
+    );
+    const insertStream = db.prepare(
+      `INSERT OR REPLACE INTO activity_streams
+         (activity_id, time_json, distance_json, altitude_json,
+          heartrate_json, velocity_json, latlng_json, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+    );
+
+    await Promise.all(
+      members.map(async (m) => {
+        if (selectStream.get(m.activity_id)) return;
+        const cred = credByAthlete.get(m.athlete_id);
+        if (!cred) return;
+        try {
+          const token = await getFreshToken(cred);
+          const r = await fetch(
+            `https://www.strava.com/api/v3/activities/${m.activity_id}/streams?keys=heartrate,altitude,velocity_smooth,distance,time,latlng&key_by_type=true`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (!r.ok) return;
+          const streams = (await r.json()) as Record<
+            string,
+            { data: unknown[] } | undefined
+          >;
+          const toJson = (k: string) =>
+            streams[k]?.data ? JSON.stringify(streams[k]!.data) : null;
+          insertStream.run(
+            m.activity_id,
+            toJson("time"),
+            toJson("distance"),
+            toJson("altitude"),
+            toJson("heartrate"),
+            toJson("velocity_smooth"),
+            toJson("latlng")
+          );
+        } catch {
+          // swallow — the detail-view endpoint will retry on-demand
+        }
+      })
+    );
+  } finally {
+    db.close();
+  }
+}
+
+interface GroupRow {
+  id: number;
+  athlete_id: number;
+  name: string;
+  description: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  created_at: string;
+  updated_at: string;
+  published_slug: string | null;
+  published_at: string | null;
+  photos_url: string | null;
+}
+
+interface TravelLegRow {
+  id: number;
+  mode: string;
+  start_date: string;
+  start_lat: number;
+  start_lng: number;
+  start_label: string | null;
+  end_lat: number;
+  end_lng: number;
+  end_label: string | null;
+  notes: string | null;
+}
+
+const TRAVEL_MODES = new Set(["train", "ferry", "plane", "bus", "car"]);
+
+// Recompute a trip's start_date/end_date as the min/max across both rides and
+// travel legs. Travel legs at the edges of the trip (e.g. a final ferry to
+// Dubrovnik on Jul 10 when the last ride was Jul 9) shouldn't fall outside
+// the trip's visible date range.
+function recalcTripDates(db: Database.Database, groupId: number): void {
+  const row = db.prepare(`
+    WITH dates AS (
+      SELECT substr(a.start_date_local, 1, 10) AS d
+        FROM activity_group_members m
+        JOIN activities a ON a.id = m.activity_id
+       WHERE m.group_id = ?
+      UNION ALL
+      SELECT substr(start_date, 1, 10) AS d
+        FROM activity_group_travel_legs
+       WHERE group_id = ?
+    )
+    SELECT MIN(d) AS start_date, MAX(d) AS end_date FROM dates
+  `).get(groupId, groupId) as { start_date: string | null; end_date: string | null };
+  // Don't overwrite with NULLs when a trip has neither rides nor travel legs
+  // (which would be unusual). Leave whatever was there.
+  if (row.start_date && row.end_date) {
+    db.prepare(
+      "UPDATE activity_groups SET start_date = ?, end_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?"
+    ).run(row.start_date, row.end_date, groupId);
+  }
+}
+
+// GET /api/strava/groups?athlete_id=
+router.get("/api/strava/groups", (req: Request, res: Response) => {
+  const db = getDb();
+  if (!db) return res.json([]);
+
+  const { athlete_id } = req.query;
+  const params: (string | number)[] = [];
+  let where = "";
+  if (athlete_id) {
+    where = "WHERE g.athlete_id = ?";
+    params.push(Number(athlete_id));
+  }
+
+  const groups = db
+    .prepare(
+      `SELECT
+        g.id, g.athlete_id, g.name, g.description,
+        g.start_date, g.end_date, g.created_at, g.updated_at,
+        g.published_slug, g.published_at, g.photos_url,
+        COUNT(m.activity_id)                            AS leg_count,
+        COALESCE(SUM(a.distance), 0)                    AS total_distance_m,
+        COALESCE(SUM(a.moving_time), 0)                 AS total_moving_time_s,
+        COALESCE(SUM(a.elapsed_time), 0)                AS total_elapsed_time_s,
+        COALESCE(SUM(a.total_elevation_gain), 0)        AS total_elevation_m,
+        GROUP_CONCAT(DISTINCT a.sport_type)             AS sport_types
+      FROM activity_groups g
+      LEFT JOIN activity_group_members m ON m.group_id = g.id
+      LEFT JOIN activities a              ON a.id = m.activity_id
+      ${where}
+      GROUP BY g.id
+      ORDER BY COALESCE(g.start_date, '0') DESC, g.id DESC`
+    )
+    .all(...params) as (GroupRow & {
+      leg_count: number;
+      total_distance_m: number;
+      total_moving_time_s: number;
+      total_elapsed_time_s: number;
+      total_elevation_m: number;
+      sport_types: string | null;
+    })[];
+
+  // Polylines per group (for mini-map thumbnails)
+  const polylinesByGroup: Record<number, string[]> = {};
+  if (groups.length) {
+    const ids = groups.map((g) => g.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const polyRows = db
+      .prepare(
+        `SELECT m.group_id, a.map_summary_polyline
+         FROM activity_group_members m
+         JOIN activities a ON a.id = m.activity_id
+         WHERE m.group_id IN (${placeholders})
+         ORDER BY m.leg_order`
+      )
+      .all(...ids) as { group_id: number; map_summary_polyline: string | null }[];
+    for (const r of polyRows) {
+      if (!r.map_summary_polyline) continue;
+      (polylinesByGroup[r.group_id] ||= []).push(r.map_summary_polyline);
+    }
+  }
+
+  db.close();
+  res.json(
+    groups.map((g) => ({
+      ...g,
+      sport_types: g.sport_types ? g.sport_types.split(",") : [],
+      polylines: polylinesByGroup[g.id] || [],
+    }))
+  );
+});
+
+// GET /api/strava/groups/:id — full detail with members and aggregates
+router.get("/api/strava/groups/:id", (req: Request, res: Response) => {
+  const db = getDb();
+  if (!db) return res.status(404).json({ error: "no data" });
+
+  const id = Number(req.params.id);
+  const group = db
+    .prepare("SELECT * FROM activity_groups WHERE id = ?")
+    .get(id) as GroupRow | undefined;
+  if (!group) {
+    db.close();
+    return res.status(404).json({ error: "not found" });
+  }
+
+  const members = db
+    .prepare(
+      `SELECT
+         a.id, a.name, a.sport_type, a.start_date_local, a.timezone,
+         a.distance, a.moving_time, a.elapsed_time, a.total_elevation_gain,
+         a.average_heartrate, a.max_heartrate, a.average_speed, a.max_speed,
+         a.average_watts, a.kilojoules, a.suffer_score,
+         a.map_summary_polyline, a.description,
+         m.leg_order
+       FROM activity_group_members m
+       JOIN activities a ON a.id = m.activity_id
+       WHERE m.group_id = ?
+       ORDER BY m.leg_order, a.start_date_local`
+    )
+    .all(id) as {
+      id: number;
+      name: string;
+      sport_type: string;
+      start_date_local: string;
+      distance: number | null;
+      moving_time: number | null;
+      elapsed_time: number | null;
+      total_elevation_gain: number | null;
+      average_heartrate: number | null;
+      kilojoules: number | null;
+      map_summary_polyline: string | null;
+      leg_order: number;
+    }[];
+
+  const travel_legs = db
+    .prepare(
+      `SELECT id, mode, start_date, start_lat, start_lng, start_label,
+              end_lat, end_lng, end_label, notes
+         FROM activity_group_travel_legs
+        WHERE group_id = ?
+        ORDER BY start_date, id`
+    )
+    .all(id) as TravelLegRow[];
+
+  db.close();
+
+  let distance_m = 0,
+    moving_time_s = 0,
+    elapsed_time_s = 0,
+    elevation_m = 0,
+    kilojoules = 0,
+    hr_weighted_sum = 0,
+    hr_weight = 0;
+  const sport_breakdown: Record<string, number> = {};
+  for (const m of members) {
+    distance_m += m.distance || 0;
+    moving_time_s += m.moving_time || 0;
+    elapsed_time_s += m.elapsed_time || 0;
+    elevation_m += m.total_elevation_gain || 0;
+    kilojoules += m.kilojoules || 0;
+    if (m.average_heartrate && m.moving_time) {
+      hr_weighted_sum += m.average_heartrate * m.moving_time;
+      hr_weight += m.moving_time;
+    }
+    sport_breakdown[m.sport_type] = (sport_breakdown[m.sport_type] || 0) + 1;
+  }
+  const avg_hr = hr_weight ? Math.round(hr_weighted_sum / hr_weight) : null;
+  const calories = kilojoules ? Math.round(kilojoules * 0.239) : 0;
+
+  res.json({
+    ...group,
+    members,
+    travel_legs,
+    totals: {
+      distance_m,
+      moving_time_s,
+      elapsed_time_s,
+      elevation_m,
+      kilojoules,
+      avg_hr,
+      calories,
+    },
+    sport_breakdown,
+  });
+});
+
+// POST /api/strava/groups — create
+router.post("/api/strava/groups", (req: Request, res: Response) => {
+  const db = getDbWrite();
+  if (!db) return res.status(500).json({ error: "db unavailable" });
+
+  const { athlete_id, name, description, activity_ids } =
+    (req.body || {}) as {
+      athlete_id?: number;
+      name?: string;
+      description?: string;
+      activity_ids?: number[];
+    };
+
+  if (
+    !athlete_id ||
+    !name?.trim() ||
+    !Array.isArray(activity_ids) ||
+    activity_ids.length < 1
+  ) {
+    db.close();
+    return res
+      .status(400)
+      .json({ error: "athlete_id, name, activity_ids[] required" });
+  }
+
+  try {
+    const placeholders = activity_ids.map(() => "?").join(",");
+    const owned = db
+      .prepare(
+        `SELECT id, start_date_local FROM activities
+         WHERE id IN (${placeholders}) AND athlete_id = ?
+         ORDER BY start_date_local`
+      )
+      .all(...activity_ids, athlete_id) as {
+        id: number;
+        start_date_local: string;
+      }[];
+
+    if (owned.length !== activity_ids.length) {
+      db.close();
+      return res
+        .status(400)
+        .json({ error: "some activities not found or not owned by athlete" });
+    }
+
+    const startDate = owned[0].start_date_local.substr(0, 10);
+    const endDate = owned[owned.length - 1].start_date_local.substr(0, 10);
+
+    const tx = db.transaction((): number => {
+      const r = db
+        .prepare(
+          `INSERT INTO activity_groups
+             (athlete_id, name, description, start_date, end_date)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(
+          athlete_id,
+          name.trim(),
+          description ?? null,
+          startDate,
+          endDate
+        );
+      // recalcTripDates is a no-op here (no travel legs yet on create) but
+      // future-proofs the path if a "create with travel legs" flow is ever
+      // added — and keeps the start/end_date logic in one place.
+      const groupId = Number(r.lastInsertRowid);
+      const insertMember = db.prepare(
+        `INSERT INTO activity_group_members (group_id, activity_id, leg_order)
+         VALUES (?, ?, ?)`
+      );
+      owned.forEach((m, i) => insertMember.run(groupId, m.id, i));
+      return groupId;
+    });
+    const newId = tx();
+    db.close();
+    res.json({ id: newId });
+    // Background: prefetch streams so the detail-view chart loads instantly
+    prefetchGroupStreams(newId).catch(() => {});
+  } catch (e) {
+    db.close();
+    res
+      .status(500)
+      .json({ error: e instanceof Error ? e.message : "failed to create trip" });
+  }
+});
+
+// PATCH /api/strava/groups/:id — partial update (name/description/members)
+router.patch("/api/strava/groups/:id", (req: Request, res: Response) => {
+  const db = getDbWrite();
+  if (!db) return res.status(500).json({ error: "db unavailable" });
+
+  const id = Number(req.params.id);
+  const existing = db
+    .prepare("SELECT * FROM activity_groups WHERE id = ?")
+    .get(id) as GroupRow | undefined;
+  if (!existing) {
+    db.close();
+    return res.status(404).json({ error: "not found" });
+  }
+
+  const { name, description, photos_url, activity_ids } = (req.body || {}) as {
+    name?: string;
+    description?: string | null;
+    photos_url?: string | null;
+    activity_ids?: number[];
+  };
+
+  try {
+    const tx = db.transaction(() => {
+      const updates: string[] = [];
+      const params: (string | number | null)[] = [];
+
+      if (name !== undefined) {
+        if (!name.trim()) throw new Error("name cannot be empty");
+        updates.push("name = ?");
+        params.push(name.trim());
+      }
+      if (description !== undefined) {
+        updates.push("description = ?");
+        params.push(description);
+      }
+      if (photos_url !== undefined) {
+        const trimmed = photos_url == null ? null : photos_url.trim() || null;
+        updates.push("photos_url = ?");
+        params.push(trimmed);
+      }
+
+      if (Array.isArray(activity_ids)) {
+        if (activity_ids.length < 1) throw new Error("activity_ids cannot be empty");
+        const placeholders = activity_ids.map(() => "?").join(",");
+        const owned = db
+          .prepare(
+            `SELECT id, start_date_local FROM activities
+             WHERE id IN (${placeholders}) AND athlete_id = ?
+             ORDER BY start_date_local`
+          )
+          .all(...activity_ids, existing.athlete_id) as {
+            id: number;
+            start_date_local: string;
+          }[];
+        if (owned.length !== activity_ids.length)
+          throw new Error("some activities not found or not owned by athlete");
+        db.prepare("DELETE FROM activity_group_members WHERE group_id = ?").run(id);
+        const insertMember = db.prepare(
+          `INSERT INTO activity_group_members (group_id, activity_id, leg_order)
+           VALUES (?, ?, ?)`
+        );
+        owned.forEach((m, i) => insertMember.run(id, m.id, i));
+      }
+
+      if (updates.length) {
+        updates.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+        params.push(id);
+        db.prepare(
+          `UPDATE activity_groups SET ${updates.join(", ")} WHERE id = ?`
+        ).run(...params);
+      }
+      // Recompute the trip date range from the live membership (rides +
+      // travel legs). Cheap query; runs after any field update so it covers
+      // both the metadata-only case and the membership-change case.
+      recalcTripDates(db, id);
+    });
+    tx();
+    db.close();
+    res.json({ ok: true });
+
+    // Auto-republish hook: if this trip is already published, keep its public
+    // URL in sync with the edit. For metadata-only changes (name/description),
+    // republish immediately. For membership changes, wait for the prefetch so
+    // newly-added legs land in the published chart on the first render.
+    const membersChanged = Array.isArray(activity_ids);
+    if (membersChanged) {
+      prefetchGroupStreams(id)
+        .then(() => {
+          try { republishGroup(id, { mustExist: true }); } catch {}
+        })
+        .catch(() => {});
+    } else {
+      // Fire-and-forget — published_at update isn't critical-path
+      try { republishGroup(id, { mustExist: true }); } catch {}
+    }
+  } catch (e) {
+    db.close();
+    res
+      .status(400)
+      .json({ error: e instanceof Error ? e.message : "update failed" });
+  }
+});
+
+// DELETE /api/strava/groups/:id
+router.delete("/api/strava/groups/:id", (req: Request, res: Response) => {
+  const db = getDbWrite();
+  if (!db) return res.status(500).json({ error: "db unavailable" });
+  const id = Number(req.params.id);
+  const r = db.prepare("DELETE FROM activity_groups WHERE id = ?").run(id);
+  db.close();
+  if (r.changes === 0) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true });
+});
+
+// ── Publish to public bucket ──────────────────────────────────────────────────
+
+const PUBLIC_BUCKET = "strava-trips";
+const TRIP_BRIEFINGS_DIR = path.join(nanoclawRoot, "data/trip-briefings");
+const TRIP_BRIEFINGS_TOMBSTONE_DIR = path.join(TRIP_BRIEFINGS_DIR, ".tombstone");
+
+function slugFromName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "trip";
+}
+
+function generateSlug(name: string): string {
+  const random = crypto.randomBytes(6).toString("base64url").slice(0, 8);
+  return `${slugFromName(name)}-${random}`;
+}
+
+// Re-render and persist the public index page listing every currently-published
+// trip. Called after every publish/unpublish so the index always reflects truth.
+function regenerateIndex(db: Database.Database): void {
+  const rows = db
+    .prepare(
+      `SELECT g.id, g.published_slug, g.name, g.start_date, g.end_date,
+              g.published_at,
+              COUNT(m.activity_id)                            AS leg_count,
+              COALESCE(SUM(a.distance), 0)                    AS total_distance_m,
+              COALESCE(SUM(a.moving_time), 0)                 AS total_moving_time_s,
+              COALESCE(SUM(a.total_elevation_gain), 0)        AS total_elevation_m,
+              GROUP_CONCAT(DISTINCT a.sport_type)             AS sport_types_csv
+       FROM activity_groups g
+       LEFT JOIN activity_group_members m ON m.group_id = g.id
+       LEFT JOIN activities a              ON a.id = m.activity_id
+       WHERE g.published_slug IS NOT NULL
+       GROUP BY g.id`
+    )
+    .all() as {
+      id: number;
+      published_slug: string;
+      name: string;
+      start_date: string | null;
+      end_date: string | null;
+      published_at: string;
+      leg_count: number;
+      total_distance_m: number;
+      total_moving_time_s: number;
+      total_elevation_m: number;
+      sport_types_csv: string | null;
+    }[];
+
+  const trips: IndexTrip[] = rows.map((r) => ({
+    id: r.id,
+    slug: r.published_slug,
+    name: r.name,
+    start_date: r.start_date,
+    end_date: r.end_date,
+    leg_count: r.leg_count,
+    total_distance_m: r.total_distance_m,
+    total_moving_time_s: r.total_moving_time_s,
+    total_elevation_m: r.total_elevation_m,
+    sport_types: r.sport_types_csv ? r.sport_types_csv.split(",") : [],
+    published_at: r.published_at,
+  }));
+
+  const html = renderIndexHtml(trips);
+  if (!fs.existsSync(TRIP_BRIEFINGS_DIR))
+    fs.mkdirSync(TRIP_BRIEFINGS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(TRIP_BRIEFINGS_DIR, "index.html"), html);
+}
+
+// Gather every piece of data needed to render the public HTML
+export function buildTripDataForRender(db: Database.Database, groupId: number) {
+  const group = db
+    .prepare("SELECT * FROM activity_groups WHERE id = ?")
+    .get(groupId) as GroupRow | undefined;
+  if (!group) return null;
+
+  const members = db
+    .prepare(
+      `SELECT a.id, a.name, a.sport_type, a.start_date_local,
+         a.distance, a.moving_time, a.elapsed_time, a.total_elevation_gain,
+         a.average_heartrate, a.map_summary_polyline,
+         m.leg_order
+       FROM activity_group_members m
+       JOIN activities a ON a.id = m.activity_id
+       WHERE m.group_id = ?
+       ORDER BY m.leg_order, a.start_date_local`
+    )
+    .all(groupId) as {
+      id: number; name: string; sport_type: string; start_date_local: string;
+      distance: number | null; moving_time: number | null; elapsed_time: number | null;
+      total_elevation_gain: number | null; average_heartrate: number | null;
+      map_summary_polyline: string | null; leg_order: number;
+    }[];
+
+  // Aggregates
+  let distance_m = 0, moving_time_s = 0, elapsed_time_s = 0, elevation_m = 0;
+  let hr_weighted_sum = 0, hr_weight = 0;
+  const sport_breakdown: Record<string, number> = {};
+  for (const m of members) {
+    distance_m += m.distance || 0;
+    moving_time_s += m.moving_time || 0;
+    elapsed_time_s += m.elapsed_time || 0;
+    elevation_m += m.total_elevation_gain || 0;
+    if (m.average_heartrate && m.moving_time) {
+      hr_weighted_sum += m.average_heartrate * m.moving_time;
+      hr_weight += m.moving_time;
+    }
+    sport_breakdown[m.sport_type] = (sport_breakdown[m.sport_type] || 0) + 1;
+  }
+  const avg_hr = hr_weight ? Math.round(hr_weighted_sum / hr_weight) : null;
+
+  // Streams (cached) for the profile chart
+  const streamRows = db
+    .prepare(
+      `SELECT m.activity_id, a.name, a.sport_type, a.start_date_local,
+              s.distance_json, s.altitude_json, s.heartrate_json, s.velocity_json
+       FROM activity_group_members m
+       JOIN activities a ON a.id = m.activity_id
+       LEFT JOIN activity_streams s ON s.activity_id = m.activity_id
+       WHERE m.group_id = ?
+       ORDER BY m.leg_order`
+    )
+    .all(groupId) as {
+      activity_id: number; name: string; sport_type: string; start_date_local: string;
+      distance_json: string | null; altitude_json: string | null;
+      heartrate_json: string | null; velocity_json: string | null;
+    }[];
+
+  const legStreams = streamRows.map((r) => ({
+    activity_id: r.activity_id,
+    name: r.name,
+    sport_type: r.sport_type,
+    start_date_local: r.start_date_local,
+    distance: r.distance_json ? JSON.parse(r.distance_json) : null,
+    altitude: r.altitude_json ? JSON.parse(r.altitude_json) : null,
+    heartrate: r.heartrate_json ? JSON.parse(r.heartrate_json) : null,
+    velocity: r.velocity_json ? JSON.parse(r.velocity_json) : null,
+  }));
+
+  const travelLegs = db
+    .prepare(
+      `SELECT id, mode, start_date, start_lat, start_lng, start_label,
+              end_lat, end_lng, end_label, notes
+         FROM activity_group_travel_legs
+        WHERE group_id = ?
+        ORDER BY start_date, id`
+    )
+    .all(groupId) as TravelLegRow[];
+
+  return {
+    group,
+    tripData: {
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      photos_url: group.photos_url,
+      published_at: group.published_at,
+      start_date: group.start_date,
+      end_date: group.end_date,
+      members,
+      totals: { distance_m, moving_time_s, elapsed_time_s, elevation_m, avg_hr },
+      sport_breakdown,
+      legStreams,
+      travelLegs,
+    },
+  };
+}
+
+// GET /api/strava/groups/:id/preview — render the SAME HTML that publish would
+// emit, but return it directly without persisting/uploading. Lets you test the
+// public page locally before clicking Publish.
+router.get(
+  "/api/strava/groups/:id/preview",
+  (req: Request, res: Response) => {
+    const db = getDb();
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+    const id = Number(req.params.id);
+
+    const data = buildTripDataForRender(db, id);
+    db.close();
+    if (!data) return res.status(404).send("Trip not found");
+
+    try {
+      const html = renderTripHtml(data.tripData);
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      // Discourage caching during local iteration
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.send(html);
+    } catch (e) {
+      res.status(500).send(
+        `<pre>Preview render failed: ${e instanceof Error ? e.message : "unknown"}</pre>`
+      );
+    }
+  }
+);
+
+// Shared publish/republish: renders HTML, writes the bucket-watched file,
+// updates `published_slug` + `published_at`, and regenerates index.html.
+// `mustExist=true` means "only republish if already published" — used by the
+// auto-republish hook in PATCH so we don't accidentally publish a draft trip.
+function republishGroup(
+  id: number,
+  opts: { mustExist?: boolean } = {}
+): { slug: string; published_at: string; url: string } | null {
+  const db = getDbWrite();
+  if (!db) return null;
+  try {
+    const data = buildTripDataForRender(db, id);
+    if (!data) return null;
+    if (opts.mustExist && !data.group.published_slug) return null;
+
+    const slug = data.group.published_slug || generateSlug(data.group.name);
+    const html = renderTripHtml(data.tripData);
+    if (!fs.existsSync(TRIP_BRIEFINGS_DIR))
+      fs.mkdirSync(TRIP_BRIEFINGS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(TRIP_BRIEFINGS_DIR, `${slug}.html`), html);
+    const now = new Date().toISOString();
+    db.prepare(
+      "UPDATE activity_groups SET published_slug = ?, published_at = ? WHERE id = ?"
+    ).run(slug, now, id);
+    regenerateIndex(db);
+    return {
+      slug,
+      published_at: now,
+      url: `https://storage.googleapis.com/${PUBLIC_BUCKET}/${slug}.html`,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// POST /api/strava/groups/:id/publish — initial publish (idempotent: re-publishes if already)
+router.post(
+  "/api/strava/groups/:id/publish",
+  (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    try {
+      const result = republishGroup(id);
+      if (!result) return res.status(404).json({ error: "not found" });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "publish failed",
+      });
+    }
+  }
+);
+
+// DELETE /api/strava/groups/:id/publish — unpublish (local file + remote)
+router.delete(
+  "/api/strava/groups/:id/publish",
+  (req: Request, res: Response) => {
+    const db = getDbWrite();
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+    const id = Number(req.params.id);
+
+    const group = db
+      .prepare("SELECT published_slug FROM activity_groups WHERE id = ?")
+      .get(id) as { published_slug: string | null } | undefined;
+    if (!group) {
+      db.close();
+      return res.status(404).json({ error: "not found" });
+    }
+    if (!group.published_slug) {
+      db.close();
+      return res.json({ ok: true, message: "was not published" });
+    }
+
+    try {
+      // Remove local file
+      const localPath = path.join(TRIP_BRIEFINGS_DIR, `${group.published_slug}.html`);
+      if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+      // Drop a tombstone so the watcher script removes the remote copy too
+      if (!fs.existsSync(TRIP_BRIEFINGS_TOMBSTONE_DIR))
+        fs.mkdirSync(TRIP_BRIEFINGS_TOMBSTONE_DIR, { recursive: true });
+      fs.writeFileSync(
+        path.join(TRIP_BRIEFINGS_TOMBSTONE_DIR, `${group.published_slug}.html`),
+        ""
+      );
+
+      db.prepare(
+        "UPDATE activity_groups SET published_slug = NULL, published_at = NULL WHERE id = ?"
+      ).run(id);
+      regenerateIndex(db);
+      db.close();
+      res.json({ ok: true });
+    } catch (e) {
+      db.close();
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "unpublish failed",
+      });
+    }
+  }
+);
+
+// ── Travel legs (non-Strava transit segments on a trip map) ───────────────────
+
+interface TravelLegInput {
+  mode?: string;
+  start_date?: string;
+  start_lat?: number;
+  start_lng?: number;
+  start_label?: string | null;
+  end_lat?: number;
+  end_lng?: number;
+  end_label?: string | null;
+  notes?: string | null;
+}
+
+function validateTravelLeg(
+  body: TravelLegInput,
+  { partial = false } = {}
+): { error: string } | { values: {
+  mode: string;
+  start_date: string;
+  start_lat: number;
+  start_lng: number;
+  start_label: string | null;
+  end_lat: number;
+  end_lng: number;
+  end_label: string | null;
+  notes: string | null;
+} } {
+  const required: (keyof TravelLegInput)[] = [
+    "mode", "start_date", "start_lat", "start_lng", "end_lat", "end_lng",
+  ];
+  if (!partial) {
+    for (const k of required) {
+      if (body[k] === undefined || body[k] === null || body[k] === "") {
+        return { error: `${k} is required` };
+      }
+    }
+  }
+  if (body.mode !== undefined && !TRAVEL_MODES.has(body.mode)) {
+    return {
+      error: `mode must be one of: ${Array.from(TRAVEL_MODES).join(", ")}`,
+    };
+  }
+  for (const k of ["start_lat", "end_lat"] as const) {
+    if (body[k] !== undefined && (typeof body[k] !== "number" || Math.abs(body[k]!) > 90)) {
+      return { error: `${k} must be a number in [-90, 90]` };
+    }
+  }
+  for (const k of ["start_lng", "end_lng"] as const) {
+    if (body[k] !== undefined && (typeof body[k] !== "number" || Math.abs(body[k]!) > 180)) {
+      return { error: `${k} must be a number in [-180, 180]` };
+    }
+  }
+  if (body.start_date !== undefined && !/^\d{4}-\d{2}-\d{2}/.test(body.start_date)) {
+    return { error: "start_date must be ISO YYYY-MM-DD" };
+  }
+  return {
+    values: {
+      mode: body.mode!,
+      start_date: body.start_date!.slice(0, 10),
+      start_lat: body.start_lat!,
+      start_lng: body.start_lng!,
+      start_label: body.start_label?.trim() || null,
+      end_lat: body.end_lat!,
+      end_lng: body.end_lng!,
+      end_label: body.end_label?.trim() || null,
+      notes: body.notes?.trim() || null,
+    },
+  };
+}
+
+// POST /api/strava/groups/:id/travel-legs — create
+router.post(
+  "/api/strava/groups/:id/travel-legs",
+  (req: Request, res: Response) => {
+    const db = getDbWrite();
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+    const groupId = Number(req.params.id);
+
+    const group = db
+      .prepare("SELECT id, published_slug FROM activity_groups WHERE id = ?")
+      .get(groupId) as { id: number; published_slug: string | null } | undefined;
+    if (!group) {
+      db.close();
+      return res.status(404).json({ error: "trip not found" });
+    }
+
+    const v = validateTravelLeg(req.body || {});
+    if ("error" in v) {
+      db.close();
+      return res.status(400).json({ error: v.error });
+    }
+
+    try {
+      const result = db
+        .prepare(
+          `INSERT INTO activity_group_travel_legs
+             (group_id, mode, start_date, start_lat, start_lng, start_label,
+              end_lat, end_lng, end_label, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          groupId, v.values.mode, v.values.start_date,
+          v.values.start_lat, v.values.start_lng, v.values.start_label,
+          v.values.end_lat, v.values.end_lng, v.values.end_label,
+          v.values.notes
+        );
+      recalcTripDates(db, groupId);
+      db.close();
+      res.json({ id: result.lastInsertRowid, ...v.values });
+      try { republishGroup(groupId, { mustExist: true }); } catch {}
+    } catch (e) {
+      db.close();
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "insert failed",
+      });
+    }
+  }
+);
+
+// PATCH /api/strava/groups/:id/travel-legs/:tlid — partial update
+router.patch(
+  "/api/strava/groups/:id/travel-legs/:tlid",
+  (req: Request, res: Response) => {
+    const db = getDbWrite();
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+    const groupId = Number(req.params.id);
+    const tlid = Number(req.params.tlid);
+
+    const existing = db
+      .prepare(
+        "SELECT * FROM activity_group_travel_legs WHERE id = ? AND group_id = ?"
+      )
+      .get(tlid, groupId) as TravelLegRow | undefined;
+    if (!existing) {
+      db.close();
+      return res.status(404).json({ error: "travel leg not found" });
+    }
+
+    const merged: TravelLegInput = {
+      mode: req.body?.mode ?? existing.mode,
+      start_date: req.body?.start_date ?? existing.start_date,
+      start_lat: req.body?.start_lat ?? existing.start_lat,
+      start_lng: req.body?.start_lng ?? existing.start_lng,
+      start_label: req.body?.start_label !== undefined ? req.body.start_label : existing.start_label,
+      end_lat: req.body?.end_lat ?? existing.end_lat,
+      end_lng: req.body?.end_lng ?? existing.end_lng,
+      end_label: req.body?.end_label !== undefined ? req.body.end_label : existing.end_label,
+      notes: req.body?.notes !== undefined ? req.body.notes : existing.notes,
+    };
+    const v = validateTravelLeg(merged);
+    if ("error" in v) {
+      db.close();
+      return res.status(400).json({ error: v.error });
+    }
+
+    try {
+      db.prepare(
+        `UPDATE activity_group_travel_legs
+            SET mode = ?, start_date = ?,
+                start_lat = ?, start_lng = ?, start_label = ?,
+                end_lat = ?, end_lng = ?, end_label = ?,
+                notes = ?
+          WHERE id = ? AND group_id = ?`
+      ).run(
+        v.values.mode, v.values.start_date,
+        v.values.start_lat, v.values.start_lng, v.values.start_label,
+        v.values.end_lat, v.values.end_lng, v.values.end_label,
+        v.values.notes,
+        tlid, groupId
+      );
+      recalcTripDates(db, groupId);
+      db.close();
+      res.json({ id: tlid, ...v.values });
+      try { republishGroup(groupId, { mustExist: true }); } catch {}
+    } catch (e) {
+      db.close();
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "update failed",
+      });
+    }
+  }
+);
+
+// DELETE /api/strava/groups/:id/travel-legs/:tlid
+router.delete(
+  "/api/strava/groups/:id/travel-legs/:tlid",
+  (req: Request, res: Response) => {
+    const db = getDbWrite();
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+    const groupId = Number(req.params.id);
+    const tlid = Number(req.params.tlid);
+    const r = db
+      .prepare(
+        "DELETE FROM activity_group_travel_legs WHERE id = ? AND group_id = ?"
+      )
+      .run(tlid, groupId);
+    if (r.changes > 0) {
+      recalcTripDates(db, groupId);
+    }
+    db.close();
+    if (r.changes === 0) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+    try { republishGroup(groupId, { mustExist: true }); } catch {}
+  }
+);
 
 export default router;

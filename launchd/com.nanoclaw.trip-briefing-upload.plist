@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.trip-briefing-upload</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/danielsaltz/Documents/repositories/nanoclaw/scripts/upload-trip-briefing.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw</string>
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/danielsaltz/Documents/repositories/nanoclaw/data/trip-briefings</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/danielsaltz/google-cloud-sdk/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/danielsaltz</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw/logs/trip-briefing-upload.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/danielsaltz/Documents/repositories/nanoclaw/logs/trip-briefing-upload.error.log</string>
+</dict>
+</plist>
