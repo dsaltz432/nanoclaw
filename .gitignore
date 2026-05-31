@@ -26,6 +26,10 @@ groups/global/*
 *.keys.json
 .env
 
+# Spotify cleanup job (.env already covered above). The venv lives outside the repo
+# (~/.local/share/nanoclaw/) because launchd/TCC can't exec binaries under ~/Documents.
+scripts/spotify-cleanup/.cache
+
 # Temp files
 .tmp-*
 

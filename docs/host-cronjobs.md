@@ -130,6 +130,25 @@ it needs:
 If a job "works in my terminal but not under launchd," a missing `PATH` entry is the first
 suspect. Check `logs/<name>.error.log`.
 
+### `exit 78` with empty logs — the `~/Documents` spawn-time gotcha
+
+The repo lives under `~/Documents`, which is TCC-protected. **At spawn time** launchd touches
+the program in `ProgramArguments` *and* opens the `Standard{Out,Error}Path` files. A LaunchAgent
+**loaded at login/reboot** is granted access to those paths — which is why the existing jobs
+(scripts and logs both in the repo) work. But a job **loaded mid-session** with `launchctl load`
+is *denied* `~/Documents` access at spawn, so if its program/script or its log paths are in the
+repo it dies before starting: `posix_spawn(...) Operation not permitted`, **exit 78**, empty
+logs. (The *child* process can still read/write `~/Documents` normally; only launchd's
+spawn-time access is blocked. The loader being a Terminal vs. an automation session makes no
+difference.)
+
+Two fixes: **(a)** reboot — the installed plist then loads at login like the others; or **(b)**
+keep launchd's spawn-time paths out of `~/Documents`. The `spotify-cleanup` job uses (b): program
+is inline `/bin/bash -c 'exec "<interp>" "<repo-script>"'` (no repo path in `ProgramArguments`)
+and `Standard{Out,Error}Path` point under `~/.local/share/nanoclaw/logs`, while the script/config
+it *reads* stay in the repo. Diagnose with:
+`log show --last 60s --style compact | grep -i "<label>" | grep -iE "spawn|permitted"`.
+
 ### Placeholders
 
 | Placeholder | Replace with | How |

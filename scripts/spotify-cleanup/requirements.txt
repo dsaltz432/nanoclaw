@@ -1,0 +1,5 @@
+spotipy==2.25.1
+python-dotenv==1.0.1
+requests==2.32.3
+# Pin <2: macOS system Python links LibreSSL, which urllib3 v2 warns on (noisy in unattended logs).
+urllib3<2

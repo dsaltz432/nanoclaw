@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.spotify-cleanup</string>
+    <!-- IMPORTANT: nothing launchd touches *at spawn time* may live under ~/Documents, or a
+         mid-session-loaded job is denied (posix_spawn EPERM / exit 78). That means: the
+         program (inline /bin/bash -c, not a repo script), and the Standard{Out,Error}Path
+         files (under ~/.local, not the repo). The child process may still read/write
+         ~/Documents — so cleanup.py, .env, .cache, and the audit log stay in the repo.
+         The venv also lives outside ~/Documents. See scripts/spotify-cleanup/README.md. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "{{HOME}}/.local/share/nanoclaw/spotify-cleanup-venv/bin/python" "{{PROJECT_ROOT}}/scripts/spotify-cleanup/cleanup.py"</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <!-- Unbuffer stdout so the launchd .log isn't empty mid-run (audit log flushes anyway). -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <!-- Outside ~/Documents (launchd opens these at spawn). The detailed audit log is the
+         child-written one in the repo's logs/. -->
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/spotify-cleanup.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/spotify-cleanup.error.log</string>
+</dict>
+</plist>
