@@ -3,11 +3,13 @@ import TasksPage from "./TasksPage";
 import GroupsPage from "./GroupsPage";
 import ContainersPage from "./ContainersPage";
 import ProjectsPage from "./ProjectsPage";
+import ScheduledTasksPage from "./ScheduledTasksPage";
 
-type Tab = "tasks" | "groups" | "containers" | "projects";
+type Tab = "tasks" | "groups" | "containers" | "projects" | "scheduled";
 
 const tabs: { key: Tab; label: string }[] = [
-  { key: "tasks", label: "Tasks" },
+  { key: "tasks", label: "NanoClaw Tasks" },
+  { key: "scheduled", label: "Host Tasks" },
   { key: "groups", label: "Groups" },
   { key: "containers", label: "Containers" },
   { key: "projects", label: "Projects" },
@@ -40,6 +42,7 @@ export default function AdminPage() {
       {active === "groups" && <GroupsPage embedded />}
       {active === "containers" && <ContainersPage embedded />}
       {active === "projects" && <ProjectsPage embedded />}
+      {active === "scheduled" && <ScheduledTasksPage embedded />}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import stravaRouter from "./routes/strava.js";
 import garminRouter from "./routes/garmin.js";
 import ticketsRouter from "./routes/tickets.js";
 import shoppingRouter from "./routes/shopping.js";
+import scheduledTasksRouter from "./routes/scheduled-tasks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -67,6 +68,7 @@ app.use(emailUnsubscribeRouter);
 app.use(stravaRouter);
 app.use(garminRouter);
 app.use(shoppingRouter);
+app.use(scheduledTasksRouter);
 
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {
