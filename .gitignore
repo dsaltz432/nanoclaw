@@ -17,10 +17,13 @@ groups/*
 !groups/README.md
 !groups/main/
 !groups/global/
+!groups/sports-briefings/
 groups/main/*
 groups/global/*
+groups/sports-briefings/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/sports-briefings/CLAUDE.md
 
 # Secrets
 *.keys.json
