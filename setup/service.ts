@@ -124,6 +124,16 @@ function setupLaunchd(
     logger.warn('launchctl load failed (may already be loaded)');
   }
 
+  // launchd can leave a freshly loaded RunAtLoad job queued without ever
+  // spawning it (`launchctl print` shows "pended nondemand spawn =
+  // speculative", runs = 0, indefinitely — seen live 2026-08-10). kickstart
+  // demand-starts it, and is a no-op on a job that load already spawned.
+  try {
+    execSync(`launchctl kickstart gui/${process.getuid!()}/${label}`, { stdio: 'ignore' });
+  } catch (err) {
+    log.error('launchctl kickstart failed', { err });
+  }
+
   // Verify
   let serviceLoaded = false;
   try {
