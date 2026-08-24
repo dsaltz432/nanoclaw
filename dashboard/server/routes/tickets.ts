@@ -312,21 +312,29 @@ router.get("/api/tickets/venues", (_req: Request, res: Response) => {
 
 // GET /api/tickets/health — Pricer run health summary (24h + 7d) plus stale-event counts
 const messagesDbPath = path.join(nanoclawRoot, "store/messages.db");
-const PRICER_TASK_ID_LIKE = "%2hmq79%"; // matches the Ticket Pricer scheduled_task id
 router.get("/api/tickets/health", (_req: Request, res: Response) => {
   const result: Record<string, unknown> = {};
 
-  // Pricer run-log signals
+  // Pricer run-log signals — look up task ID by name so this survives task re-creation
   try {
     const msgDb = new Database(messagesDbPath, { readonly: true });
+
+    // Resolve the canonical Ticket Pricer task ID (non-manual, most recently created)
+    const pricerTask = msgDb
+      .prepare(
+        `SELECT id FROM scheduled_tasks WHERE name = 'Ticket Pricer' AND id NOT LIKE '%-manual-%' ORDER BY created_at DESC LIMIT 1`
+      )
+      .get() as { id: string } | undefined;
+
+    const pricerTaskId = pricerTask?.id ?? "__not_found__";
 
     const lastRun = msgDb
       .prepare(
         `SELECT run_at, status, duration_ms, substr(result, 1, 240) AS summary
-           FROM task_run_logs WHERE task_id LIKE ?
+           FROM task_run_logs WHERE task_id = ?
           ORDER BY run_at DESC LIMIT 1`
       )
-      .get(PRICER_TASK_ID_LIKE) as
+      .get(pricerTaskId) as
       | { run_at: string; status: string; duration_ms: number; summary: string | null }
       | undefined;
     result.last_run = lastRun ?? null;
@@ -335,10 +343,10 @@ router.get("/api/tickets/health", (_req: Request, res: Response) => {
     result.recent_runs = msgDb
       .prepare(
         `SELECT run_at, status, duration_ms, substr(result, 1, 240) AS summary
-           FROM task_run_logs WHERE task_id LIKE ?
+           FROM task_run_logs WHERE task_id = ?
           ORDER BY run_at DESC LIMIT 12`
       )
-      .all(PRICER_TASK_ID_LIKE);
+      .all(pricerTaskId);
 
     msgDb.close();
   } catch (e) {
@@ -444,6 +452,12 @@ router.get("/api/tickets/errors-timeseries", (req: Request, res: Response) => {
     const msgDb = new Database(messagesDbPath, { readonly: true });
     const cutoffIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
+    // Resolve Ticket Pricer task ID by name
+    const pricerTask2 = msgDb
+      .prepare(`SELECT id FROM scheduled_tasks WHERE name = 'Ticket Pricer' AND id NOT LIKE '%-manual-%' ORDER BY created_at DESC LIMIT 1`)
+      .get() as { id: string } | undefined;
+    const pricerTaskId2 = pricerTask2?.id ?? "__not_found__";
+
     // Pull raw run rows; we parse scraped/errors counts from the result text
     // in JS rather than SQL because the run summaries are free-form.
     const rawRuns = msgDb
@@ -452,10 +466,10 @@ router.get("/api/tickets/errors-timeseries", (req: Request, res: Response) => {
            (CAST(strftime('%s', run_at) AS INTEGER) / ${bucketSeconds}) * ${bucketSeconds} AS bucket_ts,
            result, status
          FROM task_run_logs
-         WHERE task_id LIKE ? AND run_at > ?
+         WHERE task_id = ? AND run_at > ?
          ORDER BY bucket_ts ASC`
       )
-      .all(PRICER_TASK_ID_LIKE, cutoffIso) as Array<{
+      .all(pricerTaskId2, cutoffIso) as Array<{
         bucket_ts: number; result: string | null; status: string;
       }>;
 
