@@ -81,7 +81,7 @@ Each subsystem has a dedicated doc with its component table, schedule, service-m
 | Email Unsubscribe Curator | [docs/email-unsubscribe.md](docs/email-unsubscribe.md) | Host script scans Gmail metadata; agent does browser unsubscribes. Scheduled task `Email Unsubscribe Analyzer`, cron `25 6 * * *`. |
 | Sports Briefing | [docs/sports-briefing.md](docs/sports-briefing.md) | Daily HTML sports briefing → `gs://sports-briefings/`. Scheduled task `Sports Briefing Scout`, cron `15 21 * * *`. |
 | Strava Trips | [docs/strava-trips.md](docs/strava-trips.md) | Publish grouped Strava activities as public HTML → `gs://strava-trips/`. Re-render: `npx tsx scripts/republish-trips.ts`. |
-| Spotify Podcast Cleanup | [scripts/spotify-cleanup/README.md](scripts/spotify-cleanup/README.md) | Un-saves finished / never-started podcast episodes so Spotify drops the downloads. Host launchd job `com.nanoclaw.spotify-cleanup`, daily 4:30 AM ET (live; `DRY_RUN` flag + audit log are the safety rails). |
+| Spotify Podcast Cleanup | [scripts/spotify-cleanup/README.md](scripts/spotify-cleanup/README.md) | Un-saves finished / near-finished / never-started episodes, plus a hard `MAX_AGE_DAYS` (90d) ceiling on anything unfinished, so Spotify drops the downloads. Host launchd job `com.nanoclaw.spotify-cleanup`, daily 4:30 AM ET (live; `DRY_RUN` flag + audit log are the safety rails). |
 | Dashboard (Command Center) | [docs/dashboard.md](docs/dashboard.md) | React monitoring UI at `http://<host-ip>:3100`. Separate process. |
 
 **Sleep Prevention:** a `caffeinate -s` launchd service (`com.nanoclaw.caffeinate.plist`) keeps macOS from entering "Maintenance Sleep" (which kills overnight scheduled tasks) while on AC power. Listed in [docs/host-cronjobs.md](docs/host-cronjobs.md).

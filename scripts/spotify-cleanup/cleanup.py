@@ -10,11 +10,13 @@ Strategy (the Web API has NO "mark as played" / "set resume point" and NO concep
 "download"): we REMOVE (un-save) episodes from the cloud library, and Spotify's own sync
 then drops the local download from the owner's devices.
 
-Three things get removed:
+Four things get removed:
   - near-finished : stopped within NEAR_FINISH_THRESHOLD_MINUTES of the end (the ad-tail case)
   - fully-played  : marked fully_played but never auto-cleared (safety-net sweep; toggle with
                     INCLUDE_FULLY_PLAYED)
   - never-started : pos == 0 and older than NEVER_STARTED_MIN_AGE_DAYS
+  - aged-out      : a hard ceiling — any unfinished episode saved MAX_AGE_DAYS ago goes,
+                    started or not, however much time is left on it
 
 Removal uses the unified `DELETE /me/library` endpoint (the per-type `DELETE /me/episodes`
 was removed in the Feb 2026 Web API changes); it takes Spotify URIs, not bare IDs.
@@ -81,6 +83,7 @@ def env_int(name: str, default: int) -> int:
 # --- Config (env overrides, with the spec's defaults) ------------------------
 NEAR_FINISH_THRESHOLD_MS = int(env_float("NEAR_FINISH_THRESHOLD_MINUTES", 3) * 60_000)
 NEVER_STARTED_MIN_AGE_DAYS = env_int("NEVER_STARTED_MIN_AGE_DAYS", 30)
+MAX_AGE_DAYS = env_int("MAX_AGE_DAYS", 90)
 INCLUDE_FULLY_PLAYED = env_bool("INCLUDE_FULLY_PLAYED", True)
 DRY_RUN = env_bool("DRY_RUN", True)
 
@@ -208,9 +211,23 @@ def classify(item: dict, log: logging.Logger, stats: dict) -> tuple[str, str] | 
 
     # Category B: never started, and old enough
     if pos == 0 and (not finished) and age >= NEVER_STARTED_MIN_AGE_DAYS:
-        return uri, f"never_started, aged out ({int(age)}d) — {show}: {name}"
+        return uri, f"never_started ({int(age)}d, never opened) — {show}: {name}"
 
-    # Otherwise: keep (partially listened with meaningful time left, or recent unstarted)
+    # Category C: hard age ceiling — no unfinished episode outlives MAX_AGE_DAYS, whether or
+    # not it was ever started and however much time is left on it. Unstarted episodes are
+    # normally caught earlier by Category B's shorter fuse (so they report as never_started);
+    # this backstop is what actually sweeps part-listened ones, and it keeps the ceiling true
+    # if B is ever retuned or disabled.
+    #
+    # Deliberately still gated on `not finished`: episodes marked fully_played are governed by
+    # the INCLUDE_FULLY_PLAYED toggle above, and an age ceiling shouldn't quietly override an
+    # explicit opt-out.
+    if (not finished) and age >= MAX_AGE_DAYS:
+        mins_left = max(0, round(remaining_ms / 60_000, 1))
+        state = "started" if pos > 0 else "never started"
+        return uri, f"aged_out ({int(age)}d, {state}, {mins_left} min left) — {show}: {name}"
+
+    # Otherwise: keep (still within MAX_AGE_DAYS, with meaningful time left)
     return None
 
 
@@ -257,8 +274,10 @@ def main() -> None:
     limit = parse_limit(args)
     log = setup_logging()
     log.info(
-        "config: DRY_RUN=%s INCLUDE_FULLY_PLAYED=%s NEAR_FINISH=%dms NEVER_STARTED_MIN_AGE_DAYS=%d interactive=%s limit=%s",
-        DRY_RUN, INCLUDE_FULLY_PLAYED, NEAR_FINISH_THRESHOLD_MS, NEVER_STARTED_MIN_AGE_DAYS, interactive, limit,
+        "config: DRY_RUN=%s INCLUDE_FULLY_PLAYED=%s NEAR_FINISH=%dms NEVER_STARTED_MIN_AGE_DAYS=%d "
+        "MAX_AGE_DAYS=%d interactive=%s limit=%s",
+        DRY_RUN, INCLUDE_FULLY_PLAYED, NEAR_FINISH_THRESHOLD_MS, NEVER_STARTED_MIN_AGE_DAYS,
+        MAX_AGE_DAYS, interactive, limit,
     )
 
     if not os.environ.get("SPOTIPY_CLIENT_ID") or not os.environ.get("SPOTIPY_CLIENT_SECRET"):
@@ -272,7 +291,7 @@ def main() -> None:
     items = fetch_saved_episodes(sp, log)
 
     candidates: list[tuple[str, str]] = []  # (uri, reason)
-    reasons = {"near_finished": 0, "fully_played": 0, "never_started": 0}
+    reasons = {"near_finished": 0, "fully_played": 0, "never_started": 0, "aged_out": 0}
     stats = {"tombstone": 0, "no_scope": 0}
     for item in items:
         result = classify(item, log, stats)
@@ -286,10 +305,10 @@ def main() -> None:
                 break
 
     log.info(
-        "summary: %d to remove (near_finished=%d, fully_played=%d, never_started=%d) "
-        "of %d scanned; skipped %d catalog tombstone(s), %d missing-scope",
+        "summary: %d to remove (near_finished=%d, fully_played=%d, never_started=%d, "
+        "aged_out=%d) of %d scanned; skipped %d catalog tombstone(s), %d missing-scope",
         len(candidates), reasons["near_finished"], reasons["fully_played"], reasons["never_started"],
-        len(items), stats["tombstone"], stats["no_scope"],
+        reasons["aged_out"], len(items), stats["tombstone"], stats["no_scope"],
     )
 
     if not candidates:

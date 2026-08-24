@@ -42,7 +42,20 @@ For every saved episode it reads `added_at`, `duration_ms`, and `resume_point`, 
 | **near-finished** | not `fully_played`, `pos > 0`, and within `NEAR_FINISH_THRESHOLD_MINUTES` of the end (the ad-tail case) | on |
 | **fully-played sweep** | `fully_played` but still saved (Spotify's auto-remove is flaky) | `INCLUDE_FULLY_PLAYED=true` |
 | **never-started** | `pos == 0`, not finished, and saved ≥ `NEVER_STARTED_MIN_AGE_DAYS` ago | 30 days |
-| keep | everything else (partially listened with time left, or recently saved) | — |
+| **aged-out** | not finished and saved ≥ `MAX_AGE_DAYS` ago — started or not, whatever the time left | 90 days |
+| keep | everything else (still inside `MAX_AGE_DAYS`, with meaningful time left) | — |
+
+**aged-out is a hard ceiling:** nothing unfinished outlives `MAX_AGE_DAYS`, so old downloads
+can't quietly pile up. It overlaps the other age rule by design — an unstarted episode hits
+`never-started` at 30 days long before the 90-day ceiling, and reports under that (more
+specific) reason. In practice the ceiling is therefore what sweeps *part-listened* episodes,
+while remaining the backstop that keeps "nothing survives 90 days" true even if
+`NEVER_STARTED_MIN_AGE_DAYS` is raised or the rule is dropped. Near-finished is checked
+first, so the ad-tail case is claimed there rather than waiting out the ceiling.
+
+The ceiling is still gated on *not finished*: episodes Spotify marked `fully_played` are
+governed by `INCLUDE_FULLY_PLAYED`, and an age rule shouldn't silently override that opt-out.
+With the default (`true`) they're swept anyway, so this only matters if you turn it off.
 
 Episodes whose `resume_point` is **absent** are logged as warnings and never removed — a
 missing `resume_point` almost always means the `user-read-playback-position` scope wasn't
@@ -129,6 +142,7 @@ directly in your shell, where none of this applies.
 | `SPOTIPY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` | must match dashboard |
 | `NEAR_FINISH_THRESHOLD_MINUTES` | `3` (this install: `5`) | within this many minutes of the end = finished |
 | `NEVER_STARTED_MIN_AGE_DAYS` | `30` | only remove never-started episodes older than this |
+| `MAX_AGE_DAYS` | `90` | hard ceiling: remove any unfinished episode older than this |
 | `INCLUDE_FULLY_PLAYED` | `true` | also sweep finished-but-not-cleared episodes |
 | `DRY_RUN` | `true` (this install: `false` — **live**) | log only; delete nothing |
 
@@ -192,7 +206,8 @@ moves with it.
 ## Suggested rollout
 
 1. Run in dry-run for a few days; eyeball the would-remove list in the audit log.
-2. Tune `NEAR_FINISH_THRESHOLD_MINUTES` and `NEVER_STARTED_MIN_AGE_DAYS` to taste.
+2. Tune `NEAR_FINISH_THRESHOLD_MINUTES`, `NEVER_STARTED_MIN_AGE_DAYS`, and `MAX_AGE_DAYS`
+   to taste.
 3. Flip `DRY_RUN=false`, let it remove a small batch, confirm the downloads clear off the
    phone after a sync.
 4. Once trusted, let the 4:30 AM scheduler run it.
