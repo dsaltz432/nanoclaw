@@ -546,4 +546,75 @@ router.get("/api/garmin/recovery-trend", (req: Request, res: Response) => {
   res.json(rows);
 });
 
+// GET /api/garmin/export.csv — full daily export, one row per date
+router.get("/api/garmin/export.csv", (req: Request, res: Response) => {
+  const slug = resolveProfile(req);
+  const db = getDb(slug);
+  if (!db) {
+    res.setHeader("Content-Type", "text/csv");
+    return res.send("date,resting_hr,max_heart_rate,steps,intensity_minutes,hrv,endurance_score,respiration,body_battery_peak,body_battery_eod,sleep_hours,deep_hours,rem_hours,light_hours,awake_hours,sleep_score,sleep_hr,sleep_respiration,sleep_spo2,stress,weight_kg\n");
+  }
+
+  try {
+    const rows = db.prepare(`
+      SELECT
+        ds.date,
+        hr.resting_heart_rate        AS resting_hr,
+        hr.max_heart_rate,
+        ds.total_steps               AS steps,
+        ROUND(ds.moderate_intensity_minutes + ds.vigorous_intensity_minutes * 2) AS intensity_minutes,
+        hrv.last_night               AS hrv,
+        es.overall_score             AS endurance_score,
+        resp.avg_waking_respiration_value AS respiration,
+        bb.end_of_day_level          AS body_battery_eod,
+        sl.sleep_time_seconds / 3600.0 AS sleep_hours,
+        sl.deep_sleep_seconds / 3600.0 AS deep_hours,
+        sl.rem_sleep_seconds / 3600.0  AS rem_hours,
+        sl.light_sleep_seconds / 3600.0 AS light_hours,
+        sl.awake_sleep_seconds / 3600.0 AS awake_hours,
+        sl.sleep_score,
+        sl.average_heart_rate        AS sleep_hr,
+        sl.average_respiration_value AS sleep_respiration,
+        sl.average_spo2              AS sleep_spo2,
+        st.overall_stress_level      AS stress,
+        bc.weight_kg
+      FROM daily_summary ds
+      LEFT JOIN daily_heart_rate hr         ON hr.date  = ds.date
+      LEFT JOIN daily_hrv hrv               ON hrv.date = ds.date AND hrv.last_night > 0
+      LEFT JOIN daily_endurance_score es    ON es.date  = ds.date AND es.overall_score > 0
+      LEFT JOIN daily_respiration resp      ON resp.date = ds.date AND resp.avg_waking_respiration_value > 0
+      LEFT JOIN daily_body_battery bb       ON bb.date  = ds.date
+      LEFT JOIN daily_sleep sl              ON sl.date  = ds.date AND sl.sleep_time_seconds > 0
+      LEFT JOIN daily_stress st             ON st.date  = ds.date AND st.overall_stress_level > 0
+      LEFT JOIN body_composition bc         ON bc.date  = ds.date AND bc.weight_kg IS NOT NULL
+      WHERE ds.date IS NOT NULL
+      ORDER BY ds.date ASC
+    `).all() as Array<Record<string, unknown>>;
+    db.close();
+
+    const header = "date,resting_hr,max_heart_rate,steps,intensity_minutes,hrv,endurance_score,respiration,body_battery_eod,sleep_hours,deep_hours,rem_hours,light_hours,awake_hours,sleep_score,sleep_hr,sleep_respiration,sleep_spo2,stress,weight_kg\n";
+    const fmt = (v: unknown, decimals = 0) => v == null ? "" : typeof v === "number" ? (decimals ? v.toFixed(decimals) : Math.round(v).toString()) : String(v);
+    const csvRow = (r: Record<string, unknown>) => [
+      r.date,
+      fmt(r.resting_hr), fmt(r.max_heart_rate),
+      fmt(r.steps), fmt(r.intensity_minutes),
+      fmt(r.hrv, 1), fmt(r.endurance_score, 1),
+      fmt(r.respiration, 1), fmt(r.body_battery_eod),
+      fmt(r.sleep_hours, 2), fmt(r.deep_hours, 2), fmt(r.rem_hours, 2),
+      fmt(r.light_hours, 2), fmt(r.awake_hours, 2),
+      fmt(r.sleep_score), fmt(r.sleep_hr, 1),
+      fmt(r.sleep_respiration, 1), fmt(r.sleep_spo2, 1),
+      fmt(r.stress), fmt(r.weight_kg, 2),
+    ].join(",");
+
+    const today = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="health-${slug}-${today}.csv"`);
+    res.send(header + rows.map(csvRow).join("\n") + "\n");
+  } catch (e) {
+    db.close();
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 export default router;

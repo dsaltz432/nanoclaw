@@ -704,19 +704,30 @@ export default function HealthPage() {
             </p>
           )}
         </div>
-        {profiles.length > 1 && (
-          <div className="flex gap-1 rounded-lg bg-gray-900 p-1">
-            {profiles.map((p) => (
-              <button
-                key={p.slug}
-                onClick={() => setProfile(p.slug)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${profile === p.slug ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"}`}
-              >
-                {p.full_name.split(" ")[0] || p.display_name}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {profiles.length > 1 && (
+            <div className="flex gap-1 rounded-lg bg-gray-900 p-1">
+              {profiles.map((p) => (
+                <button
+                  key={p.slug}
+                  onClick={() => setProfile(p.slug)}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${profile === p.slug ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"}`}
+                >
+                  {p.full_name.split(" ")[0] || p.display_name}
+                </button>
+              ))}
+            </div>
+          )}
+          {profile && (
+            <a
+              href={`/api/garmin/export.csv?profile=${profile}`}
+              download
+              className="rounded-md px-3 py-1.5 text-xs font-medium bg-gray-800 text-gray-300 hover:text-gray-100 transition-colors"
+            >
+              ↓ Export CSV
+            </a>
+          )}
+        </div>
       </div>
 
       {/* Metric selector */}

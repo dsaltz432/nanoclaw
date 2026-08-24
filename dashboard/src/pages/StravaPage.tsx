@@ -3101,7 +3101,18 @@ export default function StravaPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6">
-      <h1 className="text-xl font-semibold text-gray-100">Strava</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold text-gray-100">Strava</h1>
+        {athletes.length > 0 && (
+          <a
+            href={`/api/strava/export.csv?athlete_id=${athletes[activeIdx].athlete_id}`}
+            download
+            className="rounded-md px-3 py-1.5 text-xs font-medium bg-gray-800 text-gray-300 hover:text-gray-100 transition-colors"
+          >
+            ↓ Export CSV
+          </a>
+        )}
+      </div>
 
       {athletes.length === 0 ? (
         <EmptyState />

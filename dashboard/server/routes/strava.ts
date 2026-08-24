@@ -1801,4 +1801,57 @@ router.delete(
   }
 );
 
+// GET /api/strava/export.csv — all activities as CSV
+router.get("/api/strava/export.csv", (req: Request, res: Response) => {
+  const db = getDb();
+  if (!db) {
+    res.setHeader("Content-Type", "text/csv");
+    return res.send("id,athlete_id,name,sport_type,start_date_local,distance_km,moving_time_min,elapsed_time_min,total_elevation_gain_m,average_speed_kmh,max_speed_kmh,average_heartrate,max_heartrate,average_watts,kilojoules,average_cadence,suffer_score,kudos_count,trainer,commute\n");
+  }
+
+  try {
+    const athleteId = req.query.athlete_id ? Number(req.query.athlete_id) : null;
+    const where = athleteId ? `WHERE athlete_id = ${athleteId}` : "";
+
+    const rows = db.prepare(`
+      SELECT id, athlete_id, name, sport_type, start_date_local,
+        ROUND(distance / 1000.0, 3)          AS distance_km,
+        ROUND(moving_time / 60.0, 1)         AS moving_time_min,
+        ROUND(elapsed_time / 60.0, 1)        AS elapsed_time_min,
+        total_elevation_gain                 AS total_elevation_gain_m,
+        ROUND(average_speed * 3.6, 3)        AS average_speed_kmh,
+        ROUND(max_speed * 3.6, 3)            AS max_speed_kmh,
+        average_heartrate, max_heartrate,
+        average_watts, kilojoules,
+        suffer_score, kudos_count, trainer, commute
+      FROM activities
+      ${where}
+      ORDER BY start_date_local ASC
+    `).all() as Array<Record<string, unknown>>;
+    db.close();
+
+    const header = "id,athlete_id,name,sport_type,start_date_local,distance_km,moving_time_min,elapsed_time_min,total_elevation_gain_m,average_speed_kmh,max_speed_kmh,average_heartrate,max_heartrate,average_watts,kilojoules,suffer_score,kudos_count,trainer,commute\n";
+    const fmt = (v: unknown) => v == null ? "" : String(v);
+    const csvRow = (r: Record<string, unknown>) => [
+      r.id, r.athlete_id,
+      `"${String(r.name ?? "").replace(/"/g, '""')}"`,
+      r.sport_type, r.start_date_local,
+      fmt(r.distance_km), fmt(r.moving_time_min), fmt(r.elapsed_time_min),
+      fmt(r.total_elevation_gain_m), fmt(r.average_speed_kmh), fmt(r.max_speed_kmh),
+      fmt(r.average_heartrate), fmt(r.max_heartrate),
+      fmt(r.average_watts), fmt(r.kilojoules),
+      fmt(r.suffer_score), fmt(r.kudos_count), fmt(r.trainer), fmt(r.commute),
+    ].join(",");
+
+    const today = new Date().toISOString().slice(0, 10);
+    const suffix = athleteId ? `-${athleteId}` : "";
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="strava${suffix}-${today}.csv"`);
+    res.send(header + rows.map(csvRow).join("\n") + "\n");
+  } catch (e) {
+    db.close();
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 export default router;
