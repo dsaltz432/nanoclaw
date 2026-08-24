@@ -35,15 +35,45 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# gcloud storage's multiprocessing pool intermittently crashes on this host
+# (leaked-semaphore warning at shutdown), which previously aborted the whole
+# run. These are tiny files — disable parallelism for stability.
+export CLOUDSDK_STORAGE_PROCESS_COUNT=1
+
 gcloud auth activate-service-account --key-file="${SA_KEY}" >/dev/null
 
+# Upload one file, retrying transient gcloud/network failures.
+# Returns non-zero only after all attempts are exhausted.
+upload_one() {
+  local filepath="$1" filename="$2" attempt
+  for attempt in 1 2 3; do
+    if gcloud storage cp "${filepath}" "gs://${BUCKET}/${filename}" \
+        --content-type="text/html" \
+        --cache-control="public, max-age=60"; then
+      return 0
+    fi
+    echo "  attempt ${attempt} failed for ${filename}; retrying in 3s..."
+    sleep 3
+  done
+  return 1
+}
+
+# Track failures but keep going — a single flaky upload must NOT abort the run,
+# or every file after it (e.g. a just-created briefing) silently never uploads.
+failed=()
 for filepath in "${FILES[@]}"; do
   filename="$(basename "${filepath}")"
   echo "uploading ${filename}"
-  gcloud storage cp "${filepath}" "gs://${BUCKET}/${filename}" \
-    --content-type="text/html" \
-    --cache-control="public, max-age=60"
-  echo "https://storage.googleapis.com/${BUCKET}/${filename}"
+  if upload_one "${filepath}" "${filename}"; then
+    echo "https://storage.googleapis.com/${BUCKET}/${filename}"
+  else
+    echo "ERROR: gave up on ${filename} after 3 attempts"
+    failed+=("${filename}")
+  fi
 done
 
+if [[ ${#failed[@]} -gt 0 ]]; then
+  echo "===== done WITH FAILURES (${#failed[@]}): ${failed[*]} — $(date -u +%FT%TZ) ====="
+  exit 1
+fi
 echo "===== done: $(date -u +%FT%TZ) ====="
