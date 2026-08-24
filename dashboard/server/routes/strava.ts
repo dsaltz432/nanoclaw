@@ -1806,7 +1806,7 @@ router.get("/api/strava/export.csv", (req: Request, res: Response) => {
   const db = getDb();
   if (!db) {
     res.setHeader("Content-Type", "text/csv");
-    return res.send("id,athlete_id,name,sport_type,start_date_local,distance_km,moving_time_min,elapsed_time_min,total_elevation_gain_m,average_speed_kmh,max_speed_kmh,average_heartrate,max_heartrate,average_watts,kilojoules,average_cadence,suffer_score,kudos_count,trainer,commute\n");
+    return res.send("id,athlete_id,name,sport_type,start_date_local,distance_km,moving_time_min,elapsed_time_min,total_elevation_gain_m,average_speed_kmh,max_speed_kmh,average_heartrate,max_heartrate,average_watts,kilojoules,suffer_score,kudos_count,trainer,commute\n");
   }
 
   try {

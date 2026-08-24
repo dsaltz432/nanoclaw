@@ -552,7 +552,7 @@ router.get("/api/garmin/export.csv", (req: Request, res: Response) => {
   const db = getDb(slug);
   if (!db) {
     res.setHeader("Content-Type", "text/csv");
-    return res.send("date,resting_hr,max_heart_rate,steps,intensity_minutes,hrv,endurance_score,respiration,body_battery_peak,body_battery_eod,sleep_hours,deep_hours,rem_hours,light_hours,awake_hours,sleep_score,sleep_hr,sleep_respiration,sleep_spo2,stress,weight_kg\n");
+    return res.send("date,resting_hr,max_heart_rate,steps,intensity_minutes,hrv,endurance_score,respiration,body_battery_eod,sleep_hours,deep_hours,rem_hours,light_hours,awake_hours,sleep_score,sleep_hr,sleep_respiration,sleep_spo2,stress,weight_kg\n");
   }
 
   try {
