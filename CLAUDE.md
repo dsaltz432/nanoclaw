@@ -13,7 +13,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/channels/registry.ts` | Channel registry (self-registration at startup) |
 | `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
+| `src/router.ts` | Message formatting and outbound routing (`<internal>` stripping — see [docs/message-delivery.md](docs/message-delivery.md)) |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
@@ -23,6 +23,8 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `dashboard/` | Command Center web dashboard (separate process) |
 
 ## Memory
+
+**Silencing a scheduled task takes two things**, because there are two delivery paths and only one is filtered: the agent must make no `send_message` call *and* wrap its final output in `<internal>`. See [docs/message-delivery.md](docs/message-delivery.md).
 
 Group and global memory are CLAUDE.md files loaded into the *runtime agent containers* — distinct from this file. Global memory is `groups/global/CLAUDE.md`, injected into non-main groups only; per-group memory is `groups/{name}/CLAUDE.md`. **This root `CLAUDE.md` is not loaded by runtime agents** — it's project instructions for Claude Code dev sessions. Full mechanics: [docs/SPEC.md](docs/SPEC.md#memory-system) and [groups/README.md](groups/README.md).
 
@@ -82,6 +84,7 @@ Each subsystem has a dedicated doc with its component table, schedule, service-m
 | Sports Briefing | [docs/sports-briefing.md](docs/sports-briefing.md) | Daily HTML sports briefing → `gs://sports-briefings/`. Scheduled task `Sports Briefing Scout`, cron `15 21 * * *`. |
 | Strava Trips | [docs/strava-trips.md](docs/strava-trips.md) | Publish grouped Strava activities as public HTML → `gs://strava-trips/`. Re-render: `npx tsx scripts/republish-trips.ts`. |
 | Spotify Podcast Cleanup | [scripts/spotify-cleanup/README.md](scripts/spotify-cleanup/README.md) | Un-saves finished / near-finished / never-started episodes, plus a hard `MAX_AGE_DAYS` (90d) ceiling on anything unfinished, so Spotify drops the downloads. Host launchd job `com.nanoclaw.spotify-cleanup`, daily 4:30 AM ET (live; `DRY_RUN` flag + audit log are the safety rails). |
+| Fantasy Football | [docs/fantasy-football.md](docs/fantasy-football.md) | Three Sleeper leagues; recommender only (Sleeper's API is read-only). Data layer in `~/Documents/repositories/fantasy-football-agent`, SQLite at `store/ff.db`, entry point `python3 -m ff.cli`. Code mounted read-only — this group reads third-party news text. Dashboard tab at `/fantasy` (waivers / trades / trends / news / alerts), served by `ff.cli api`. Telegram group `Fantasy Football` (`tg:-5468369997`), no trigger word — ask it questions directly. **No scheduled jobs yet.** |
 | Dashboard (Command Center) | [docs/dashboard.md](docs/dashboard.md) | React monitoring UI at `http://<host-ip>:3100`. Separate process. |
 
 **Sleep Prevention:** a `caffeinate -s` launchd service (`com.nanoclaw.caffeinate.plist`) keeps macOS from entering "Maintenance Sleep" (which kills overnight scheduled tasks) while on AC power. Listed in [docs/host-cronjobs.md](docs/host-cronjobs.md).
