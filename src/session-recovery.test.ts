@@ -14,9 +14,9 @@ describe('isSessionResumeFailure', () => {
   });
 
   it('is case-insensitive', () => {
-    expect(isSessionResumeFailure('no conversation found with session id: x')).toBe(
-      true,
-    );
+    expect(
+      isSessionResumeFailure('no conversation found with session id: x'),
+    ).toBe(true);
   });
 
   it('ignores unrelated errors so they keep their session', () => {
@@ -69,7 +69,9 @@ describe('redactContainerArgs', () => {
   it('keeps allowlisted env vars readable for debugging', () => {
     const out = redactContainerArgs(args).join(' ');
     expect(out).toContain('TZ=America/New_York');
-    expect(out).toContain('ANTHROPIC_BASE_URL=http://host.docker.internal:3001');
+    expect(out).toContain(
+      'ANTHROPIC_BASE_URL=http://host.docker.internal:3001',
+    );
     expect(out).toContain('HOME=/home/node');
   });
 

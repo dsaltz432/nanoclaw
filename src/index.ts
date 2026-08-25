@@ -272,9 +272,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
  * subsequent run retries the same missing conversation forever.
  */
 /** @internal - exported for testing */
-export function isSessionResumeFailure(
-  error: string | undefined,
-): boolean {
+export function isSessionResumeFailure(error: string | undefined): boolean {
   return !!error && /No conversation found with session ID/i.test(error);
 }
 
