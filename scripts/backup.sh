@@ -66,12 +66,28 @@ rsync -a \
   data/ "${STAGE}/data/"
 
 # ---- 2. hot-copy SQLite DBs with .backup (safe while DB is in use) ----
-for db in data/*.db; do
-  [[ -f "${db}" ]] || continue
-  name="$(basename "${db}")"
-  echo "sqlite3 .backup ${name}"
-  sqlite3 "${db}" ".backup '${STAGE}/data/${name}'"
-done
+#
+# rsync above excludes '*.db' so we never copy a torn page mid-write. That
+# exclusion is recursive, so this loop must be recursive too. It used to be
+# `for db in data/*.db`, which matched only the top level — every nested DB
+# (tickets, garmin, strava, beacon, shopping, mortgage) was excluded by rsync
+# and then never re-added, so backups contained exactly one database, and it
+# was the empty data/nanoclaw.db.
+DB_COUNT=0
+while IFS= read -r db; do
+  rel="${db#./}"
+  dest="${STAGE}/${rel}"
+  mkdir -p "$(dirname "${dest}")"
+  echo "sqlite3 .backup ${rel}"
+  if sqlite3 "${db}" ".backup '${dest}'"; then
+    DB_COUNT=$((DB_COUNT + 1))
+  else
+    echo "ERROR: failed to snapshot ${rel}"
+    exit 1
+  fi
+done < <(find ./data ./store -name '*.db' -type f 2>/dev/null)
+
+echo "databases snapshotted: ${DB_COUNT}"
 
 # ---- 3. stage other state ----
 [[ -f .env ]] && cp .env "${STAGE}/env"
@@ -80,8 +96,20 @@ done
 
 # ---- 3. tar + encrypt with age (streaming, never hits disk unencrypted) ----
 ARCHIVE="${STAGE}/${OBJECT_NAME}"
+
+# Fail loudly rather than silently shipping an archive missing the two
+# databases that cannot be reconstructed from any external source.
+for required in store/messages.db data/sessions/tickets/.claude/tickets.db; do
+  if [[ -f "${REPO_DIR}/${required}" && ! -s "${STAGE}/${required}" ]]; then
+    echo "ERROR: ${required} exists but was not staged — refusing to upload a partial backup"
+    exit 1
+  fi
+done
+
 echo "creating encrypted archive"
-tar -C "${STAGE}" -czf - data groups env gmail-mcp 2>/dev/null \
+TAR_PATHS=(data groups env gmail-mcp)
+[[ -d "${STAGE}/store" ]] && TAR_PATHS+=(store)
+tar -C "${STAGE}" -czf - "${TAR_PATHS[@]}" 2>/dev/null \
   | age -r "${AGE_RECIPIENT}" -o "${ARCHIVE}"
 
 SIZE="$(du -h "${ARCHIVE}" | awk '{print $1}')"
