@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     && pip3 install --break-system-packages 'garminconnect==0.2.8' 'garth==0.4.47' \
+        'curl_cffi==0.16.2' 'playwright==1.62.0' \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
