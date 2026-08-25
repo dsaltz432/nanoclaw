@@ -463,6 +463,17 @@ export async function processTaskIpc(
       break;
 
     case 'restart_service': {
+      // Only the main group may bounce host services. Restarting com.nanoclaw
+      // kills every in-flight container across all groups, so an unguarded
+      // verb here is a denial-of-service reachable by any group — including
+      // ones whose agents read untrusted third-party content.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup, service: data.service },
+          'Unauthorized restart_service attempt blocked',
+        );
+        break;
+      }
       const ALLOWED_SERVICES: Record<string, string> = {
         dashboard: 'com.nanoclaw.dashboard',
         nanoclaw: 'com.nanoclaw',
