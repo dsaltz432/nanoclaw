@@ -168,39 +168,176 @@ const STANDING: { title: string; body: string }[] = [
   },
 ];
 
-export function MethodologyDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const reg = useContext(RegistryCtx);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+/**
+ * Every source this hub pulls, and exactly what is taken from each.
+ *
+ * Written by hand rather than derived from the ingest table on purpose: the
+ * ingest log knows a fetch returned 2,382 rows, and cannot say what those rows
+ * are FOR or what they are not allowed to be used for. The "not used for" column
+ * is the one that matters — most of these feeds carry more than is trustworthy,
+ * and the discipline is in what gets left on the floor.
+ */
+const SOURCES: {
+  name: string;
+  what: string;
+  used: string[];
+  notUsed?: string;
+  cost: string;
+}[] = [
+  {
+    name: "Sleeper — leagues, rosters, transactions",
+    what: "The system of record for all three leagues. Free, unauthenticated, READ-ONLY.",
+    used: [
+      "League settings, scoring and roster slots — the scoring keys ARE the stat keys, so one dot product scores every league correctly",
+      "Rosters and starters, per league per season",
+      "Every transaction back to 2020, including FAILED waiver claims with their bid amounts — the sealed-bid history no other source has",
+      "FAAB budget spent per manager, snapshotted so the burn curve can be reconstructed",
+      "Matchups, draft picks, traded picks",
+      "`news_updated` per player, which is the change detector that makes the news layer cheap",
+    ],
+    notUsed:
+      "Nothing is ever written back. The GraphQL write path exists and risks the account; every recommendation here is executed by hand in the app.",
+    cost: "free · no key",
+  },
+  {
+    name: "Sleeper — trending adds and drops",
+    what: "Adds and drops across millions of Sleeper leagues, at any lookback window you ask for.",
+    used: [
+      "Add and drop counts at 6h, 24h, 72h and 168h in the same snapshot",
+      "Acceleration: the share of a week's adds that landed in the last day, against what an even trickle would give",
+    ],
+    notUsed:
+      "Not treated as a performance signal. It measures what other managers are doing, which is a fact about the market and not about football.",
+    cost: "free · capped at 100 rows per window",
+  },
+  {
+    name: "ESPN — Rotowire player notes",
+    what:
+      "Rotowire's beat reporting, served by ESPN's fantasy news endpoint. Undocumented, free, unauthenticated.",
+    used: [
+      "Headline and full story text per player",
+      "The successor signal — 90 minutes after a starter leaves practice, the note names the backup taking first-team reps. Nothing else in the stack carries that",
+      "Publication timestamps, which is what lets the Tuesday waiver deadline be covered at all",
+    ],
+    notUsed:
+      "The text is third-party prose. It is escaped before storage, rendered as text, and anything reading like an instruction is flagged and quoted rather than obeyed.",
+    cost: "free · one call per player, gated on Sleeper's news_updated",
+  },
+  {
+    name: "ESPN — projections and roster ownership",
+    what: "The kona endpoint. One call returns both.",
+    used: [
+      "A second weekly projection, translated to Sleeper stat keys so it can be rescored under each league's settings",
+      "The DISAGREEMENT between it and Rotowire, which predicts how wrong the estimate will be — something one source structurally cannot provide",
+      "Roster ownership: percent owned, percent started, and ESPN's own weekly change figure",
+    ],
+    notUsed:
+      "No weighting model. Equal-weighting the two sources wins over twelve seasons; a weighting model is a tested dead end. ESPN's ownership universe includes IDP and special teams, so punters and linebackers are dropped rather than shown.",
+    cost: "free · needs the x-fantasy-filter header, or it silently serves 50 rows",
+  },
+  {
+    name: "FantasyCalc — market values",
+    what: "Community trade values, pulled separately for each league's own format.",
+    used: [
+      "A value per player in redraft-1qb-12tm, dynasty-1qb-12tm and redraft-sf-22tm",
+      "The 30-day change, which is an absolute move in value points and is converted to a percentage of where the player started",
+      "Draft pick prices, as slots",
+    ],
+    notUsed:
+      "Never shared between leagues. Never the primary number in redraft, where league VOR leads. Pick prices carry no team attribution, so they cannot be used to check who owns a pick.",
+    cost: "free · no key",
+  },
+  {
+    name: "nflverse — schedules and injury reports",
+    what: "The community NFL data project, published as release assets on GitHub.",
+    used: [
+      "Schedules with Vegas lines and totals, for game environment",
+      "Official weekly injury reports: report status, practice status, body part",
+    ],
+    notUsed:
+      "Snap counts, depth charts and weekly usage stats are available but not wired in. They stop at 2025 — there is no 2026 data until the season starts — and a usage-based breakout detector was tested against projection residuals and found nothing.",
+    cost: "free · no key",
+  },
+  {
+    name: "DynastyProcess — the id crosswalk",
+    what: "A maintained mapping between Sleeper, ESPN, gsis and other player ids.",
+    used: ["Joining every source above to a single Sleeper player id"],
+    notUsed:
+      "Fuzzy name matching. It is a tested dead end and the crosswalk is the answer; a name that will not map is reported as unmapped rather than guessed.",
+    cost: "free · one CSV",
+  },
+];
 
-  if (!open) return null;
+/** What each source is asked for, at a glance, before the detail below it. */
+function SourceCard({ s }: { s: (typeof SOURCES)[number] }) {
+  return (
+    <section className="rounded-lg border border-gray-800 bg-gray-900">
+      <header className="border-b border-gray-800 px-4 py-2.5">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h4 className="text-sm font-medium text-gray-100">{s.name}</h4>
+          <span className="text-[11px] text-gray-600">{s.cost}</span>
+        </div>
+        <p className="mt-0.5 text-xs leading-relaxed text-gray-500">{s.what}</p>
+      </header>
+      <div className="px-4 py-3">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">What we take</div>
+        <ul className="mt-1 space-y-1">
+          {s.used.map((u, i) => (
+            <li key={i} className="flex gap-2 text-xs leading-relaxed text-gray-400">
+              <span className="text-gray-700">·</span>
+              {u}
+            </li>
+          ))}
+        </ul>
+        {s.notUsed && (
+          <>
+            <div className="mt-3 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+              What we deliberately do not
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-gray-500">{s.notUsed}</p>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Methodology, as a full page.
+ *
+ * It began as a drawer over the dashboard, which was the wrong shape for it:
+ * this is reference material you read once, carefully, not a tooltip you peek at
+ * while holding a half-finished trade in your head. A page can be scrolled,
+ * linked and left open beside the tab it explains.
+ */
+export function MethodologyPage({ onBack }: { onBack: () => void }) {
+  const reg = useContext(RegistryCtx);
   const sections = [...reg.entries()].filter(([, v]) => v.length > 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60" onClick={onClose}>
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        className="h-full w-full max-w-xl overflow-y-auto border-l border-gray-800 bg-gray-950 p-5 shadow-2xl sm:p-6"
-      >
-        <div className="mb-4 flex items-start gap-3">
-          <div>
-            <h3 className="text-base font-semibold text-gray-100">Methodology</h3>
-            <p className="mt-0.5 text-xs text-gray-500">
-              How the numbers on this page are derived. Everything here used to sit inline.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="ml-auto rounded border border-gray-800 px-2 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-          >
-            close
-          </button>
-        </div>
+    <div>
+      <div className="mb-5 flex flex-wrap items-baseline gap-3">
+        <h3 className="text-base font-semibold text-gray-100">Methodology</h3>
+        <span className="text-xs text-gray-500">
+          Where every number comes from, and what it is not allowed to claim
+        </span>
+        <button
+          onClick={onBack}
+          className="ml-auto rounded-md border border-gray-800 px-2.5 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
+        >
+          back to the hub
+        </button>
+      </div>
 
+      <Group title="Data sources">
+        <div className="grid gap-3 xl:grid-cols-2">
+          {SOURCES.map((s) => (
+            <SourceCard key={s.name} s={s} />
+          ))}
+        </div>
+      </Group>
+
+      <div className="grid gap-x-8 lg:grid-cols-2">
         <Group title="Standing rules">
           {STANDING.map((s) => (
             <div key={s.title} className="border-l-2 border-gray-800 pl-3">
@@ -218,29 +355,29 @@ export function MethodologyDrawer({ open, onClose }: { open: boolean; onClose: (
             </div>
           ))}
         </Group>
+      </div>
 
-        {sections.length > 0 && (
-          <Group title="On this page">
-            {sections.map(([name, notes]) => (
-              <div key={name} className="border-l-2 border-gray-800 pl-3">
-                <div className="text-xs font-medium text-gray-300">{name}</div>
-                {notes.map((n, i) => (
-                  <p key={i} className="mt-0.5 text-xs leading-relaxed text-gray-500">
-                    {n}
-                  </p>
-                ))}
-              </div>
-            ))}
-          </Group>
-        )}
-      </aside>
+      {sections.length > 0 && (
+        <Group title="From the panels you have opened">
+          {sections.map(([name, notes]) => (
+            <div key={name} className="border-l-2 border-gray-800 pl-3">
+              <div className="text-xs font-medium text-gray-300">{name}</div>
+              {notes.map((n, i) => (
+                <p key={i} className="mt-0.5 text-xs leading-relaxed text-gray-500">
+                  {n}
+                </p>
+              ))}
+            </div>
+          ))}
+        </Group>
+      )}
     </div>
   );
 }
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="mb-5">
+    <section className="mb-6">
       <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">{title}</h4>
       <div className="space-y-2.5">{children}</div>
     </section>

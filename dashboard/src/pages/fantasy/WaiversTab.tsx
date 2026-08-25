@@ -241,43 +241,14 @@ export default function WaiversTab({ league }: { league: string }) {
 
   return (
     <div className="space-y-4">
-      {/* Four numbers, no wrapper. These are data — how many real contests the
-          price table rests on, and how often bidding the median simply loses —
-          and they were hidden behind a disclosure titled "Why these numbers",
-          which is where an explanation belongs, not where evidence does. The
-          prose that sat under them is in Methodology. */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile
-          label="Genuine contests on record"
-          value={data.contest_summary.n}
-          hint={`${data.contest_summary.seasons ?? 0} seasons, backup claims excluded`}
-        />
-        <StatTile
-          label="Settled on waiver priority"
-          value={`${data.contest_summary.tie_pct ?? 0}%`}
-          tone="warning"
-          hint="ties — bidding the median loses these"
-        />
-        <StatTile
-          label="Rivals holding 20%+ of budget"
-          value={data.rival_budgets.flush_rivals}
-          hint="the only claim-time lever on price"
-        />
-        <StatTile
-          label="League-wide overpay"
-          value={
-            data.contest_summary.total_overpay != null && data.contest_summary.seasons
-              ? `$${Math.round(data.contest_summary.total_overpay / data.contest_summary.seasons)}/yr`
-              : "—"
-          }
-          hint={`above the minimum needed to win, across all ${data.league.teams} managers`}
-        />
-      </div>
       <SectionProvider name="FAAB price table">
         {data.principles.map((x, i) => (
           <Note key={i}>{x}</Note>
         ))}
         {data.contest_summary.note && <Note>{data.contest_summary.note}</Note>}
+        <Note>
+          {`Built from ${data.contest_summary.n} genuine contests across ${data.contest_summary.seasons ?? 0} seasons of this league's own sealed bids, backup claims excluded. ${data.contest_summary.tie_pct ?? 0}% of them were settled on waiver priority rather than price, which is the share bidding the median simply loses.`}
+        </Note>
       </SectionProvider>
 
       <MyRoster data={data} />

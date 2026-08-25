@@ -5,7 +5,8 @@ import NewsTab from "./fantasy/NewsTab";
 import TradesTab from "./fantasy/TradesTab";
 import WaiversTab from "./fantasy/WaiversTab";
 import { Badge } from "./fantasy/viz";
-import { MethodProvider, MethodologyDrawer } from "./fantasy/method";
+import { MethodProvider, MethodologyPage } from "./fantasy/method";
+import TrendsTab from "./fantasy/TrendsTab";
 
 /**
  * Fantasy Football.
@@ -19,11 +20,12 @@ import { MethodProvider, MethodologyDrawer } from "./fantasy/method";
  * wrong somewhere. Every panel re-fetches when the league changes.
  */
 
-type Tab = "waivers" | "trades" | "news" | "alerts";
+type Tab = "waivers" | "trades" | "trends" | "news" | "alerts";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "waivers", label: "Waiver wire" },
   { key: "trades", label: "Trades" },
+  { key: "trends", label: "Trends" },
   { key: "news", label: "News" },
   { key: "alerts", label: "Alerts" },
 ];
@@ -79,7 +81,7 @@ export default function FantasyPage() {
   return (
     <MethodProvider>
     <div className="p-4 sm:p-8">
-      <MethodologyDrawer open={showMethod} onClose={() => setShowMethod(false)} />
+
       {/* Health and explanation are both top-right and both out of the way:
           neither is what you came for, and both were previously a band across
           the page that every panel had to start below. */}
@@ -92,9 +94,13 @@ export default function FantasyPage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={() => setShowMethod(true)}
-            className="rounded-md border border-gray-800 px-2.5 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-            title="How every number on this page is derived"
+            onClick={() => setShowMethod((v) => !v)}
+            className={`rounded-md border px-2.5 py-1 text-xs ${
+              showMethod
+                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                : "border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-200"
+            }`}
+            title="Every data source, and what each is used for"
           >
             Methodology
           </button>
@@ -129,6 +135,10 @@ export default function FantasyPage() {
         </div>
       )}
 
+      {showMethod ? (
+        <MethodologyPage onBack={() => setShowMethod(false)} />
+      ) : (
+      <>
       {/* ── league selector ─────────────────────────────────────────── */}
       {overview && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -214,6 +224,7 @@ export default function FantasyPage() {
         <WaiversTab league={league} key={`w-${league}`} />
       )}
       {tab === "trades" && <TradesTab league={league} key={`t-${league}`} />}
+      {tab === "trends" && <TrendsTab league={league} key={`tr-${league}`} />}
       {tab === "news" && <NewsTab league={league} key={`n-${league}`} />}
       {tab === "alerts" && <AlertsTab league={league} key={`a-${league}`} />}
 
@@ -221,6 +232,8 @@ export default function FantasyPage() {
         <p className="mt-4 text-xs text-gray-600">
           {current.name} has not drafted yet, so roster-dependent panels will be empty until it does.
         </p>
+      )}
+      </>
       )}
     </div>
     </MethodProvider>

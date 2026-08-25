@@ -43,6 +43,8 @@ const TTL_MS: Record<string, number> = {
   // A full-league package search is seconds of CPU; the result only moves when
   // rosters or projections do, which is once a day.
   "trade-generate": 600_000,
+  // Ownership and add counts move on the hour, not the minute.
+  trends: 300_000,
 };
 
 type CacheEntry = { at: number; value: unknown };
@@ -92,6 +94,7 @@ const ALLOWED_PARAMS = new Set([
   "pin_mine",
   "pin_theirs",
   "counterparty",
+  "include_rostered",
 ]);
 
 function collectParams(req: Request): Record<string, string> {
@@ -151,6 +154,7 @@ router.get("/api/fantasy/assets", (req, res) => serve("assets", req, res));
 router.get("/api/fantasy/news", (req, res) => serve("news", req, res));
 router.get("/api/fantasy/trade-generate", (req, res) => serve("trade-generate", req, res));
 router.get("/api/fantasy/now", (req, res) => serve("now", req, res));
+router.get("/api/fantasy/trends", (req, res) => serve("trends", req, res));
 
 /**
  * The one write in this file. News read state.
