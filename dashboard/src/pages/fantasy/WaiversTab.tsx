@@ -20,6 +20,10 @@ type Candidate = {
   tier: string | null;
   suggested_bid: number | null;
   suggested_pct: number | null;
+  availability?: "free_agent" | "waivers";
+  bid_applies?: boolean;
+  clears_at?: string | null;
+  market_bid_if_contested?: number | null;
   market_low: number | null;
   market_high: number | null;
   no_bid_reason: string | null;
@@ -433,7 +437,25 @@ export default function WaiversTab({ league }: { league: string }) {
                       )}
                     </Td>
                     <Td data-label="Your bid" className="whitespace-nowrap text-right tabular-nums">
-                      {c.suggested_bid == null ? (
+                      {/* A free agent costs nothing, so the cell says so
+                          rather than showing a dash the reader has to hover to
+                          understand. The tier price is still available on
+                          hover as market_bid_if_contested — context about what
+                          players like him fetch when contested, which is a
+                          different thing from a price you would pay. */}
+                      {c.bid_applies === false ? (
+                        <span
+                          className="text-xs"
+                          style={{ color: C.s3 }}
+                          title={
+                            c.market_bid_if_contested
+                              ? `Free agent — add him now. Players in this tier have gone for about $${c.market_bid_if_contested} when contested.`
+                              : "Free agent — add him now, costs nothing"
+                          }
+                        >
+                          free · no bid
+                        </span>
+                      ) : c.suggested_bid == null ? (
                         <span className="text-xs text-gray-600" title={c.no_bid_reason ?? undefined}>
                           —
                         </span>
