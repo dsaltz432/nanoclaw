@@ -224,6 +224,33 @@ function buildVolumeMounts(
   return mounts;
 }
 
+/**
+ * `-e KEY=value` pairs in the arg list carry live credentials (API keys,
+ * GitHub PATs). The run log is plaintext on disk and is mounted read-only
+ * into other agent containers, so mask every value before it is written.
+ */
+const LOGGABLE_ENV_KEYS = new Set([
+  'TZ',
+  'HOME',
+  'LANG',
+  'NODE_ENV',
+  'ANTHROPIC_BASE_URL',
+]);
+
+/** @internal - exported for testing */
+export function redactContainerArgs(args: string[]): string[] {
+  return args.map((arg, i) => {
+    if (args[i - 1] !== '-e' || !arg.includes('=')) return arg;
+    const eq = arg.indexOf('=');
+    const key = arg.slice(0, eq);
+    const value = arg.slice(eq + 1);
+    // Default-deny: anything not explicitly known to be non-sensitive is
+    // masked, so a newly added credential env var is safe by default.
+    if (!value || LOGGABLE_ENV_KEYS.has(key)) return arg;
+    return `${key}=<redacted:${value.length}>`;
+  });
+}
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
@@ -548,7 +575,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactContainerArgs(containerArgs).join(' '),
           ``,
           `=== Mounts ===`,
           mounts

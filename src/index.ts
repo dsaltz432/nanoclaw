@@ -29,6 +29,7 @@ import {
 import {
   getAllChats,
   getAllRegisteredGroups,
+  clearSession,
   getAllSessions,
   getAllTasks,
   getMessagesSince,
@@ -264,6 +265,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * The SDK refuses to resume a session whose transcript is gone (rotated,
+ * pruned, or never written). The error result still carries the same dead
+ * sessionId, so persisting it blindly cements the failure and every
+ * subsequent run retries the same missing conversation forever.
+ */
+/** @internal - exported for testing */
+export function isSessionResumeFailure(
+  error: string | undefined,
+): boolean {
+  return !!error && /No conversation found with session ID/i.test(error);
+}
+
 async function runAgent(
   group: RegisteredGroup,
   prompt: string,
@@ -301,7 +315,7 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        if (output.newSessionId && !isSessionResumeFailure(output.error)) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
@@ -309,12 +323,12 @@ async function runAgent(
       }
     : undefined;
 
-  try {
-    const output = await runContainerAgent(
+  const invoke = (resumeFrom: string | undefined) =>
+    runContainerAgent(
       group,
       {
         prompt,
-        sessionId,
+        sessionId: resumeFrom,
         groupFolder: group.folder,
         chatJid,
         isMain,
@@ -325,7 +339,22 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
+  try {
+    let output = await invoke(sessionId);
+
+    // Stale session: drop it and start fresh once. The failure happens before
+    // the agent produces any output, so retrying cannot duplicate a reply.
+    if (isSessionResumeFailure(output.error)) {
+      logger.warn(
+        { group: group.name, sessionId },
+        'Stored session has no transcript, clearing and starting a new one',
+      );
+      delete sessions[group.folder];
+      clearSession(group.folder);
+      output = await invoke(undefined);
+    }
+
+    if (output.newSessionId && !isSessionResumeFailure(output.error)) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
     }
