@@ -22,6 +22,7 @@ import garminRouter from "./routes/garmin.js";
 import ticketsRouter from "./routes/tickets.js";
 import shoppingRouter from "./routes/shopping.js";
 import scheduledTasksRouter from "./routes/scheduled-tasks.js";
+import fantasyRouter from "./routes/fantasy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -50,13 +51,13 @@ app.get("/api/auth/status", statusHandler);
 const briefingsPath = path.resolve(__dirname, "../../data/briefings");
 app.use("/briefings", express.static(briefingsPath));
 
-// Tickets routes are self-auth (bearer token for writes, open for reads)
-app.use(ticketsRouter);
-
-// Protect all other API routes
+// Protect all API routes. Nothing may be mounted above this line without a
+// deliberate, documented reason — Express runs middleware in registration
+// order, so an earlier app.use() silently bypasses auth entirely.
 app.use("/api/{*splat}", authMiddleware);
 
 // Mount route handlers
+app.use(ticketsRouter);
 app.use(tasksRouter);
 app.use(groupsRouter);
 app.use(containersRouter);
@@ -69,6 +70,7 @@ app.use(stravaRouter);
 app.use(garminRouter);
 app.use(shoppingRouter);
 app.use(scheduledTasksRouter);
+app.use(fantasyRouter);
 
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {
