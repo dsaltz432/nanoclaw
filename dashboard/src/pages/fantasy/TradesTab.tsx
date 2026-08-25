@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Balance, C, Card, NewsPeek, Note, PeekNote, Td, Th } from "./viz";
 
 type Asset = {
@@ -56,6 +56,30 @@ type Evaluation = {
   limitation: string;
 };
 
+type PosDetail = {
+  required: number;
+  have: number;
+  starting?: number;
+  starter_vor: number;
+  surplus_startable: number;
+  surplus_vor: number;
+  short: number;
+  flex_slots: number;
+  depth_vor: number;
+  next_man_up: string | null;
+  top_starter: string | null;
+  top_starter_vor: number;
+  injury_cost: number;
+  covered: number;
+  strength_pct: number;
+  rank: number;
+  of: number;
+  grade: "hole" | "weak" | "average" | "strong";
+  shape: "empty" | "top-heavy" | "balanced" | "deep";
+  market: "buy-starter" | "buy-depth" | "sell" | "hold";
+  reading: string;
+};
+
 type TradesData = {
   league: string;
   mode: string;
@@ -90,22 +114,22 @@ type TradesData = {
   }[];
   needs: {
     replacement: Record<string, number>;
+    reason?: string;
+    legend?: { grade: string; means: string }[];
     rosters: {
       owner_id: string;
       owner: string;
       is_me: boolean;
-      positions: Record<
-        string,
-        {
-          required: number;
-          have: number;
-          starting?: number;
-          starter_vor: number;
-          surplus_startable: number;
-          surplus_vor: number;
-          short: number;
-        }
-      >;
+      team: {
+        lineup_vor: number;
+        bench_vor: number;
+        holes: string[];
+        rank: number;
+        of: number;
+        strongest?: string;
+        weakest?: string;
+      };
+      positions: Record<string, PosDetail>;
     }[];
   };
   suggestions: {
@@ -753,80 +777,191 @@ function AssetSearch({
 
 /* ── positional needs ───────────────────────────────────────────────── */
 
+const GRADE_TONE: Record<string, string> = {
+  hole: C.critical,
+  weak: C.warning,
+  average: C.ink2,
+  strong: C.s3,
+};
+
+const MARKET_LABEL: Record<string, string> = {
+  "buy-starter": "needs a starter",
+  "buy-depth": "needs a backup",
+  sell: "can sell",
+  hold: "settled",
+};
+
+/**
+ * Positional strength, every roster.
+ *
+ * The panel this replaces printed one number per cell — startable surplus — and
+ * that number could not tell apart the two rosters it most matters to tell
+ * apart. A manager with two elite backs and nobody behind them scored the same
+ * zero as a manager with six replacement-level ones. They are opposite
+ * counterparties: the first will not sell a back at any price and is shopping
+ * for depth; the second has nothing you want.
+ *
+ * So each cell now carries strength (a rank inside this league, because a
+ * constant would be wrong in two of the three) and shape (what an injury to
+ * their best player would actually cost the lineup), and states the conclusion:
+ * what this manager is in the market for at this position.
+ */
 function NeedsGrid({ data }: { data: TradesData }) {
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const positions = useMemo(() => {
     const s = new Set<string>();
     data.needs.rosters.forEach((r) => Object.keys(r.positions).forEach((p) => s.add(p)));
-    return Array.from(s).sort();
+    const order = ["QB", "RB", "WR", "TE", "K", "DEF"];
+    return Array.from(s).sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+    });
   }, [data]);
+
+  if (data.needs.reason) {
+    return (
+      <Card title="Positional strength, every roster">
+        <p className="text-sm text-gray-500">{data.needs.reason}</p>
+      </Card>
+    );
+  }
 
   return (
     <Card
-      title="Surplus and shortfall, every roster"
-      subtitle="Startable depth beyond what the lineup consumes — the currency a trade actually moves. Rest-of-season points above replacement, under this league's scoring."
+      title="Positional strength, every roster"
+      subtitle="Who is shopping for what — click a row for the reasoning"
     >
       <div className="overflow-x-auto ff-stack-wrap">
-        <table className="w-full min-w-[640px] border-collapse">
+        <table className="w-full min-w-[720px] border-collapse">
           <thead>
             <tr className="border-b border-gray-800">
               <Th>Manager</Th>
+              <Th className="text-right">Lineup</Th>
               {positions.map((p) => (
-                <Th key={p} className="text-right">
+                <Th key={p} className="text-center">
                   {p}
                 </Th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {data.needs.rosters.map((r) => (
-              <tr key={r.owner_id} className={`border-b border-gray-800/60 ${r.is_me ? "bg-indigo-500/5" : ""}`}>
-                <Td className={r.is_me ? "text-gray-100" : ""}>
-                  {r.owner}
-                  {r.is_me && <span className="ml-1 text-xs text-indigo-400">you</span>}
-                </Td>
-                {positions.map((p) => {
-                  const d = r.positions[p];
-                  if (!d)
-                    return (
-                      <Td key={p} className="text-right text-gray-700">
-                        —
-                      </Td>
-                    );
-                  // Magnitude, not a count. "+1" tells you a spare body exists;
-                  // "+34" tells you whether it is worth anything.
-                  const tone = d.short > 0 ? C.critical : d.surplus_vor > 0 ? C.s3 : C.ink2;
-                  const label =
-                    d.short > 0
-                      ? `short ${d.short}`
-                      : d.surplus_startable > 0
-                      ? `+${Math.round(d.surplus_vor)}`
-                      : "—";
-                  return (
-                    <Td key={p} className="text-right tabular-nums">
-                      <span
-                        style={{ color: tone }}
-                        title={`${d.have} rostered, ${d.starting ?? d.required} start, surplus VOR ${d.surplus_vor}`}
-                      >
-                        {label}
-                      </span>
+            {data.needs.rosters.map((r) => {
+              const open = openRow === r.owner_id;
+              return (
+                <Fragment key={r.owner_id}>
+                  <tr
+                    onClick={() => setOpenRow(open ? null : r.owner_id)}
+                    className={`cursor-pointer border-b border-gray-800/60 hover:bg-gray-800/30 ${
+                      r.is_me ? "bg-indigo-500/5" : ""
+                    }`}
+                  >
+                    <Td className={r.is_me ? "text-gray-100" : ""}>
+                      <span className="mr-1 text-gray-700">{open ? "▾" : "▸"}</span>
+                      {r.owner}
+                      {r.is_me && <span className="ml-1 text-xs text-indigo-400">you</span>}
                     </Td>
-                  );
-                })}
-              </tr>
-            ))}
+                    <Td className="whitespace-nowrap text-right text-xs tabular-nums text-gray-500">
+                      {/* Rank, not raw points: 571 VOR means nothing without
+                          the eleven other numbers it is being compared to. */}
+                      {r.team.rank}
+                      <span className="text-gray-700">/{r.team.of}</span>
+                    </Td>
+                    {positions.map((p) => {
+                      const d = r.positions[p];
+                      if (!d || d.grade === undefined)
+                        return (
+                          <Td key={p} className="text-center text-gray-700">
+                            —
+                          </Td>
+                        );
+                      return (
+                        <Td key={p} className="px-1 text-center">
+                          <PosCell d={d} />
+                        </Td>
+                      );
+                    })}
+                  </tr>
+                  {open && (
+                    <tr className="border-b border-gray-800/60 bg-gray-950/40">
+                      <td colSpan={positions.length + 2} className="px-4 py-3">
+                        <div className="mb-2 text-xs text-gray-500">
+                          Lineup ranks {r.team.rank} of {r.team.of}
+                          {r.team.strongest && ` · strongest ${r.team.strongest}`}
+                          {r.team.weakest && ` · weakest ${r.team.weakest}`}
+                          {r.team.holes.length > 0 && (
+                            <span style={{ color: C.critical }}>
+                              {" "}
+                              · cannot fill {r.team.holes.join(", ")}
+                            </span>
+                          )}
+                        </div>
+                        <ul className="space-y-1">
+                          {positions
+                            .map((p) => ({ p, d: r.positions[p] }))
+                            .filter((x): x is { p: string; d: PosDetail } =>
+                              x.d != null && x.d.grade !== undefined)
+                            .map(({ p, d }) => (
+                              <li key={p} className="flex gap-2 text-xs leading-relaxed">
+                                <span
+                                  className="w-8 shrink-0 font-medium"
+                                  style={{ color: GRADE_TONE[d.grade] }}
+                                >
+                                  {p}
+                                </span>
+                                <span className="text-gray-400">{d.reading}</span>
+                              </li>
+                            ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-600">
+        {(data.needs.legend ?? []).map((l) => (
+          <span key={l.grade} title={l.means}>
+            <span style={{ color: GRADE_TONE[l.grade] }}>■</span> {l.grade}
+          </span>
+        ))}
+        <span>· the second line is what they are shopping for</span>
+      </div>
+
       <Note>
-        Values are surplus VOR — rest-of-season points above replacement sitting on the bench, beyond what the
-        lineup uses. Red is an unfilled slot. Replacement level used:{" "}
-        {Object.entries(data.needs.replacement)
+        Strength is a rank inside this league, not an absolute: top quarter is strong, bottom quarter weak.
+        Shape comes from re-solving each lineup without its best player at that position, so &ldquo;covered&rdquo;
+        is the share of him the bench would actually replace and a flex that absorbs the loss counts.
+        Replacement level used: {Object.entries(data.needs.replacement)
           .filter(([p]) => p !== "FB" && p !== "K")
           .map(([p, v]) => `${p} ${Math.round(v)}`)
           .join(" · ")}
         .
       </Note>
     </Card>
+  );
+}
+
+function PosCell({ d }: { d: PosDetail }) {
+  const tone = GRADE_TONE[d.grade] ?? C.ink2;
+  const tip =
+    `${d.reading}\n\n` +
+    `rank ${d.rank} of ${d.of} · ${d.have} rostered, ${d.starting ?? 0} starting` +
+    (d.flex_slots ? ` (${d.flex_slots} in flex)` : "") +
+    `\nbench covers ${Math.round(d.covered * 100)}% of ${d.top_starter ?? "the top starter"}` +
+    `\nspare startable: ${d.surplus_startable}` +
+    (d.surplus_startable ? ` worth ${Math.round(d.surplus_vor)} VOR` : "");
+  return (
+    <span className="inline-flex flex-col items-center leading-tight" title={tip}>
+      <span className="text-xs font-medium" style={{ color: tone }}>
+        {d.short > 0 ? `${d.short} empty` : d.grade}
+      </span>
+      <span className="text-[10px] text-gray-600">{MARKET_LABEL[d.market] ?? d.market}</span>
+    </span>
   );
 }
 
@@ -995,16 +1130,10 @@ function TradeBuilder({
             </p>
           )}
 
-          <div className="mt-3 space-y-1.5">
-            {evaluation.notes.map((n, i) => (
-              <p key={i} className="text-xs leading-relaxed text-gray-500">
-                · {n}
-              </p>
-            ))}
-          </div>
-          <p className="mt-3 border-l-2 border-amber-500/40 pl-3 text-xs leading-relaxed text-amber-200/70">
-            {evaluation.limitation}
-          </p>
+          {evaluation.notes.map((n, i) => (
+            <Note key={i}>{n}</Note>
+          ))}
+          <Note>{evaluation.limitation}</Note>
         </div>
       )}
 
@@ -1108,9 +1237,7 @@ function TradeBuilder({
                 <Note>{generated.units_note}</Note>
                 {generated.pool_note && <Note>{generated.pool_note}</Note>}
                 {generated.season_note && <Note>{generated.season_note}</Note>}
-                <p className="mt-2 border-l-2 border-amber-500/40 pl-3 text-xs leading-relaxed text-amber-200/70">
-                  {generated.limitation}
-                </p>
+                <Note>{generated.limitation}</Note>
               </>
             )}
           </div>

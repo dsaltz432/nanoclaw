@@ -36,6 +36,7 @@ const TTL_MS: Record<string, number> = {
   trades: 300_000,
   assets: 600_000,
   news: 60_000,
+  "news-read": 0, // a write; never cached
   alerts: 30_000,
   now: 60_000,
   "trade-eval": 0, // never cached — it is a function of the user's own input
@@ -150,6 +151,44 @@ router.get("/api/fantasy/assets", (req, res) => serve("assets", req, res));
 router.get("/api/fantasy/news", (req, res) => serve("news", req, res));
 router.get("/api/fantasy/trade-generate", (req, res) => serve("trade-generate", req, res));
 router.get("/api/fantasy/now", (req, res) => serve("now", req, res));
+
+/**
+ * The one write in this file. News read state.
+ *
+ * POST rather than a parameter on the news GET, for a boring but fatal reason:
+ * GET payloads here are cached for a minute, so a mark folded into the read path
+ * would be served from cache and silently dropped — the worst failure available
+ * to a feature whose entire job is remembering what you already saw. Marking also
+ * invalidates the cached news payloads, or the next poll would hand back the
+ * pre-mark counts and the badge would flicker back.
+ *
+ * Selectors, not two thousand ids: an explicit handful, one player, or
+ * everything published before a timestamp. Passing every note id as argv was
+ * briefly considered and is a hundred kilobytes of command line.
+ */
+router.post("/api/fantasy/news/read", async (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const params: Record<string, string> = {};
+  const ids = Array.isArray(body.note_ids)
+    ? body.note_ids.filter((x): x is string => typeof x === "string" && /^[a-f0-9]{40}$/.test(x))
+    : [];
+  if (ids.length) params.note_ids = ids.slice(0, 50).join(",");
+  if (typeof body.player_id === "string" && /^[A-Za-z0-9_-]{1,20}$/.test(body.player_id))
+    params.player_id = body.player_id;
+  if (typeof body.before === "string" && /^[0-9TZ:.\-]{1,32}$/.test(body.before))
+    params.before = body.before;
+  if (body.scope === "mine") params.scope = "mine";
+  if (!Object.keys(params).length) {
+    return res.status(400).json({ error: "nothing selected to mark read" });
+  }
+  try {
+    const value = await runFf("news-read", params);
+    for (const k of [...cache.keys()]) if (k.startsWith("news?") || k.startsWith("now?")) cache.delete(k);
+    res.json(value);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
 
 /**
  * Alerts. Two owners, deliberately kept apart:
