@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.backup-verify</string>
+
+    <!-- Weekly proof that the backup is actually restorable. Runs restore-backup.sh
+         in its default verify-only mode: download from GCS, decrypt, extract to a
+         temp dir, integrity-check every SQLite DB, assert the two irreplaceable ones
+         are present, touch nothing in the live install.
+
+         This exists because the backup silently contained one empty database for
+         months and nothing noticed — because nothing ever checked. A non-zero exit
+         here is the signal that was missing. -->
+
+    <!-- IMPORTANT: nothing launchd touches *at spawn time* may live under ~/Documents,
+         or a mid-session-loaded job is denied (posix_spawn EPERM / exit 78). So the
+         program is an inline /bin/bash -c rather than a repo script path, and the
+         Standard{Out,Error}Path files live under ~/.local. The child may still read
+         the repo normally, so restore-backup.sh itself stays in scripts/.
+         See docs/host-cronjobs.md. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /bin/bash "{{PROJECT_ROOT}}/scripts/backup-verify.sh"</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+
+    <!-- Sunday 05:00. After the daily backup (03:15) and spotify-cleanup (04:30),
+         so it verifies a fresh archive and does not contend with them. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- gcloud for the download, homebrew for `age`. -->
+        <key>PATH</key>
+        <string>{{HOME}}/google-cloud-sdk/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/backup-verify.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/backup-verify.error.log</string>
+</dict>
+</plist>

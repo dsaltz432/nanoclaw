@@ -126,6 +126,7 @@ it needs:
 - `backup` / `*-upload` jobs add `{{HOME}}/google-cloud-sdk/bin` (and `/opt/homebrew/bin`) for `gcloud`/`gsutil`.
 - `email-metadata` adds the nvm node bin dir.
 - `heartbeat` needs nothing special, so it uses the bare `/usr/local/bin:/usr/bin:/bin`.
+- `backup-verify` adds both `google-cloud-sdk/bin` (download) and `/opt/homebrew/bin` (`age`, to decrypt).
 
 If a job "works in my terminal but not under launchd," a missing `PATH` entry is the first
 suspect. Check `logs/<name>.error.log`.
@@ -143,7 +144,8 @@ spawn-time access is blocked. The loader being a Terminal vs. an automation sess
 difference.)
 
 Two fixes: **(a)** reboot — the installed plist then loads at login like the others; or **(b)**
-keep launchd's spawn-time paths out of `~/Documents`. The `spotify-cleanup` job uses (b): program
+keep launchd's spawn-time paths out of `~/Documents`. `spotify-cleanup` and `backup-verify` both
+use (b), so either is a working reference. The `spotify-cleanup` job uses (b): program
 is inline `/bin/bash -c 'exec "<interp>" "<repo-script>"'` (no repo path in `ProgramArguments`)
 and `Standard{Out,Error}Path` point under `~/.local/share/nanoclaw/logs`, while the script/config
 it *reads* stay in the repo. Diagnose with:
