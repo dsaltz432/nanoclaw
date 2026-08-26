@@ -260,11 +260,32 @@ export function redactContainerArgs(args: string[]): string[] {
   });
 }
 
+const CONTAINER_PIDS_LIMIT = 2048;
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Container hardening, adapted from upstream 0b458ecfe/fb0c85808. Upstream's
+  // version is configurable per group via a container.json `security` block;
+  // this install has no such plumbing, so the safe defaults are applied
+  // unconditionally.
+  //
+  // Verified to cost nothing here before adopting: the image already runs as
+  // non-root (uid 1000 `node`), so `apt-get` and `npm install -g` were failing
+  // on permissions long before any capability was dropped. Chromium headless,
+  // node, git and user-level `pip install` all still work under all three
+  // flags. The agents in this install do opportunistically try to install
+  // tools mid-run, which is why that was checked rather than assumed.
+  //
+  //   no-new-privileges  a setuid binary cannot raise privilege mid-run
+  //   cap-drop ALL       no ambient capabilities; nothing here needs one
+  //   pids-limit         a fork bomb in agent code cannot take the host down
+  args.push('--security-opt', 'no-new-privileges');
+  args.push('--cap-drop', 'ALL');
+  args.push('--pids-limit', String(CONTAINER_PIDS_LIMIT));
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
