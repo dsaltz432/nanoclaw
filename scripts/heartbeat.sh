@@ -88,9 +88,16 @@ emit_job com.nanoclaw.trip-briefing-upload event - "${LOG_DIR}/trip-briefing-upl
 # HC.io roughly 97% of the time. Comparing the PID against the previous
 # snapshot catches the restart after the fact, which is what actually matters.
 
+# Only long-lived KeepAlive services qualify. Interval and one-shot jobs get a
+# fresh PID on every fire by design — com.nanoclaw.heartbeat (this script) is
+# itself running when it takes the snapshot, so tracking it produced a bogus
+# "restart" every 5 minutes.
+LONG_LIVED='com.nanoclaw|com.nanoclaw.dashboard|com.nanoclaw.caffeinate'
+
 PREV_PIDS="${SNAPSHOT_DIR}/service-pids.txt"
 TMP_PIDS=$(mktemp)
-awk '$1 != "-" {print $3"="$1}' "$TMP_LAUNCHD" | sort > "$TMP_PIDS"
+awk -v keep="^(${LONG_LIVED})$" '$1 != "-" && $3 ~ keep {print $3"="$1}' \
+  "$TMP_LAUNCHD" | sort > "$TMP_PIDS"
 
 : > "${TMP_JOBS}.restarts"
 if [ -f "$PREV_PIDS" ]; then
