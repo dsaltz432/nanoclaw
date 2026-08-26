@@ -77,10 +77,11 @@ If unsure which mode to use, you can ask the user. Examples:
 - "Follow up on my request" \u2192 group (needs to know what was requested)
 - "Generate a daily report" \u2192 isolated (just needs instructions in prompt)
 
-MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It can also use send_message for immediate delivery, or wrap output in <internal> tags to suppress it. Include guidance in the prompt about whether the agent should:
+MESSAGING BEHAVIOR - The task agent's final output is sent to the user or group; wrapping it in <internal> tags suppresses it (nothing left after stripping = no message sent). NOTE: send_message delivers immediately and is NOT filtered by <internal> - once called, that message is out. So a task meant to stay silent must ALSO be told not to send an acknowledgment, which the global memory otherwise tells agents to do before long-running work. Include guidance in the prompt about whether the agent should:
 \u2022 Always send a message (e.g., reminders, daily briefings)
 \u2022 Only send a message when there's something to report (e.g., "notify me if...")
 \u2022 Never send a message (background maintenance tasks)
+For the latter two, say so explicitly, e.g. "Send no message when there is nothing to report - that includes the acknowledgment: make no send_message call, and wrap your entire final output in <internal> tags."
 
 SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 \u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
