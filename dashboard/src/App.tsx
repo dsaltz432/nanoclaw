@@ -11,6 +11,7 @@ import StravaPage from "./pages/StravaPage";
 import HealthPage from "./pages/HealthPage";
 import TicketsPage from "./pages/TicketsPage";
 import ShoppingPage from "./pages/ShoppingPage";
+import FantasyPage from "./pages/FantasyPage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="health" element={<HealthPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="shopping" element={<ShoppingPage />} />
+          <Route path="fantasy" element={<FantasyPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

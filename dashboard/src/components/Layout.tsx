@@ -11,6 +11,7 @@ const navItems = [
   { to: "/health", label: "Health", icon: HealthIcon },
   { to: "/tickets", label: "Tickets", icon: TicketIcon },
   { to: "/shopping", label: "Shopping", icon: ShoppingIcon },
+  { to: "/fantasy", label: "Fantasy Football", icon: FootballIcon },
 ];
 
 export default function Layout() {
@@ -235,6 +236,15 @@ function ShoppingIcon() {
   return (
     <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+    </svg>
+  );
+}
+
+function FootballIcon() {
+  return (
+    <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.2 19.8c-1.4-4.6-.4-10 3-13.4C10.6 3 16 2 20.6 3.4c1.4 4.6.4 10-3 13.4-3.4 3.4-8.8 4.4-13.4 3z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 14.5l5-5M11 11.5l1.5 1.5M13 9.5l1.5 1.5M9.5 13l1.5 1.5" />
     </svg>
   );
 }

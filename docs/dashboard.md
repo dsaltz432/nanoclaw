@@ -12,7 +12,9 @@ local network at `http://<host-ip>:3100`. Design/plan detail in
 | Logs | `dashboard/logs/` |
 
 Sections: Scheduled Tasks (Daily/Weekly/Ad-Hoc), Groups, Containers (live), Projects, Beacon
-Intel, Mortgage Rates, Email Unsub.
+Intel, Mortgage Rates, Email Unsub, Fantasy Football (see
+[fantasy-football.md](fantasy-football.md) — that tab reads a second SQLite database
+via `python3 -m ff.cli api`, not NanoClaw's).
 
 ```bash
 # Development

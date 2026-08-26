@@ -8,3 +8,76 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ── Fantasy tab: tables become stacked cards on a phone ──────────────────
+ *
+ * An 11pm Tuesday waiver decision happens on a phone, so the phone is the
+ * primary read, not the fallback. Horizontal scroll fails here in the worst
+ * way: it clips the CONTENT and keeps the chrome, so note text was being cut
+ * mid-sentence ("Jeanty is believed to have a…") while the column headers
+ * stayed perfectly visible.
+ *
+ * Below 640px each row becomes a card and each cell is labelled from the
+ * column header via data-label. Opt in per table with .ff-stack so tables that
+ * genuinely need a grid (the surplus matrix) can keep one.
+ */
+@media (max-width: 639px) {
+  .ff-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .ff-stack,
+  .ff-stack tbody,
+  .ff-stack tr,
+  .ff-stack td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .ff-stack tr {
+    border: 1px solid var(--color-gray-800, #1f2937);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+  .ff-stack td {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0.15rem 0;
+    white-space: normal;
+    text-align: left !important;
+  }
+  .ff-stack td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-gray-500, #6b7280);
+  }
+  /* A cell with no label is the row's headline — give it the full width. */
+  .ff-stack td[data-label=""]::before {
+    display: none;
+  }
+  .ff-stack .ff-row-head {
+    display: block;
+    font-weight: 500;
+    padding-bottom: 0.25rem;
+  }
+  /* Wrappers that exist only to enable sideways scroll must stop doing that. */
+  .ff-stack-wrap {
+    overflow-x: visible !important;
+  }
+  .ff-stack {
+    min-width: 0 !important;
+  }
+}
