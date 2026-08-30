@@ -321,3 +321,34 @@ Its memory instructs it to answer from an `ff.cli api` call rather than from
 training, and to say plainly when the data does not cover the question — whether
 a player beats his projection is not modelled, and whether an offer is accepted
 cannot be.
+
+## Scheduled jobs
+
+| | |
+|---|---|
+| Job | `com.nanoclaw.ff-news` (host launchd, every 15 min) |
+| Script | `scripts/ff-news.sh` · template `launchd/com.nanoclaw.ff-news.plist` |
+| Install | `scripts/install-ff-news-plist.sh` (idempotent) |
+| Logs | `logs/ff-news.log`, `logs/ff-news.error.log` |
+
+A host cronjob, not a NanoClaw scheduled task, because there is no judgement in
+it: pull Sleeper's player index for `news_updated`, then fetch notes for the
+players it says changed. No agent needs to read anything, so spawning a
+container would burn tokens on six seconds of shell work.
+
+It also cannot alert. There is no `send_message` to call and no final output to
+filter, so silence is structural rather than a prompt asking an agent to stay
+quiet. When alerting is wanted, that is a **separate** NanoClaw task reading
+data this job has already made fresh — keeping ingestion and notification apart
+means the alert cadence can change without touching the refresh cadence.
+
+**Why 15 minutes.** The refresh costs ~6s, so the interval is set by how fast a
+decision needs the news, not by what the pull costs. Fifteen minutes is ~7
+minutes of average detection latency, and that matters in exactly one place: a
+**free agent** is first-come, so when a starter's backup is unrostered the edge
+goes to whoever adds first. Waiver claims are immune — they all process together
+at Wednesday 03:00 ET, so being an hour earlier changes nothing there.
+
+**Still not scheduled:** the full `ff.cli daily` (projections, FAAB snapshots,
+rest-of-season totals, FantasyCalc values, injuries). Those move daily, not
+hourly, and the news job does not refresh them.

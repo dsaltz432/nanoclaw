@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.ff-news</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{PROJECT_ROOT}}/scripts/ff-news.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{PROJECT_ROOT}}</string>
+    <!-- Every 15 minutes. The refresh costs ~6s, so the interval is set by how
+         fast a decision needs the news, not by what the pull costs.
+
+         Fifteen minutes means an average detection latency of about seven.
+         That matters in exactly one place: a FREE AGENT is first-come, and
+         when a starter's backup is unrostered the edge goes to whoever adds
+         first. Waiver claims are immune to this — they all process together at
+         Wednesday 03:00 ET, so being an hour earlier changes nothing there.
+
+         Going shorter buys little. ESPN serves one request per player whose
+         news_updated moved, and on most quarter-hours that set is empty. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{PROJECT_ROOT}}/logs/ff-news.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{PROJECT_ROOT}}/logs/ff-news.error.log</string>
+</dict>
+</plist>
