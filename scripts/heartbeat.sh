@@ -114,12 +114,22 @@ mv "$TMP_LAUNCHD" "$SNAPSHOT_DIR/launchctl.txt"
 mv "$TMP_DISK"    "$SNAPSHOT_DIR/disk.txt"
 mv "$TMP_JOBS"    "$SNAPSHOT_DIR/jobs.txt"
 mv "$TMP_PIDS"    "$PREV_PIDS"
-# Restarts accumulate until the watchdog consumes them, so a restart that
-# happens between watchdog runs is not lost.
+# Restarts persist briefly so one that happens between watchdog runs is not
+# lost, then expire. They must expire: an entry that lingers is re-reported
+# forever. A single restart on 2026-08-26 produced four separate alerts over
+# the following four days because nothing ever aged it out. A crash is news
+# for a few hours, not indefinitely.
+# ISO8601 UTC sorts lexicographically, so a string compare against a cutoff is
+# enough — and avoids awk's mktime(), which is a gawk extension absent from the
+# awk macOS ships.
+RESTART_CUTOFF="$(date -u -v-6H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
 if [ -s "${TMP_JOBS}.restarts" ]; then
   cat "${TMP_JOBS}.restarts" >> "$SNAPSHOT_DIR/restarts.txt"
-  # keep the file bounded
-  tail -50 "$SNAPSHOT_DIR/restarts.txt" > "${SNAPSHOT_DIR}/restarts.tmp" \
+fi
+if [ -f "$SNAPSHOT_DIR/restarts.txt" ] && [ -n "$RESTART_CUTOFF" ]; then
+  awk -F'|' -v cutoff="$RESTART_CUTOFF" 'NF >= 4 && $4 >= cutoff' \
+    "$SNAPSHOT_DIR/restarts.txt" > "${SNAPSHOT_DIR}/restarts.tmp" \
     && mv "${SNAPSHOT_DIR}/restarts.tmp" "$SNAPSHOT_DIR/restarts.txt"
 fi
 rm -f "${TMP_JOBS}.restarts"
