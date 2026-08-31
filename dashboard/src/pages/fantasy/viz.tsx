@@ -1,4 +1,4 @@
-import { ComponentPropsWithoutRef, CSSProperties, ReactNode, useState } from "react";
+import { ComponentPropsWithoutRef, CSSProperties, ReactNode, useEffect, useState } from "react";
 import { SectionProvider } from "./method";
 
 /**
@@ -35,38 +35,87 @@ export const C = {
   context: "#374151",
 };
 
+/** True on a phone-sized screen. Re-evaluated on resize/rotate. */
+export function useIsNarrow() {
+  const [narrow, setNarrow] = useState(
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 639px)").matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
 export function Card({
   title,
   subtitle,
   right,
   children,
   className = "",
+  secondary = false,
 }: {
   title?: string;
   subtitle?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
   className?: string;
+  /**
+   * Reference material rather than something you act on. Starts COLLAPSED on a
+   * phone and open everywhere else. Each tab was six or seven screens tall
+   * because it stacked a desktop dashboard vertically; folding the lookup
+   * tables away puts the actionable cards back within a thumb's reach without
+   * removing anything.
+   */
+  secondary?: boolean;
 }) {
+  const narrow = useIsNarrow();
+  const [open, setOpen] = useState(false);
+  const collapsible = secondary && narrow;
+  const shown = !collapsible || open;
   return (
     <section className={`min-w-0 rounded-lg border border-gray-800 bg-gray-900 ${className}`}>
       {(title || right) && (
         <header
           // Stacks on a phone. Side by side, a `shrink-0` control leaves the
           // subtitle a column two words wide and it wraps one word per line.
-          className="flex flex-col items-start gap-2 border-b border-gray-800 px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
+          className="flex flex-col items-start gap-2 border-b border-gray-800 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-4 sm:py-3"
         >
           <div className="min-w-0">
             {title && <h3 className="text-sm font-semibold text-gray-100">{title}</h3>}
-            {subtitle && <p className="mt-0.5 text-xs text-gray-500">{subtitle}</p>}
+            {/* Subtitles are mostly explanation, and on a phone two lines of it
+                sat between you and the table on every single card. They are not
+                dropped — some carry live counts ("19 unread across 14 players")
+                and cannot be told from prose programmatically — but they get
+                smaller type and tighter leading below sm, which is about 40% of
+                the height back without losing a word. */}
+            {subtitle && (
+              <p className="mt-0.5 text-[11px] leading-snug text-gray-500 sm:text-xs sm:leading-normal">
+                {subtitle}
+              </p>
+            )}
           </div>
-          {right && <div className="w-full shrink-0 sm:w-auto">{right}</div>}
+          {right && !collapsible && <div className="w-full shrink-0 sm:w-auto">{right}</div>}
+          {collapsible && (
+            <button
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              className="w-full shrink-0 text-left text-xs text-indigo-400 sm:w-auto"
+            >
+              {open ? "hide" : "show"}
+            </button>
+          )}
         </header>
       )}
       {/* Notes inside this card register under its title in the Methodology
           drawer, so the drawer can say WHICH panel each explanation is about
           without every call site having to name itself. */}
-      <div className="p-4">
+      {/* Kept MOUNTED when collapsed, only hidden. Unmounting would drop the
+          <Note> registrations the Methodology page collects, and re-run any
+          fetch the card owns every time it is opened. */}
+      <div className={shown ? "p-3 sm:p-4" : "hidden"}>
         <SectionProvider name={title ?? "General"}>{children}</SectionProvider>
       </div>
     </section>
@@ -487,11 +536,20 @@ export function NewsPeek({
         // nothing and the click-to-pin path silently never worked. Hover still
         // did, which is exactly the kind of bug that survives a desktop test and
         // fails on a phone.
-        className={`absolute top-full z-30 mt-1 w-[22rem] max-w-[80vw] rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left shadow-xl ${
+        // On a phone this is a bottom sheet pinned to the VIEWPORT, not a panel
+        // anchored to the badge. Anchoring cannot work there: the badge sits
+        // beside a player name that may be 250px across a 390px screen, so a
+        // 22rem panel hanging off it is half off-screen whichever edge it
+        // aligns to, and `max-w-[80vw]` only made it narrow AND clipped. Tap is
+        // the only way to open it on touch anyway — there is no hover — so a
+        // sheet is also the interaction a phone expects.
+        className={`z-30 rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left shadow-xl
+          fixed inset-x-2 bottom-2 max-h-[60vh] overflow-y-auto
+          sm:absolute sm:inset-x-auto sm:bottom-auto sm:top-full sm:mt-1 sm:max-h-none sm:w-[22rem] sm:max-w-[80vw] sm:overflow-visible ${
           pinned
             ? "block pointer-events-auto"
-            : "pointer-events-none hidden peer-hover:block peer-focus:block"
-        } ${align === "right" ? "right-0" : "left-0"}`}
+            : "pointer-events-none hidden sm:peer-hover:block sm:peer-focus:block"
+        } ${align === "right" ? "sm:right-0" : "sm:left-0"}`}
       >
         <span className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
           {name} — {notes.length} recent report{notes.length === 1 ? "" : "s"}

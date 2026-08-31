@@ -124,7 +124,8 @@ export default function AlertsTab({ league }: { league: string }) {
         <Card
           title="Scheduled jobs"
           subtitle="The fantasy subset only — full job health, run history and trigger-now live in Admin → Tasks"
-        >
+        secondary
+      >
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-gray-800">
@@ -258,6 +259,7 @@ export default function AlertsTab({ league }: { league: string }) {
       <Card
         title="What fires an alert"
         subtitle="Four rules. Everything else is news, and news lives on the News tab."
+        secondary
       >
         <ul className="space-y-3">
           {data.rules.map((r) => (

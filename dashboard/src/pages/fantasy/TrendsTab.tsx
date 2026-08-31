@@ -172,10 +172,10 @@ export default function TrendsTab({ league }: { league: string }) {
                 <tr className="border-b border-gray-800">
                   <Th>Player</Th>
                   <Th>Verdict</Th>
-                  <Th className="text-right">Sleeper 24h</Th>
-                  <Th className="text-right">vs week</Th>
-                  <Th className="text-right">ESPN owned</Th>
-                  <Th className="text-right">Beats</Th>
+                  <Th className="hidden text-right sm:table-cell">Sleeper 24h</Th>
+                  <Th className="hidden text-right sm:table-cell">vs week</Th>
+                  <Th className="hidden text-right sm:table-cell">ESPN owned</Th>
+                  <Th className="hidden text-right sm:table-cell">Beats</Th>
                   <Th>Availability</Th>
                 </tr>
               </thead>
@@ -212,7 +212,7 @@ export default function TrendsTab({ league }: { league: string }) {
                         {r.verdict}
                       </span>
                     </Td>
-                    <Td data-label="Sleeper 24h" className="whitespace-nowrap text-right tabular-nums text-gray-400">
+                    <Td data-label="Sleeper 24h" className="hidden sm:table-cell whitespace-nowrap text-right tabular-nums text-gray-400">
                       {r.sleeper.rank_24 ? (
                         <>
                           #{r.sleeper.rank_24}
@@ -224,7 +224,7 @@ export default function TrendsTab({ league }: { league: string }) {
                         <span className="text-gray-700">—</span>
                       )}
                     </Td>
-                    <Td data-label="vs week" className="whitespace-nowrap text-right tabular-nums">
+                    <Td data-label="vs week" className="hidden sm:table-cell whitespace-nowrap text-right tabular-nums">
                       {/* Acceleration: the share of a week's adds that landed in
                           the last day, over what an even trickle would give.
                           Above 2x is a story breaking now rather than one the
@@ -247,7 +247,7 @@ export default function TrendsTab({ league }: { league: string }) {
                         <span className="text-gray-700">—</span>
                       )}
                     </Td>
-                    <Td data-label="ESPN owned" className="whitespace-nowrap text-right tabular-nums text-gray-400">
+                    <Td data-label="ESPN owned" className="hidden sm:table-cell whitespace-nowrap text-right tabular-nums text-gray-400">
                       {r.espn.pct_owned != null ? (
                         <>
                           {r.espn.pct_owned.toFixed(0)}%
@@ -267,7 +267,7 @@ export default function TrendsTab({ league }: { league: string }) {
                     </Td>
                     <Td
                       data-label="Beats"
-                      className="whitespace-nowrap text-right tabular-nums text-gray-500"
+                      className="hidden whitespace-nowrap text-right tabular-nums text-gray-500 sm:table-cell"
                       title="Players already rostered in this league, at his position, who project below him"
                     >
                       {r.beats_rostered}
@@ -300,7 +300,9 @@ export default function TrendsTab({ league }: { league: string }) {
         </div>
       )}
 
-      <Card title="Where this comes from" subtitle="Four crowds, and the disagreement between them">
+      <Card title="Where this comes from" subtitle="Four crowds, and the disagreement between them"
+        secondary
+      >
         <ul className="space-y-2">
           {data.sources.map((s) => (
             <li key={s.source} className="flex flex-wrap items-baseline gap-2 text-xs">

@@ -36,7 +36,11 @@
   .ff-stack,
   .ff-stack tbody,
   .ff-stack tr,
-  .ff-stack td {
+  /* `:not(.hidden)` so a cell a component chose to drop on mobile stays
+     dropped. Without it this rule and Tailwind's `.hidden` are both
+     single-class selectors, this one wins on source order, and every
+     `hidden sm:table-cell` column reappeared on the phone it was hidden for. */
+  .ff-stack td:not(.hidden) {
     display: block;
     width: 100%;
     min-width: 0;
@@ -47,7 +51,7 @@
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.5rem;
   }
-  .ff-stack td {
+  .ff-stack td:not(.hidden) {
     display: flex;
     gap: 0.75rem;
     align-items: baseline;
@@ -56,7 +60,7 @@
     white-space: normal;
     text-align: left !important;
   }
-  .ff-stack td::before {
+  .ff-stack td:not(.hidden)::before {
     content: attr(data-label);
     flex: 0 0 auto;
     font-size: 11px;
@@ -65,10 +69,14 @@
     color: var(--color-gray-500, #6b7280);
   }
   /* A cell with no label is the row's headline — give it the full width. */
-  .ff-stack td[data-label=""]::before {
+  .ff-stack td[data-label=""]:not(.hidden)::before {
     display: none;
   }
-  .ff-stack .ff-row-head {
+  /* `td.ff-row-head` rather than `.ff-row-head`: the generic cell rule above
+     gained a `:not(.hidden)` and with it enough specificity to out-rank this
+     one, which turned every row headline back into a flex row -- so a player
+     name sat squeezed beside its own explanation, wrapping mid-name. */
+  .ff-stack td.ff-row-head {
     display: block;
     font-weight: 500;
     padding-bottom: 0.25rem;

@@ -479,7 +479,8 @@ export default function WaiversTab({ league }: { league: string }) {
         <Card
           title="What each tier actually costs"
           subtitle={`Winning bids in this league's own sealed-bid history, by projection tier. ${data.price_table.contests_scored} of ${data.price_table.contests_total} contests could be priced.`}
-        >
+        secondary
+      >
           <div className="overflow-x-auto ff-stack-wrap">
           <table className="ff-stack w-full border-collapse">
             <thead>
@@ -547,7 +548,9 @@ export default function WaiversTab({ league }: { league: string }) {
         </Card>
 
         {data.rival_budgets.degenerate ? (
-          <Card title="Who can still outbid you">
+          <Card title="Who can still outbid you"
+        secondary
+      >
             <p className="text-sm text-gray-500">
               Everyone is within a few points of a full budget, so remaining FAAB distinguishes
               nobody yet. This becomes useful once the field separates — usually around week 4.
@@ -555,7 +558,9 @@ export default function WaiversTab({ league }: { league: string }) {
             <Note>{data.rival_budgets.note}</Note>
           </Card>
         ) : (
-        <Card title="Who can still outbid you" subtitle={`Percent of the $${budget} budget remaining, right now`}>
+        <Card title="Who can still outbid you" subtitle={`Percent of the $${budget} budget remaining, right now`}
+        secondary
+      >
           <HBars
             rows={data.rival_budgets.rivals
               .slice()
@@ -578,7 +583,8 @@ export default function WaiversTab({ league }: { league: string }) {
         <Card
           title="Budget burn, averaged across seasons"
           subtitle="Cumulative percent of budget spent by week. A manager who is broke in week 10 cannot outbid you in week 10 — this beats keying on their usual bid size."
-        >
+        secondary
+      >
           <LineChart
             xLabels={data.budget_burn[0]?.weeks ?? []}
             yMax={100}

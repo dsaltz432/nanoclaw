@@ -459,6 +459,7 @@ export default function TradesTab({ league }: { league: string }) {
       <Card
         title="Who actually accepts"
         subtitle="Background on how each manager behaves — useful before you open a conversation, not while you are pricing one"
+        secondary
       >
         <div className="overflow-x-auto ff-stack-wrap">
           <table className="ff-stack w-full min-w-[520px] border-collapse">
@@ -823,7 +824,9 @@ function NeedsGrid({ data }: { data: TradesData }) {
 
   if (data.needs.reason) {
     return (
-      <Card title="Positional strength, every roster">
+      <Card title="Positional strength, every roster"
+        secondary
+      >
         <p className="text-sm text-gray-500">{data.needs.reason}</p>
       </Card>
     );
@@ -833,7 +836,8 @@ function NeedsGrid({ data }: { data: TradesData }) {
     <Card
       title="Positional strength, every roster"
       subtitle="Who is shopping for what — click a row for the reasoning"
-    >
+        secondary
+      >
       <div className="overflow-x-auto ff-stack-wrap">
         <table className="w-full min-w-[720px] border-collapse">
           <thead>

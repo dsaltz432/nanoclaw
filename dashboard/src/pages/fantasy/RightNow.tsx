@@ -89,14 +89,14 @@ export default function RightNow({
 
   return (
     <section className="mb-5 rounded-lg border border-indigo-500/25 bg-indigo-500/[0.04]">
-      <header className="flex flex-wrap items-center gap-3 border-b border-indigo-500/15 px-4 py-2.5">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-indigo-500/15 px-3 py-2 sm:px-4 sm:py-2.5">
         <h3 className="text-sm font-semibold text-indigo-200">Right now</h3>
         <span className="text-xs text-gray-500">
           week {data.week} · drawn from every tab
         </span>
         {data.more > 0 && <span className="text-xs text-gray-600">{data.more} more below</span>}
         {collapsed && data.items[0] && (
-          <span className="truncate text-xs text-gray-400">
+          <span className="line-clamp-2 text-xs leading-snug text-gray-400">
             {data.items[0].position} {data.items[0].name} — {data.items[0].action}
           </span>
         )}
@@ -118,7 +118,7 @@ export default function RightNow({
 
       {collapsed ? null : (
 
-      <div className="space-y-3 px-4 py-3">
+      <div className="space-y-3 px-3 py-2.5 sm:px-4 sm:py-3">
         {nothing && (
           <p className="text-sm text-gray-400">
             {data.reason ??

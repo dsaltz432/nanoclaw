@@ -85,8 +85,8 @@ export default function FantasyPage() {
       {/* Health and explanation are both top-right and both out of the way:
           neither is what you came for, and both were previously a band across
           the page that every panel had to start below. */}
-      <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-2">
-        <h2 className="text-lg font-semibold text-gray-100">Fantasy Football</h2>
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 sm:mb-5 sm:gap-y-2">
+        <h2 className="text-base font-semibold text-gray-100 sm:text-lg">Fantasy Football</h2>
         {overview && (
           <span className="text-xs text-gray-500">
             {overview.state.season} {overview.state.season_type}, projecting week {overview.target_week}
@@ -139,31 +139,38 @@ export default function FantasyPage() {
         <MethodologyPage onBack={() => setShowMethod(false)} />
       ) : (
       <>
-      {/* ── league selector ─────────────────────────────────────────── */}
+      {/* ── league selector ───────────────────────────────────────────
+          A native select rather than three cards. The cards cost ~360px of a
+          844px phone screen, so you scrolled a full viewport of chrome before
+          reaching the thing you opened the tab for. A select is also the one
+          control every phone already knows how to render as a full-screen
+          picker.
+
+          The meta line survives underneath, because "22 teams · $1000 FAAB"
+          is what stops you reading a guillotine number as a redraft one. */}
       {overview && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {overview.leagues.map((l) => (
-            <button
-              key={l.league_key}
-              onClick={() => setLeague(l.league_key)}
-              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                league === l.league_key
-                  ? "border-indigo-500/40 bg-indigo-500/10"
-                  : "border-gray-800 bg-gray-900 hover:border-gray-700"
-              }`}
-            >
-              <div
-                className={`text-sm font-medium ${
-                  league === l.league_key ? "text-indigo-300" : "text-gray-300"
-                }`}
-              >
+        <div className="mb-4">
+          <label className="sr-only" htmlFor="ff-league">
+            League
+          </label>
+          <select
+            id="ff-league"
+            value={league}
+            onChange={(e) => setLeague(e.target.value)}
+            className="w-full rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-2.5 text-sm font-medium text-indigo-200 sm:w-auto"
+          >
+            {overview.leagues.map((l) => (
+              <option key={l.league_key} value={l.league_key} className="bg-gray-900 text-gray-100">
                 {l.name}
-              </div>
-              <div className="text-[11px] text-gray-500">
-                {l.total_rosters} teams · ${l.faab_budget} FAAB · {l.status.replace("_", " ")}
-              </div>
-            </button>
-          ))}
+              </option>
+            ))}
+          </select>
+          {current && (
+            <p className="mt-1 text-[11px] text-gray-500">
+              {current.total_rosters} teams · ${current.faab_budget} FAAB ·{" "}
+              {current.status.replace("_", " ")}
+            </p>
+          )}
         </div>
       )}
 
