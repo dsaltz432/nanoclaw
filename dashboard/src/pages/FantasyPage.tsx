@@ -80,7 +80,7 @@ export default function FantasyPage() {
 
   return (
     <MethodProvider>
-    <div className="p-4 sm:p-8">
+    <div className="ff-scope p-4 sm:p-8">
 
       {/* Health and explanation are both top-right and both out of the way:
           neither is what you came for, and both were previously a band across
@@ -203,7 +203,7 @@ export default function FantasyPage() {
       />
 
       {/* ── subtabs ─────────────────────────────────────────────────── */}
-      <div className="mb-2 flex w-fit gap-1 rounded-lg bg-gray-900 p-1">
+      <div className="mb-2 -mx-1 flex gap-1 overflow-x-auto rounded-lg bg-gray-900 p-1 px-1 sm:mx-0 sm:w-fit">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -211,7 +211,7 @@ export default function FantasyPage() {
               setTab(t.key);
               setNowCollapsed(true);
             }}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`shrink-0 rounded-md px-2 py-2.5 text-sm font-medium transition-colors sm:px-4 ${
               tab === t.key ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"
             }`}
           >

@@ -480,7 +480,8 @@ export default function WaiversTab({ league }: { league: string }) {
           title="What each tier actually costs"
           subtitle={`Winning bids in this league's own sealed-bid history, by projection tier. ${data.price_table.contests_scored} of ${data.price_table.contests_total} contests could be priced.`}
         >
-          <table className="w-full border-collapse">
+          <div className="overflow-x-auto ff-stack-wrap">
+          <table className="ff-stack w-full border-collapse">
             <thead>
               <tr className="border-b border-gray-800">
                 <Th>Tier</Th>
@@ -495,10 +496,10 @@ export default function WaiversTab({ league }: { league: string }) {
             <tbody>
               {data.price_table.rows.map((r) => (
                 <tr key={r.tier} className="border-b border-gray-800/60">
-                  <Td>
+                  <Td data-label="" className="ff-row-head">
                     <Badge tone={r.tier === "11+" ? "good" : "neutral"}>{r.tier}</Badge>
                   </Td>
-                  <Td className="whitespace-nowrap text-right tabular-nums text-gray-500">
+                  <Td data-label="n" className="whitespace-nowrap text-right tabular-nums text-gray-500">
                     {r.n}
                     {r.thin && r.n > 0 && (
                       <>
@@ -507,25 +508,26 @@ export default function WaiversTab({ league }: { league: string }) {
                       </>
                     )}
                   </Td>
-                  <Td className="text-right tabular-nums">{r.median != null ? `$${r.median}` : "—"}</Td>
-                  <Td className="text-right tabular-nums text-gray-100">
+                  <Td data-label="Median" className="text-right tabular-nums">{r.median != null ? `$${r.median}` : "—"}</Td>
+                  <Td data-label="p75" className="text-right tabular-nums text-gray-100">
                     {r.p75 != null ? `$${r.p75}` : "—"}
                   </Td>
-                  <Td className="text-right tabular-nums text-gray-500">
+                  <Td data-label="p90" className="text-right tabular-nums text-gray-500">
                     {r.p90 != null ? `$${r.p90}` : "—"}
                   </Td>
-                  <Td>
+                  <Td data-label="Spread">
                     {r.median != null && r.p75 != null && r.p90 != null && (
                       <RangeRow median={r.median} p75={r.p75} p90={r.p90} max={priceMax} />
                     )}
                   </Td>
-                  <Td className="text-right tabular-nums" style={{ color: C.s3 }}>
+                  <Td data-label="Next 4 wks" className="text-right tabular-nums" style={{ color: C.s3 }}>
                     {r.mean_next4_pts != null ? r.mean_next4_pts.toFixed(0) : "—"}
                   </Td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           <div className="mt-2 flex items-center gap-3 text-[11px] text-gray-500">
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: C.s3 }} /> median
@@ -827,16 +829,16 @@ function MyRoster({ data }: { data: Waivers }) {
                   weakest && s.player_id === weakest.player_id ? "bg-amber-500/5" : ""
                 }`}
               >
-                <span className="w-12 shrink-0 text-xs font-medium text-gray-500">{s.slot}</span>
+                <span className="w-9 shrink-0 text-xs font-medium text-gray-500 sm:w-12">{s.slot}</span>
                 {/* The name truncates; the badge must NOT be inside it.
                     `truncate` is overflow:hidden, which clipped the popover to
                     the row — correct geometry, correct z-index, invisible. */}
                 <span className="min-w-0 truncate text-gray-200">{s.name}</span>
                 <NewsPeek notes={news?.[s.player_id]} name={s.name} />
                 <span className="flex-1" />
-                <span className="shrink-0 text-xs text-gray-600">{s.team}</span>
+                <span className="hidden shrink-0 text-xs text-gray-600 sm:inline">{s.team}</span>
                 {s.injury_status && <Badge tone="warning">{s.injury_status}</Badge>}
-                <span className="w-12 shrink-0 text-right tabular-nums text-gray-300">
+                <span className="w-10 shrink-0 text-right tabular-nums text-gray-300 sm:w-12">
                   {s.projected?.toFixed(1) ?? "—"}
                 </span>
               </li>
@@ -850,13 +852,13 @@ function MyRoster({ data }: { data: Waivers }) {
           <ul className="space-y-0.5">
             {bench.map((s) => (
               <li key={s.player_id} className="flex items-center gap-2 rounded px-2 py-1 text-sm">
-                <span className="w-12 shrink-0 text-xs text-gray-600">{s.position}</span>
+                <span className="w-9 shrink-0 text-xs text-gray-600 sm:w-12">{s.position}</span>
                 <span className="min-w-0 truncate text-gray-400">{s.name}</span>
                 <NewsPeek notes={news?.[s.player_id]} name={s.name} />
                 <span className="flex-1" />
-                <span className="shrink-0 text-xs text-gray-600">{s.team}</span>
+                <span className="hidden shrink-0 text-xs text-gray-600 sm:inline">{s.team}</span>
                 {s.injury_status && <Badge tone="warning">{s.injury_status}</Badge>}
-                <span className="w-12 shrink-0 text-right tabular-nums text-gray-500">
+                <span className="w-10 shrink-0 text-right tabular-nums text-gray-500 sm:w-12">
                   {s.projected?.toFixed(1) ?? "—"}
                 </span>
               </li>

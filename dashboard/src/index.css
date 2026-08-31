@@ -81,3 +81,52 @@
     min-width: 0 !important;
   }
 }
+
+/* ── Touch targets ────────────────────────────────────────────────────────
+ *
+ * A 28x28 icon button is fine with a mouse and a coin toss with a thumb. This
+ * sets a floor on COARSE POINTERS ONLY, so the dense desktop layout is left
+ * exactly as it was — the audit that prompted this found 26 controls under
+ * 30px tall on the Trades tab alone.
+ *
+ * The padding is applied rather than a min-height so the control grows around
+ * its label instead of the label floating in a taller box. Inline text
+ * buttons inside prose are exempt: making "expand" 44px tall would put a hole
+ * in the sentence containing it.
+ */
+@media (pointer: coarse) {
+  .ff-scope button:not(.ff-inline),
+  .ff-scope [role='button']:not(.ff-inline),
+  .ff-scope select,
+  .ff-scope input[type='text'],
+  .ff-scope input:not([type]) {
+    min-height: 36px;
+  }
+
+  /* Icon-only controls need width as well as height. The news-peek badge sits
+     beside a player name at 13px wide, which is a coin toss for a thumb. */
+  .ff-scope button.peer {
+    min-width: 32px;
+  }
+
+  /* The source-link icon is an 11px glyph on purpose — it sits inside a
+     sentence and a bigger icon would shove the prose around. Grow the HIT
+     AREA instead of the mark, which is what a thumb actually needs. */
+  .ff-scope a:has(> svg) {
+    position: relative;
+  }
+  .ff-scope a:has(> svg)::after {
+    content: '';
+    position: absolute;
+    inset: -11px;
+  }
+  .ff-scope input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+  }
+  /* A checkbox label is the real target; make the whole thing tappable. */
+  .ff-scope label:has(input[type='checkbox']) {
+    min-height: 36px;
+    align-items: center;
+  }
+}

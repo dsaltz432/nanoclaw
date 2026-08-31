@@ -1,4 +1,4 @@
-import { CSSProperties, ReactNode, useState } from "react";
+import { ComponentPropsWithoutRef, CSSProperties, ReactNode, useState } from "react";
 import { SectionProvider } from "./method";
 
 /**
@@ -49,7 +49,7 @@ export function Card({
   className?: string;
 }) {
   return (
-    <section className={`rounded-lg border border-gray-800 bg-gray-900 ${className}`}>
+    <section className={`min-w-0 rounded-lg border border-gray-800 bg-gray-900 ${className}`}>
       {(title || right) && (
         <header
           // Stacks on a phone. Side by side, a `shrink-0` control leaves the
@@ -395,19 +395,15 @@ export { Note } from "./method";
 export function Th({
   children,
   className = "",
-  style,
-  title,
+  ...rest
 }: {
   children: ReactNode;
   className?: string;
-  style?: CSSProperties;
   /** A column header is the right home for the paragraph explaining the column. */
-  title?: string;
-}) {
+} & ComponentPropsWithoutRef<"th">) {
   return (
     <th
-      style={style}
-      title={title}
+      {...rest}
       className={`px-2 py-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500 ${className}`}
     >
       {children}
@@ -415,19 +411,22 @@ export function Th({
   );
 }
 
+/**
+ * Cells forward any extra prop to the element -- `data-label` above all. They
+ * used to destructure only children/className/style/title and silently drop
+ * the rest, so the mobile stacked-card layout rendered
+ * `content: attr(data-label)` against an attribute that never reached the DOM.
+ * Every call site passing data-label was already correct; none of them reached
+ * a phone, so a stacked row read "Bradley / 2 / 1 / 1 / 50%" with nothing
+ * saying which number was which.
+ */
 export function Td({
   children,
   className = "",
-  style,
-  title,
-}: {
-  children: ReactNode;
-  className?: string;
-  style?: CSSProperties;
-  title?: string;
-}) {
+  ...rest
+}: { children: ReactNode; className?: string } & ComponentPropsWithoutRef<"td">) {
   return (
-    <td style={style} title={title} className={`px-2 py-1.5 text-sm text-gray-300 ${className}`}>
+    <td {...rest} className={`px-2 py-1.5 text-sm text-gray-300 ${className}`}>
       {children}
     </td>
   );

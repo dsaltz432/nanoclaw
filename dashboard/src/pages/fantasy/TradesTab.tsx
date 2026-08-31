@@ -475,16 +475,16 @@ export default function TradesTab({ league }: { league: string }) {
             <tbody>
               {data.counterparties.counterparties.map((c) => (
                 <tr key={c.owner_id} className="border-b border-gray-800/60">
-                  <Td>
+                  <Td data-label="" className="ff-row-head">
                     {c.owner}
                     {c.person && c.handle && (
                       <span className="ml-1.5 text-xs text-gray-600">{c.handle}</span>
                     )}
                   </Td>
-                  <Td className="text-right tabular-nums text-gray-500">{c.trades}</Td>
-                  <Td className="text-right tabular-nums text-gray-500">{c.proposed}</Td>
-                  <Td className="text-right tabular-nums text-gray-500">{c.accepted}</Td>
-                  <Td className="whitespace-nowrap text-right tabular-nums">
+                  <Td data-label="Trades" className="text-right tabular-nums text-gray-500">{c.trades}</Td>
+                  <Td data-label="Proposed" className="text-right tabular-nums text-gray-500">{c.proposed}</Td>
+                  <Td data-label="Accepted" className="text-right tabular-nums text-gray-500">{c.accepted}</Td>
+                  <Td data-label="Accept share" className="whitespace-nowrap text-right tabular-nums">
                     <span style={{ color: (c.accept_share ?? 0) >= 70 ? C.s3 : C.ink2 }}>
                       {c.accept_share != null ? `${c.accept_share.toFixed(0)}%` : "—"}
                     </span>
@@ -497,7 +497,7 @@ export default function TradesTab({ league }: { league: string }) {
                       </>
                     )}
                   </Td>
-                  <Td>
+                  <Td data-label="">
                     <button
                       onClick={() => setPartnerId(c.owner_id)}
                       className="text-xs text-indigo-400 hover:text-indigo-300"
@@ -609,7 +609,9 @@ function RosterPanel({
               <Th>Pos</Th>
               <Th>Player</Th>
               <Th className="text-right">{mode === "dynasty" ? "Market" : "ROS"}</Th>
-              <Th className="text-right">{mode === "dynasty" ? "ROS" : "Market"}</Th>
+              <Th className="hidden text-right sm:table-cell">
+                {mode === "dynasty" ? "ROS" : "Market"}
+              </Th>
               <Th className="text-right">VOR</Th>
               <Th>&nbsp;</Th>
               <Th>&nbsp;</Th>
@@ -643,7 +645,7 @@ function RosterPanel({
                       ? p.market_value?.toLocaleString() ?? "—"
                       : p.ros_points?.toFixed(0) ?? "—"}
                   </Td>
-                  <Td className="text-right tabular-nums text-gray-500">
+                  <Td className="hidden text-right tabular-nums text-gray-500 sm:table-cell">
                     {mode === "dynasty"
                       ? p.ros_points?.toFixed(0) ?? "—"
                       : p.market_value?.toLocaleString() ?? "—"}
