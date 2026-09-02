@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.ff-live</string>
+    <!-- IMPORTANT: nothing launchd touches *at spawn time* may live under ~/Documents, or a
+         mid-session-loaded job is denied (posix_spawn EPERM / exit 78). So the program is an
+         inline /bin/bash -c rather than the repo script directly, and Standard{Out,Error}Path
+         sit under ~/.local. The child reads the repo script and the ff package fine.
+         com.nanoclaw.ff-news.plist points straight at a repo script and works only because it
+         was loaded at login; copying that shape here would fail until the next reboot. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /bin/bash "{{PROJECT_ROOT}}/scripts/ff-refresh.sh" live</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+    <!-- Every two hours. What this flavour carries is roster state and completed
+         transactions, and the decision it feeds is a waiver claim, which processes once a
+         week on Wednesday at 03:00 ET. Nothing here is first-come the way a free-agent add
+         is — that race is what ff-news.sh's 15 minute loop exists for — so a two hour lag
+         costs nothing, and it keeps this off the every-15-minutes path where a ~15s
+         multi-league pull would be the dominant cost. -->
+    <key>StartInterval</key>
+    <integer>7200</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ff-live.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ff-live.error.log</string>
+</dict>
+</plist>

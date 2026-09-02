@@ -324,12 +324,19 @@ cannot be.
 
 ## Scheduled jobs
 
-| | |
-|---|---|
-| Job | `com.nanoclaw.ff-news` (host launchd, every 15 min) |
-| Script | `scripts/ff-news.sh` · template `launchd/com.nanoclaw.ff-news.plist` |
-| Install | `scripts/install-ff-news-plist.sh` (idempotent) |
-| Logs | `logs/ff-news.log`, `logs/ff-news.error.log` |
+Three host launchd jobs, split by how fast the data underneath them moves.
+
+| Job | Cadence | Refreshes | Script / template |
+|---|---|---|---|
+| `com.nanoclaw.ff-news` | every 15 min | Sleeper player index, Rotowire notes | `scripts/ff-news.sh` · `launchd/com.nanoclaw.ff-news.plist` |
+| `com.nanoclaw.ff-live` | every 2h | transactions, matchups, FAAB, **rosters** | `scripts/ff-refresh.sh live` · `launchd/com.nanoclaw.ff-live.plist` |
+| `com.nanoclaw.ff-daily` | 06:40 daily | projections, ownership, market values, injuries, **schedules/Vegas lines** | `scripts/ff-refresh.sh daily` · `launchd/com.nanoclaw.ff-daily.plist` |
+
+Install: `scripts/install-ff-news-plist.sh` and `scripts/install-ff-refresh-plists.sh`
+(both idempotent). News logs to `logs/ff-news.log`; the other two log to
+`~/.local/share/nanoclaw/logs/ff-{live,daily}.log` — outside `~/Documents`, because
+launchd is denied spawn-time access there for a job loaded mid-session
+(see [host-cronjobs.md](host-cronjobs.md#exit-78-with-empty-logs--the-documents-spawn-time-gotcha)).
 
 A host cronjob, not a NanoClaw scheduled task, because there is no judgement in
 it: pull Sleeper's player index for `news_updated`, then fetch notes for the
@@ -349,6 +356,26 @@ minutes of average detection latency, and that matters in exactly one place: a
 goes to whoever adds first. Waiver claims are immune — they all process together
 at Wednesday 03:00 ET, so being an hour earlier changes nothing there.
 
-**Still not scheduled:** the full `ff.cli daily` (projections, FAAB snapshots,
-rest-of-season totals, FantasyCalc values, injuries). Those move daily, not
-hourly, and the news job does not refresh them.
+**Rosters need their own step.** `ff.cli live` labels one of its steps
+`rosters:<league>`, but that step calls `sleeper.ingest_faab_snapshot`, which
+writes `faab_snapshots` only. The player list on a roster is written by
+`sleeper.ingest_league_chain`, which runs from `pipeline.backfill` — seasonal
+setup — and from nothing on a schedule. Left alone the symptom is that you add a
+player, the transaction is ingested, and the roster panel still shows the man you
+dropped. `scripts/ff-refresh.sh` therefore calls `ingest_league_chain` itself
+(with `max_seasons=1`) after `ff.cli live`. The tidier fix is to add the step to
+`pipeline.live` upstream in `fantasy-football-agent`; it lives here so that repo,
+which also feeds the Telegram agent, stays untouched.
+
+**So do schedules, for the same reason.** `nflverse.ingest_schedules` is also
+reachable only from `pipeline.backfill`, while `ff/api.py` reads `total_line` and
+`spread_line` out of that table for game environment — Vegas lines, which move on
+injury news and are posted about a week ahead. Left to `backfill` alone the table
+goes stale where it has numbers and stays empty for weeks not yet published.
+`ff-refresh.sh daily` calls `ingest_schedules` (one CSV, whole season).
+
+`sleeper.drafts` is genuinely static in-season and is correctly left to `backfill`.
+
+**Still not scheduled:** alerting. `ff.cli alerts --emit` has no job, by design —
+see the alerting section above; ingestion and notification are kept apart so the
+alert cadence can change without touching the refresh cadence.

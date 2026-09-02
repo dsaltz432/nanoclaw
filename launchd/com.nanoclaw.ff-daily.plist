@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.ff-daily</string>
+    <!-- Same spawn-time constraint as com.nanoclaw.ff-live.plist: inline /bin/bash -c, and
+         logs outside ~/Documents. See that file's comment. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /bin/bash "{{PROJECT_ROOT}}/scripts/ff-refresh.sh" daily</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+    <!-- 06:40. The expensive pull (Sleeper's ~15MB /players/nfl, which Sleeper asks be
+         fetched at most once a day) plus projections, ownership and market values.
+
+         Before the morning read, and — the part that actually sets the time — after the
+         overnight ones. It sits behind the 03:15 backup and the 04:30 Spotify cleanup so
+         the three are not competing, and comfortably after Wednesday's 03:00 ET waiver
+         processing, so the first daily run of a waiver morning already reflects what
+         cleared. If the machine is asleep launchd runs it on wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>40</integer>
+    </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ff-daily.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ff-daily.error.log</string>
+</dict>
+</plist>

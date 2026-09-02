@@ -221,3 +221,10 @@ After editing a **template**, you must re-render and reload the installed copy
 | `briefing-upload` | WatchPaths | on file write | CLAUDE.md "Sports Briefing" |
 | `trip-briefing-upload` | WatchPaths | on file write | CLAUDE.md "Strava Trips" |
 | `caffeinate` | (long-running) | always on AC | CLAUDE.md "Sleep Prevention" |
+| `ff-news` | Interval | every 900s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) |
+| `ff-live` | Interval | every 7200s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
+| `ff-daily` | Calendar | 6:40 AM | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
+
+`ff-live` / `ff-daily` are the reference for a job that must work **without a reboot**:
+inline `/bin/bash -c` program, logs under `~/.local`. `ff-news` predates that and points
+straight at a repo script, which works only because it was loaded at login.
