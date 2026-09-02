@@ -56,7 +56,7 @@ echo "$TIMESTAMP" > "$TMP_TS"
 # log each job appends to.
 #
 # Format: label|kind|max_age_min|age_min|source
-#   kind  = daily  -> alert when age_min > max_age_min
+#   kind  = daily / interval / weekly -> alert when age_min > max_age_min
 #           event  -> WatchPaths-triggered; dormancy is correct, never alert
 #   age_min = -1 when the job has no log at all (never run, or log deleted)
 
@@ -76,6 +76,13 @@ emit_job() {                      # label kind max_age glob
 emit_job com.nanoclaw.backup          daily "$DAILY_MAX_AGE_MIN" "${LOG_DIR}/backup.log"
 emit_job com.nanoclaw.email-metadata  daily "$DAILY_MAX_AGE_MIN" "${LOG_DIR}/email-metadata.log"
 emit_job com.nanoclaw.spotify-cleanup daily "$DAILY_MAX_AGE_MIN" "${LOG_DIR}/spotify-cleanup-audit-*.log"
+emit_job com.nanoclaw.ff-daily        daily "$DAILY_MAX_AGE_MIN" "${HOME}/.local/share/nanoclaw/logs/ff-daily.log"
+# Interval jobs: max age = a few missed fires plus grace, not a day.
+emit_job com.nanoclaw.ff-news         interval 60   "${LOG_DIR}/ff-news.log"
+emit_job com.nanoclaw.ff-live         interval 360  "${HOME}/.local/share/nanoclaw/logs/ff-live.log"
+# backup-verify runs weekly (Sun 05:00); 7 days + a day of grace. The script
+# appends to this log on every run, success or failure, so mtime is reliable.
+emit_job com.nanoclaw.backup-verify   weekly 11640  "${LOG_DIR}/backup-verify.log"
 # WatchPaths jobs fire only when their watched directory changes. They have
 # been idle for months by design; staleness here is not a fault.
 emit_job com.nanoclaw.briefing-upload      event - "${LOG_DIR}/briefing-upload.log"
@@ -87,6 +94,8 @@ emit_job com.nanoclaw.trip-briefing-upload event - "${LOG_DIR}/trip-briefing-upl
 # script samples every 300s. A crash-restart cycle is therefore invisible to
 # HC.io roughly 97% of the time. Comparing the PID against the previous
 # snapshot catches the restart after the fact, which is what actually matters.
+#
+# Entry format: label|old_pid|new_pid|detected_at|last_exit
 
 # Only long-lived KeepAlive services qualify. Interval and one-shot jobs get a
 # fresh PID on every fire by design — com.nanoclaw.heartbeat (this script) is
@@ -105,7 +114,20 @@ if [ -f "$PREV_PIDS" ]; then
     [ -z "$label" ] && continue
     prev=$(awk -F= -v l="$label" '$1==l {print $2}' "$PREV_PIDS")
     if [ -n "$prev" ] && [ "$prev" != "$pid" ]; then
-      echo "${label}|${prev}|${pid}|${TIMESTAMP}" >> "${TMP_JOBS}.restarts"
+      # launchctl list column 2 for a running KeepAlive job is the exit
+      # status of the PREVIOUS instance — i.e. how the old pid died.
+      # 0, 143 (node's 128+SIGTERM) and -15 (raw SIGTERM) are deliberate
+      # stops: launchctl kickstart, reloads, deploys. Recording those turned
+      # every dev-loop restart into a "crashed" alert — 17 of them during
+      # dashboard work on 2026-08-30 alone. Only actual crashes pass.
+      last_exit=$(awk -v l="$label" '$3 == l {print $2}' "$TMP_LAUNCHD")
+      case "$last_exit" in
+        0|143|-15) ;; # graceful stop; not news
+        *)
+          echo "${label}|${prev}|${pid}|${TIMESTAMP}|${last_exit:-unknown}" \
+            >> "${TMP_JOBS}.restarts"
+          ;;
+      esac
     fi
   done < "$TMP_PIDS"
 fi

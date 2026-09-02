@@ -27,6 +27,22 @@ pattern.
 **Scheduled task in SQLite:** `Health Watchdog` — cron `*/30 * * * *`, `context_mode: isolated`,
 `group_folder: telegram_ops`, `chat_jid: tg:-5235132441`.
 
+**Noise controls** (added 2026-09-02 after a run of 16 straight false-positive alerts):
+
+- `restarts.txt` entries carry the old pid's exit status (`label|old_pid|new_pid|detected_at|last_exit`),
+  and the heartbeat drops graceful stops (exit 0 / 143 / SIGTERM) at the source —
+  `launchctl kickstart` during dev work no longer reads as a crash. Entries still expire after 6h.
+- A missing/stale probe file must survive **two consecutive watchdog runs** before it alerts
+  (macOS bind-mount rename races made files transiently invisible to the container).
+- Container logs headed `TIMEOUT` with `Had Streaming Output: true` are idle-reaps of a
+  successful run (exit 137 after the ~30 min follow-up window), not failures.
+- Multiple restarts of one service in a run collapse into a single alert bullet; 3+ is
+  reported as a crash loop.
+
+`jobs.txt` freshness covers: backup, email-metadata, spotify-cleanup, ff-daily (daily);
+ff-news (15 min), ff-live (2h) as intervals; backup-verify (weekly); briefing-upload +
+trip-briefing-upload as never-alerting `event` jobs.
+
 **Topology:** Three layers cover three failure modes.
 1. **HC.io alerts** = host machine is down, NanoClaw service is dead, or heartbeat plist itself
    is wedged (no pings in 10+ min).
