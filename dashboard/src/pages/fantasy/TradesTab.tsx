@@ -339,18 +339,13 @@ export default function TradesTab({ league }: { league: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
-        <Badge tone={mode === "dynasty" ? "info" : "neutral"}>
-          {mode === "dynasty" ? "DYNASTY MODE" : "REDRAFT MODE"}
-        </Badge>
-        <span className="text-sm text-gray-400">
-          {mode === "dynasty"
-            ? "Market value leads — a dynasty asset is mostly future seasons, which no rest-of-season projection can see. Draft picks are priced and included."
-            : "League VOR leads — rest-of-season points above replacement, under this league's own scoring. Market value is shown because your counterparty is probably using it."}
-        </span>
-        <span className="ml-auto text-xs text-gray-600">values: {data.market_format}</span>
-      </div>
-
+      {/* A DYNASTY MODE / REDRAFT MODE banner used to sit here, restating which
+          mode you were in and why it weights market value differently. The
+          league selector directly above already says which league this is, and
+          the mode follows from it — so the banner spent the top of the tab
+          telling you something you had just chosen. Which value table backs the
+          numbers, and why the two modes weight differently, is on the
+          Methodology page under FantasyCalc. */}
       <TradeBuilder
         league={league}
         give={give}

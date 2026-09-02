@@ -544,7 +544,7 @@ export function NewsPeek({
         // the only way to open it on touch anyway — there is no hover — so a
         // sheet is also the interaction a phone expects.
         className={`z-30 rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left shadow-xl
-          fixed inset-x-2 bottom-2 max-h-[60vh] overflow-y-auto
+          fixed inset-x-2 bottom-2 max-h-[60dvh] overflow-y-auto ff-sheet
           sm:absolute sm:inset-x-auto sm:bottom-auto sm:top-full sm:mt-1 sm:max-h-none sm:w-[22rem] sm:max-w-[80vw] sm:overflow-visible ${
           pinned
             ? "block pointer-events-auto"

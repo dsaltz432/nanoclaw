@@ -65,8 +65,13 @@ export default function FantasyPage() {
   const [showAudit, setShowAudit] = useState(false);
   const [showMethod, setShowMethod] = useState(false);
   // A summary should not tax every subsequent view. It opens expanded, and
-  // folds to a one-line headline the moment you go to work in a tab.
+  // folds to a one-line headline while you are still on the landing view.
   const [nowCollapsed, setNowCollapsed] = useState(false);
+  // ...and once you pick a tab it goes away entirely. Its job is to spare you
+  // cross-referencing three tabs to find the day's one important item; a tab
+  // you have deliberately opened is not a view that needs saving from that,
+  // and carrying the strip into all five made it read as chrome.
+  const [tabChosen, setTabChosen] = useState(false);
 
   useEffect(() => {
     fetch("/api/fantasy/overview")
@@ -202,12 +207,14 @@ export default function FantasyPage() {
       {/* Above the subtabs on purpose — it draws from all of them, and the
           failure it fixes was that the day's most important item was only
           visible by cross-referencing three. */}
-      <RightNow
-        league={league}
-        collapsed={nowCollapsed}
-        onToggle={() => setNowCollapsed((v) => !v)}
-        key={`rn-${league}`}
-      />
+      {!tabChosen && (
+        <RightNow
+          league={league}
+          collapsed={nowCollapsed}
+          onToggle={() => setNowCollapsed((v) => !v)}
+          key={`rn-${league}`}
+        />
+      )}
 
       {/* ── subtabs ─────────────────────────────────────────────────── */}
       <div className="mb-2 -mx-1 flex gap-1 overflow-x-auto rounded-lg bg-gray-900 p-1 px-1 sm:mx-0 sm:w-fit">
@@ -216,7 +223,7 @@ export default function FantasyPage() {
             key={t.key}
             onClick={() => {
               setTab(t.key);
-              setNowCollapsed(true);
+              setTabChosen(true);
             }}
             className={`shrink-0 rounded-md px-2 py-2.5 text-sm font-medium transition-colors sm:px-4 ${
               tab === t.key ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"

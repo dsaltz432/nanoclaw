@@ -475,7 +475,15 @@ export default function WaiversTab({ league }: { league: string }) {
 
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* The rival-budget panel is only half of this row when it has a chart to
+          draw. The API sets `degenerate` when every manager still holds
+          essentially a full budget — in which case the panel's whole content is
+          a sentence explaining that it cannot tell you anything, and giving that
+          half the row leaves a large empty card next to a full one. Degenerate,
+          it becomes a footnote under the prices it qualifies. */}
+      <div
+        className={`grid gap-4 ${data.rival_budgets.degenerate ? "" : "lg:grid-cols-2"}`}
+      >
         <Card
           title="What each tier actually costs"
           subtitle={`Winning bids in this league's own sealed-bid history, by projection tier. ${data.price_table.contests_scored} of ${data.price_table.contests_total} contests could be priced.`}
@@ -548,15 +556,11 @@ export default function WaiversTab({ league }: { league: string }) {
         </Card>
 
         {data.rival_budgets.degenerate ? (
-          <Card title="Who can still outbid you"
-        secondary
-      >
-            <p className="text-sm text-gray-500">
-              Everyone is within a few points of a full budget, so remaining FAAB distinguishes
-              nobody yet. This becomes useful once the field separates — usually around week 4.
-            </p>
-            <Note>{data.rival_budgets.note}</Note>
-          </Card>
+          <p className="text-xs leading-relaxed text-gray-500">
+            <span className="text-gray-400">Who can still outbid you:</span> everyone is within a few
+            points of a full budget, so remaining FAAB distinguishes nobody yet. This becomes useful
+            once the field separates — usually around week 4.
+          </p>
         ) : (
         <Card title="Who can still outbid you" subtitle={`Percent of the $${budget} budget remaining, right now`}
         secondary
@@ -719,6 +723,14 @@ function MoveGroup({
       </div>
     );
   }
+  // The drop is chosen as the cheapest one available, so when the bench has a
+  // clear weakest man EVERY suggestion names him: twelve rows that each ended
+  // "· DROP RB Braelon Allen (3.5)". Repeating the constant half of a
+  // comparison buries the half that varies, which is the add. Said once above
+  // the list, each row is then only what it uniquely is.
+  const dropIds = new Set(moves.map((m) => m.drop.player_id));
+  const sharedDrop = dropIds.size === 1 && moves.length > 1 ? moves[0]!.drop : null;
+
   return (
     <div>
       <h4 className="mb-1 flex flex-wrap items-center gap-2 text-sm font-medium text-gray-300">
@@ -726,6 +738,17 @@ function MoveGroup({
         {heading}
         <span className="text-xs font-normal text-gray-600">{blurb}</span>
       </h4>
+      {sharedDrop && (
+        <p className="mb-1.5 text-xs text-gray-500">
+          Every move below drops{" "}
+          <span className="text-xs text-gray-600">{sharedDrop.position}</span>{" "}
+          <span className="text-gray-400">{sharedDrop.name}</span>
+          {sharedDrop.projected != null && (
+            <span className="tabular-nums text-gray-600"> ({sharedDrop.projected.toFixed(1)})</span>
+          )}
+          , your cheapest bench asset.
+        </p>
+      )}
       <ul className="space-y-1.5">
         {moves.map((m) => (
           <li key={m.player_id} className="rounded border border-gray-800 px-3 py-2">
@@ -738,13 +761,17 @@ function MoveGroup({
               <span className="text-gray-100">{m.name}</span>
               <span className="text-xs text-gray-600">{m.team}</span>
               {m.injury_status && <Badge tone="warning">{m.injury_status}</Badge>}
-              <span className="text-gray-500">·  DROP</span>
-              <span className="text-xs text-gray-500">{m.drop.position}</span>
-              <span className="text-gray-400">{m.drop.name}</span>
-              {m.drop.projected != null && (
-                <span className="text-xs tabular-nums text-gray-600">
-                  ({m.drop.projected.toFixed(1)})
-                </span>
+              {!sharedDrop && (
+                <>
+                  <span className="text-gray-500">·  DROP</span>
+                  <span className="text-xs text-gray-500">{m.drop.position}</span>
+                  <span className="text-gray-400">{m.drop.name}</span>
+                  {m.drop.projected != null && (
+                    <span className="text-xs tabular-nums text-gray-600">
+                      ({m.drop.projected.toFixed(1)})
+                    </span>
+                  )}
+                </>
               )}
               {m.suggested_pct != null && (
                 <span className="ml-auto whitespace-nowrap text-sm">

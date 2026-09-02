@@ -45,7 +45,16 @@
     width: 100%;
     min-width: 0;
   }
+  /* A column order that reads left-to-right does not survive being turned on
+     its side. The alert log runs Severity, Kind, Player — fine as columns, but
+     stacked it meant every card opened with "SEVERITY warning / KIND report"
+     and you reached the player's NAME third, on the row whose entire purpose is
+     to say who this is about. Flex lets the headline cell be pulled to the top
+     of the card without reordering the table for desktop, where the original
+     order is correct. */
   .ff-stack tr {
+    display: flex;
+    flex-direction: column;
     border: 1px solid var(--color-gray-800, #1f2937);
     border-radius: 0.5rem;
     padding: 0.5rem 0.75rem;
@@ -80,6 +89,8 @@
     display: block;
     font-weight: 500;
     padding-bottom: 0.25rem;
+    /* First in the card regardless of its column position. */
+    order: -1;
   }
   /* Wrappers that exist only to enable sideways scroll must stop doing that. */
   .ff-stack-wrap {
@@ -137,4 +148,26 @@
     min-height: 36px;
     align-items: center;
   }
+}
+
+/* ── iOS: keep the news sheet clear of Safari's toolbar ───────────────────
+ *
+ * Two WebKit-only problems, neither visible in Chrome — emulated or real — so
+ * neither would have been caught by testing in a Chromium browser.
+ *
+ * 1. `position: fixed; bottom: .5rem` is measured against the layout viewport,
+ *    which iOS Safari's bottom toolbar overlays. The sheet sat partly beneath
+ *    it. `env(safe-area-inset-bottom)` is the height Safari reserves, and it
+ *    resolves to 0 everywhere it does not apply, so no other browser moves.
+ *
+ * 2. `vh` on iOS is measured against the EXPANDED viewport — the one you get
+ *    after the URL bar collapses — so `60vh` was taller than the visible area
+ *    while the bar was showing, and the bottom of a tall sheet was unreachable.
+ *    `dvh` tracks the viewport as it actually is; the `vh` line below is the
+ *    fallback for browsers without it.
+ */
+.ff-sheet {
+  bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  max-height: 60vh;
+  max-height: 60dvh;
 }

@@ -360,13 +360,41 @@ function Briefings({
                   </span>
                 </div>
 
-                {c.corroboration.length > 0 && (
-                  <ul className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
-                    {c.corroboration.map((x, i) => (
-                      <li key={i}>· {x}</li>
-                    ))}
-                  </ul>
-                )}
+                {(() => {
+                  // Two of these lines were reliably not worth their row.
+                  //
+                  // "projection unchanged (13.1) since ..." reports that
+                  // nothing happened. It appeared on almost every card,
+                  // because on most days a projection does not move — so it
+                  // crowded out the corroboration that did say something. A
+                  // move is already shown as a `proj +2.1` badge above; the
+                  // absence of one is the absence of news.
+                  //
+                  // "Sleeper designation: Questionable" restates the amber
+                  // badge sitting on the same card, three inches away.
+                  //
+                  // Matched on a prefix because the copy is generated in
+                  // ff/briefing.py in the fantasy-football-agent repo, which
+                  // also feeds the Telegram briefing; filtering on the way out
+                  // keeps that path untouched. An unrecognised line is always
+                  // kept, so new corroboration types show up by default.
+                  const designation = c.injury_status?.toLowerCase() ?? "";
+                  const useful = c.corroboration.filter((x) => {
+                    const s = x.toLowerCase();
+                    if (s.startsWith("projection unchanged")) return false;
+                    if (s.startsWith("sleeper designation:") && designation && s.includes(designation))
+                      return false;
+                    return true;
+                  });
+                  if (useful.length === 0) return null;
+                  return (
+                    <ul className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-500">
+                      {useful.map((x, i) => (
+                        <li key={i}>· {x}</li>
+                      ))}
+                    </ul>
+                  );
+                })()}
 
                 {shown.length > 0 ? (
                   <ul className="mt-1.5 space-y-1.5">
@@ -401,12 +429,20 @@ function Briefings({
                   <p className="mt-1 text-xs text-gray-600">no notes in this window</p>
                 )}
 
+                {/* The label said "all 1 notes and analysis" whenever a player
+                    had a single note — ungrammatical, and it promised more
+                    notes than it could deliver. When nothing is hidden the only
+                    thing the toggle reveals is the analysis, so it says that. */}
                 {c.notes.length > 0 && (
                   <button
                     onClick={() => toggle(c.player_id)}
                     className="mt-1 text-xs text-indigo-400 hover:text-indigo-300"
                   >
-                    {open ? "less" : `all ${c.notes.length} notes and analysis`}
+                    {open
+                      ? "less"
+                      : c.notes.length > shown.length
+                      ? `all ${c.notes.length} notes and analysis`
+                      : "analysis"}
                   </button>
                 )}
               </li>

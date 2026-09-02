@@ -101,6 +101,12 @@ export default function AlertsTab({ league }: { league: string }) {
 
   const history = showDelivered ? data.history : data.history.filter((r) => !r.delivered_at);
 
+  // Until something has actually been sent, the Delivered column reads "never"
+  // in warning amber on every row — a full column of identical alarm — and the
+  // "include delivered" filter has nothing to include. Both describe a delivery
+  // history that does not exist yet, so neither is drawn until it does.
+  const anyDelivered = data.counts.delivered > 0 || data.history.some((r) => !!r.delivered_at);
+
   return (
     <div className="space-y-4">
       {/* ── is anything actually running? ───────────────────────────── */}
@@ -112,13 +118,24 @@ export default function AlertsTab({ league }: { league: string }) {
               These rules are evaluated when you open this page. Nothing reaches you unless you look.
             </span>
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-gray-400">
-            To make them proactive, a NanoClaw scheduled task runs{" "}
-            <code className="rounded bg-gray-900 px-1 py-0.5 text-gray-300">{data.emit_command}</code> and sends
-            whatever it prints. It prints nothing when there is nothing new — which is the behaviour a quiet job
-            needs. Job health then appears in <strong className="text-gray-300">Admin → Tasks</strong> alongside
-            every other subsystem; this page stays for what the alerts actually said.
-          </p>
+          {/* The warning above is for every visit; the shell command below is
+              for the one visit on which you decide to wire the job up. Leaving
+              setup instructions permanently open at the top of the tab spent
+              four lines and a code block of the most valuable space on the
+              page restating a fact the badge already gives you. */}
+          <details className="group mt-1.5">
+            <summary className="ff-inline cursor-pointer list-none text-xs text-amber-300/80 hover:text-amber-200">
+              <span className="group-open:hidden">How to make these proactive →</span>
+              <span className="hidden group-open:inline">Hide setup</span>
+            </summary>
+            <p className="mt-2 text-xs leading-relaxed text-gray-400">
+              A NanoClaw scheduled task runs{" "}
+              <code className="rounded bg-gray-900 px-1 py-0.5 text-gray-300">{data.emit_command}</code> and sends
+              whatever it prints. It prints nothing when there is nothing new — which is the behaviour a quiet job
+              needs. Job health then appears in <strong className="text-gray-300">Admin → Tasks</strong> alongside
+              every other subsystem; this page stays for what the alerts actually said.
+            </p>
+          </details>
         </div>
       ) : (
         <Card
@@ -156,24 +173,45 @@ export default function AlertsTab({ league }: { league: string }) {
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* With no job scheduled, "Delivered" is 0 and "Waiting to send" equals
+          "Conditions logged" BY CONSTRUCTION — three tiles rendering one fact,
+          and the two that are derivable are the two drawn in the alarming
+          colour. They only become independent numbers once something is
+          actually sending, so that is when they appear. */}
+      <div
+        className={`grid gap-3 ${
+          data.schedule.configured ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-2"
+        }`}
+      >
         <StatTile
           label="Live right now"
           value={data.live.alerts.length}
           hint={`conditions met in the last ${data.live.window_hours}h`}
         />
-        <StatTile label="Conditions logged" value={data.counts.logged} hint="all time, de-duplicated" />
         <StatTile
-          label="Delivered"
-          value={data.counts.delivered}
-          tone={data.counts.delivered === 0 ? "warning" : "default"}
-          hint={data.counts.delivered === 0 ? "nothing has been sent yet" : "marked sent by a job"}
+          label="Conditions logged"
+          value={data.counts.logged}
+          hint={
+            data.schedule.configured
+              ? "all time, de-duplicated"
+              : "all time, de-duplicated · none sent, nothing is scheduled"
+          }
         />
-        <StatTile
-          label="Waiting to send"
-          value={data.pending.length}
-          hint="recorded, never delivered"
-        />
+        {data.schedule.configured && (
+          <>
+            <StatTile
+              label="Delivered"
+              value={data.counts.delivered}
+              tone={data.counts.delivered === 0 ? "warning" : "default"}
+              hint={data.counts.delivered === 0 ? "nothing has been sent yet" : "marked sent by a job"}
+            />
+            <StatTile
+              label="Waiting to send"
+              value={data.pending.length}
+              hint="recorded, never delivered"
+            />
+          </>
+        )}
       </div>
 
       {/* ── the log ─────────────────────────────────────────────────── */}
@@ -181,15 +219,17 @@ export default function AlertsTab({ league }: { league: string }) {
         title="Alert log"
         subtitle="One row per CONDITION, not per run — a sprain that persists for four days is one alert seen four times. This is the part that cannot be reconstructed later."
         right={
-          <label className="flex items-center gap-1.5 text-xs text-gray-400">
-            <input
-              type="checkbox"
-              checked={showDelivered}
-              onChange={(e) => setShowDelivered(e.target.checked)}
-              className="accent-indigo-500"
-            />
-            include delivered
-          </label>
+          anyDelivered && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-400">
+              <input
+                type="checkbox"
+                checked={showDelivered}
+                onChange={(e) => setShowDelivered(e.target.checked)}
+                className="accent-indigo-500"
+              />
+              include delivered
+            </label>
+          )
         }
       >
         {history.length === 0 ? (
@@ -205,7 +245,7 @@ export default function AlertsTab({ league }: { league: string }) {
                   <Th>What</Th>
                   <Th className="text-right">Seen</Th>
                   <Th>First</Th>
-                  <Th>Delivered</Th>
+                  {anyDelivered && <Th>Delivered</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -236,16 +276,18 @@ export default function AlertsTab({ league }: { league: string }) {
                     <Td data-label="What" className="text-xs text-gray-400">{r.what}</Td>
                     <Td data-label="Seen" className="text-right tabular-nums text-gray-500">{r.times_seen}</Td>
                     <Td data-label="First" className="whitespace-nowrap text-xs text-gray-600">{fmt(r.first_seen)}</Td>
-                    <Td data-label="Delivered" className="whitespace-nowrap text-xs">
-                      {r.delivered_at ? (
-                        <span className="text-gray-500">
-                          {fmt(r.delivered_at)}
-                          {r.delivery_target ? ` → ${r.delivery_target}` : ""}
-                        </span>
-                      ) : (
-                        <span style={{ color: C.warning }}>never</span>
-                      )}
-                    </Td>
+                    {anyDelivered && (
+                      <Td data-label="Delivered" className="whitespace-nowrap text-xs">
+                        {r.delivered_at ? (
+                          <span className="text-gray-500">
+                            {fmt(r.delivered_at)}
+                            {r.delivery_target ? ` → ${r.delivery_target}` : ""}
+                          </span>
+                        ) : (
+                          <span style={{ color: C.warning }}>never</span>
+                        )}
+                      </Td>
+                    )}
                   </tr>
                 ))}
               </tbody>

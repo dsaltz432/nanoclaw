@@ -86,6 +86,26 @@ const TONE: Record<string, string> = {
 
 const ACTIONS = new Set(["move now", "your league is slow", "rising"]);
 
+/**
+ * `why` arrives from the API shaped as "<this player's fact> — <what that kind
+ * of fact means>", and the second half is per-VERDICT, not per-player: every
+ * "being dropped" row carried the same twenty words about the crowd giving up.
+ * Five rows of identical prose stop being an explanation and become wallpaper
+ * you learn to skip, which costs the unique half its readership too.
+ *
+ * The split is done on the data rather than against a hard-coded list of server
+ * strings, so new verdicts need no change here: a tail is only lifted out when
+ * two or more visible rows actually share it. A row whose explanation is unique
+ * keeps it inline, where it is still doing work.
+ */
+const WHY_SPLIT = " — ";
+
+function splitWhy(why: string): { head: string; tail: string | null } {
+  const i = why.indexOf(WHY_SPLIT);
+  if (i < 0) return { head: why, tail: null };
+  return { head: why.slice(0, i), tail: why.slice(i + WHY_SPLIT.length) };
+}
+
 export default function TrendsTab({ league }: { league: string }) {
   const [data, setData] = useState<TrendsData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -113,10 +133,42 @@ export default function TrendsTab({ league }: { league: string }) {
     return r;
   }, [data, showAll, pos, q]);
 
+  // Explanations shared by two or more visible rows, lifted out of the rows and
+  // shown once as a legend. Keyed by tail so the verdicts that share one are
+  // named together.
+  const sharedWhy = useMemo(() => {
+    const byTail = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const { tail } = splitWhy(r.why);
+      if (!tail) continue;
+      if (!byTail.has(tail)) byTail.set(tail, new Set());
+      byTail.get(tail)!.add(r.verdict);
+    }
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const { tail } = splitWhy(r.why);
+      if (tail) counts.set(tail, (counts.get(tail) ?? 0) + 1);
+    }
+    return [...byTail.entries()]
+      .filter(([tail]) => (counts.get(tail) ?? 0) > 1)
+      .map(([tail, verdicts]) => ({ tail, verdicts: [...verdicts] }));
+  }, [rows]);
+
+  const sharedTails = useMemo(() => new Set(sharedWhy.map((s) => s.tail)), [sharedWhy]);
+
+  // A column whose every cell says the same thing is a tautology occupying a
+  // seventh of the width. In a free-agent board "free agent" is the default
+  // case, so it only earns its place once something in view differs.
+  const availabilityVaries = useMemo(
+    () => new Set(rows.map((r) => `${r.availability}:${r.rostered_by ?? ""}`)).size > 1,
+    [rows],
+  );
+
   if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
   if (!data) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
 
   const actionable = data.rows.filter((r) => ACTIONS.has(r.verdict)).length;
+  const uniformAvailability = rows.length > 0 && !availabilityVaries ? rows[0] : null;
 
   return (
     <div className="space-y-4">
@@ -176,7 +228,7 @@ export default function TrendsTab({ league }: { league: string }) {
                   <Th className="hidden text-right sm:table-cell">vs week</Th>
                   <Th className="hidden text-right sm:table-cell">ESPN owned</Th>
                   <Th className="hidden text-right sm:table-cell">Beats</Th>
-                  <Th>Availability</Th>
+                  {availabilityVaries && <Th>Availability</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -193,7 +245,10 @@ export default function TrendsTab({ league }: { league: string }) {
                         </>
                       )}
                       <p className="mt-0.5 max-w-full text-xs leading-relaxed text-gray-500 sm:max-w-lg">
-                        {r.why}
+                        {(() => {
+                          const { head, tail } = splitWhy(r.why);
+                          return tail && sharedTails.has(tail) ? head : r.why;
+                        })()}
                       </p>
                       {/* "also rostered by a rival in dynasty" was here and
                           appeared on nearly every row, for the same reason it
@@ -273,20 +328,47 @@ export default function TrendsTab({ league }: { league: string }) {
                       {r.beats_rostered}
                       <span className="text-gray-700">/{r.rostered_at_pos}</span>
                     </Td>
-                    <Td data-label="Availability" className="whitespace-nowrap text-xs">
-                      {r.availability === "free_agent" ? (
-                        <Badge tone="good">free agent</Badge>
-                      ) : r.availability === "waivers" ? (
-                        <Badge tone="neutral">waivers</Badge>
-                      ) : (
-                        <span className="text-gray-500">{r.rostered_by}</span>
-                      )}
-                    </Td>
+                    {availabilityVaries && (
+                      <Td data-label="Availability" className="whitespace-nowrap text-xs">
+                        {r.availability === "free_agent" ? (
+                          <Badge tone="good">free agent</Badge>
+                        ) : r.availability === "waivers" ? (
+                          <Badge tone="neutral">waivers</Badge>
+                        ) : (
+                          <span className="text-gray-500">{r.rostered_by}</span>
+                        )}
+                      </Td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        )}
+        {/* The explanations lifted off the rows above, said once each. */}
+        {sharedWhy.length > 0 && (
+          <dl className="mt-3 space-y-1 border-t border-gray-800/60 pt-2.5">
+            {sharedWhy.map(({ tail, verdicts }) => (
+              <div key={tail} className="flex flex-wrap gap-x-1.5 text-[11px] leading-relaxed">
+                <dt
+                  className="shrink-0 font-medium"
+                  style={{ color: (verdicts[0] && TONE[verdicts[0]]) || C.ink2 }}
+                >
+                  {verdicts.join(" / ")}
+                </dt>
+                <dd className="min-w-0 flex-1 text-gray-600">{tail}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {uniformAvailability && (
+          <Note>
+            {uniformAvailability.availability === "free_agent"
+              ? "Every player listed is a free agent right now."
+              : uniformAvailability.availability === "waivers"
+              ? "Every player listed is on waivers right now."
+              : "Every player listed is already rostered."}
+          </Note>
         )}
         {data.limits.map((l, i) => (
           <Note key={i}>{l}</Note>
