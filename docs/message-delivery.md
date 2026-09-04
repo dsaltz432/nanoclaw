@@ -33,10 +33,25 @@ still working, so buffering or filtering it would defeat its purpose. But it mea
 
 ## Making a scheduled task actually silent
 
-A task is silent only if **both** are true:
+**The robust way: set the task's `silent` flag.** A task with `silent = 1` in
+`scheduled_tasks` never has its final output delivered — `task-scheduler.ts` skips the
+send entirely, `<internal>` tags or not. The only way such a task can reach the chat is
+an explicit `send_message` call. Set it at creation (`schedule_task` with `silent: true`),
+later (`update_task`), or directly in SQLite. Use it for any task that should only speak
+deliberately: alerting jobs, background maintenance.
+
+The flag exists because the prompt-only approach below is enforced by nothing but the
+model remembering it. The Health Watchdog ran for months on prompt instructions and still
+leaked a bare "all checks passed" line to the Alerts group roughly one run in ten — the
+agent wrote its "staying silent" note without the `<internal>` wrapper (observed
+2026-09-03/04, e.g. runs 22:03 and 05:03).
+
+**The prompt-only way** (still required for the `send_message` half): a task is silent
+only if **both** are true:
 
 1. It never calls `send_message` — not even an acknowledgment.
-2. Its entire final output is wrapped in `<internal>…</internal>`.
+2. Its entire final output is wrapped in `<internal>…</internal>` — unnecessary when
+   `silent = 1`, load-bearing otherwise.
 
 Miss #1 and the task still messages the user every run, no matter how carefully the final
 output is wrapped. Note the error path is separately silent: `task-scheduler.ts` sends only

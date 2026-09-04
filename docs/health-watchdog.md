@@ -25,7 +25,9 @@ pattern.
 | Heartbeat logs | `logs/heartbeat.log`, `logs/heartbeat.error.log` |
 
 **Scheduled task in SQLite:** `Health Watchdog` — cron `*/30 * * * *`, `context_mode: isolated`,
-`group_folder: telegram_ops`, `chat_jid: tg:-5235132441`.
+`group_folder: telegram_ops`, `chat_jid: tg:-5235132441`, `silent: 1` (final output is never
+delivered — alerts go out only via explicit `send_message` calls, so a forgotten `<internal>`
+wrapper can't page anyone; see [message-delivery.md](message-delivery.md)).
 
 **Noise controls** (added 2026-09-02 after a run of 16 straight false-positive alerts):
 

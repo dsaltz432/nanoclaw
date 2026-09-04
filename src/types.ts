@@ -63,6 +63,8 @@ export interface ScheduledTask {
   schedule_value: string;
   context_mode: 'group' | 'isolated';
   name?: string;
+  /** 1 = final output is never delivered; the task can only speak via send_message. */
+  silent?: 0 | 1;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

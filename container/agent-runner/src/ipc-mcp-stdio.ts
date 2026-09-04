@@ -82,6 +82,7 @@ MESSAGING BEHAVIOR - The task agent's final output is sent to the user or group;
 \u2022 Only send a message when there's something to report (e.g., "notify me if...")
 \u2022 Never send a message (background maintenance tasks)
 For the latter two, say so explicitly, e.g. "Send no message when there is nothing to report - that includes the acknowledgment: make no send_message call, and wrap your entire final output in <internal> tags."
+For tasks that should only ever message deliberately (alerting, background maintenance), ALSO set silent: true - the final output is then never delivered, regardless of <internal> tags, and only explicit send_message calls reach the chat. This is the robust option: prompt instructions alone get forgotten occasionally.
 
 SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 \u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
@@ -94,6 +95,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
     name: z.string().optional().describe('Short human-readable name for this task (e.g. "Daily mortgage rate", "Nightly recipe builder"). Shown in the Command Center dashboard.'),
+    silent: z.boolean().optional().describe('If true, the task agent\'s final output is never delivered to the chat - only explicit send_message calls are. Use for tasks that should stay quiet unless they deliberately alert.'),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -143,6 +145,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
       task_name: args.name,
+      silent: args.silent === true,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -260,6 +263,7 @@ server.tool(
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
     name: z.string().optional().describe('New human-readable name for the task'),
+    silent: z.boolean().optional().describe('If true, the task agent\'s final output is never delivered to the chat - only explicit send_message calls are.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -285,7 +289,7 @@ server.tool(
       }
     }
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | boolean | undefined> = {
       type: 'update_task',
       taskId: args.task_id,
       groupFolder,
@@ -293,6 +297,7 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
     if (args.name !== undefined) data.task_name = args.name;
+    if (args.silent !== undefined) data.silent = args.silent === true;
     if (args.prompt !== undefined) data.prompt = args.prompt;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;

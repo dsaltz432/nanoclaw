@@ -219,9 +219,18 @@ async function runTask(
       result = output.result;
     }
 
-    // Send only the final result to the user (after container completes)
+    // Send only the final result to the user (after container completes).
+    // Silent tasks never deliver final output — send_message is their only
+    // way to reach the chat, so a forgotten <internal> wrapper can't leak.
     if (result && !error) {
-      await deps.sendMessage(task.chat_jid, result);
+      if (task.silent) {
+        logger.debug(
+          { taskId: task.id },
+          'Silent task: final output suppressed',
+        );
+      } else {
+        await deps.sendMessage(task.chat_jid, result);
+      }
     }
 
     logger.info(

@@ -177,6 +177,7 @@ export async function processTaskIpc(
     service?: string;
     // For schedule_task / update_task
     task_name?: string;
+    silent?: boolean;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -269,6 +270,7 @@ export async function processTaskIpc(
           schedule_value: data.schedule_value,
           context_mode: contextMode,
           name: data.task_name,
+          silent: data.silent === true ? 1 : 0,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
@@ -358,6 +360,8 @@ export async function processTaskIpc(
 
         const updates: Parameters<typeof updateTask>[1] = {};
         if (data.task_name !== undefined) updates.name = data.task_name;
+        if (data.silent !== undefined)
+          updates.silent = data.silent === true ? 1 : 0;
         if (data.prompt !== undefined) updates.prompt = data.prompt;
         if (data.schedule_type !== undefined)
           updates.schedule_type = data.schedule_type as

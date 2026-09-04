@@ -24,7 +24,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Memory
 
-**Silencing a scheduled task takes two things**, because there are two delivery paths and only one is filtered: the agent must make no `send_message` call *and* wrap its final output in `<internal>`. See [docs/message-delivery.md](docs/message-delivery.md).
+**Silencing a scheduled task: set `silent: 1` on the task row** — final output is then never delivered and only explicit `send_message` calls reach the chat. Without the flag it takes two prompt-enforced things (no `send_message` call *and* `<internal>`-wrapped final output), and the wrapper gets forgotten ~1 run in 10. See [docs/message-delivery.md](docs/message-delivery.md).
 
 Group and global memory are CLAUDE.md files loaded into the *runtime agent containers* — distinct from this file. Global memory is `groups/global/CLAUDE.md`, injected into non-main groups only; per-group memory is `groups/{name}/CLAUDE.md`. **This root `CLAUDE.md` is not loaded by runtime agents** — it's project instructions for Claude Code dev sessions. Full mechanics: [docs/SPEC.md](docs/SPEC.md#memory-system) and [groups/README.md](groups/README.md).
 
