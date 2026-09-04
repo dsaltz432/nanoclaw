@@ -44,7 +44,11 @@ The flag exists because the prompt-only approach below is enforced by nothing bu
 model remembering it. The Health Watchdog ran for months on prompt instructions and still
 leaked a bare "all checks passed" line to the Alerts group roughly one run in ten — the
 agent wrote its "staying silent" note without the `<internal>` wrapper (observed
-2026-09-03/04, e.g. runs 22:03 and 05:03).
+2026-09-03/04, e.g. runs 22:03 and 05:03). A 2026-09-04 audit found the same leak on the
+Beacon weekday/weekend reports and Ticket Event Discovery; since then **every active
+scheduled task runs with `silent = 1`**, with prompts that route any intentional message
+through `send_message`. Keep it that way for new tasks unless a task genuinely wants its
+final output delivered.
 
 **The prompt-only way** (still required for the `send_message` half): a task is silent
 only if **both** are true:
