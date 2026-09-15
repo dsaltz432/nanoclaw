@@ -36,6 +36,20 @@ NOW_EPOCH=$(date +%s)
 DAILY_MAX_AGE_MIN=1560
 WATCHDOG_MAX_AGE_MIN=90
 
+# Docker probe deadline. A healthy daemon answers in well under a second; 20s
+# is generous for a loaded host and still far inside the 300s heartbeat
+# interval, so a hung probe can never overlap the next run.
+DOCKER_PROBE_TIMEOUT=20
+AGENT_IMAGE="nanoclaw-agent:latest"
+
+# Auto-recovery for a wedged daemon. Rate-limited hard: if a restart does not
+# fix it, retrying every 5 minutes accomplishes nothing except thrashing a
+# machine that is already unhealthy, so one attempt per hour and the alert
+# still fires either way.
+DOCKER_RESTART_TIMEOUT=120
+DOCKER_RESTART_MIN_INTERVAL_MIN=60
+DOCKER_RESTART_STAMP="${SNAPSHOT_DIR}/docker-restart.stamp"
+
 mkdir -p "$SNAPSHOT_DIR"
 
 # Atomic snapshot writes — build in tempfiles, rename into place.
@@ -132,8 +146,80 @@ if [ -f "$PREV_PIDS" ]; then
   done < "$TMP_PIDS"
 fi
 
+# --- docker liveness --------------------------------------------------------
+#
+# Every agent runs in a container, so a wedged Docker daemon fails 100% of
+# tasks while com.nanoclaw stays green and its proxy port keeps listening.
+# That was the 2026-09-11..13 outage: the Linux VM died, `docker run` hung
+# forever at container-create, and the only signal was the watchdog going
+# stale — downstream, ~2h late, and naming the wrong fault ("watchdog stuck",
+# followed by a reassuring "NanoClaw itself is up").
+#
+# The probe choice is the whole trick. Docker Desktop answers /_ping, /info,
+# /networks and /containers/json out of its own apicache, so `docker info` and
+# `docker ps` report healthy against a daemon that is gone — they did exactly
+# that for three days. A *filtered* image query is forwarded to the real
+# daemon, so it hangs when the daemon is dead. It starts nothing, and it
+# doubles as an agent-image presence check, since a missing image also fails
+# every container.
+#
+# Bounded wait, since macOS ships no timeout(1). Polls rather than arming a
+# `( sleep N; kill )` subshell: killing that subshell does not reap the
+# sleep(1) it spawned, so every run left a stray sleep behind until it aged
+# out. This leaves nothing to clean up, and 1s granularity is irrelevant
+# against deadlines measured in tens of seconds.
+# Sets RWT_RC and RWT_TIMED_OUT. Redirect the call to capture output.
+run_with_timeout() {
+  local secs="$1"; shift
+  local pid waited=0
+  "$@" &
+  pid=$!
+  RWT_TIMED_OUT=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$secs" ]; then
+      kill -9 "$pid" 2>/dev/null
+      RWT_TIMED_OUT=1
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null
+  RWT_RC=$?
+}
+
+TMP_DOCKER=$(mktemp)
+DOCKER_PROBE_OUT=$(mktemp)
+
+run_with_timeout "$DOCKER_PROBE_TIMEOUT" \
+  docker images --filter "reference=${AGENT_IMAGE}" --format '{{.ID}}' \
+  > "$DOCKER_PROBE_OUT" 2>/dev/null
+DOCKER_TIMED_OUT=$RWT_TIMED_OUT
+DOCKER_RC=$RWT_RC
+
+DOCKER_IMAGE_ID=$(tr -d '[:space:]' < "$DOCKER_PROBE_OUT")
+rm -f "$DOCKER_PROBE_OUT"
+
+# A tripped deadline means the daemon never answered. A fast non-zero exit is
+# the CLI failing outright (missing binary, bad socket, permissions) — a
+# different fault that deserves a different message.
+if [ "$DOCKER_TIMED_OUT" -eq 1 ]; then
+  DOCKER_STATE="unresponsive"
+elif [ "$DOCKER_RC" -ne 0 ]; then
+  DOCKER_STATE="cli-error"
+elif [ -z "$DOCKER_IMAGE_ID" ]; then
+  DOCKER_STATE="image-missing"
+else
+  DOCKER_STATE="ok"
+fi
+
+# Format: state|image|image_id|timeout_s
+echo "${DOCKER_STATE}|${AGENT_IMAGE}|${DOCKER_IMAGE_ID:-none}|${DOCKER_PROBE_TIMEOUT}" \
+  > "$TMP_DOCKER"
+
 mv "$TMP_LAUNCHD" "$SNAPSHOT_DIR/launchctl.txt"
 mv "$TMP_DISK"    "$SNAPSHOT_DIR/disk.txt"
+mv "$TMP_DOCKER"  "$SNAPSHOT_DIR/docker.txt"
 mv "$TMP_JOBS"    "$SNAPSHOT_DIR/jobs.txt"
 mv "$TMP_PIDS"    "$PREV_PIDS"
 # Restarts persist briefly so one that happens between watchdog runs is not
@@ -201,6 +287,53 @@ if [ "$PID" = "-" ]; then
     hc_fail "com.nanoclaw not running (last exit: $EXITCODE)"
   fi
 fi
+
+# Docker is checked before the watchdog: when the daemon is down the watchdog
+# is stale *because* of it, so reporting staleness first buries the lede and
+# points at the wrong thing to fix.
+case "$DOCKER_STATE" in
+  unresponsive)
+    # Observed twice (2026-09-11, 2026-09-14): Docker Desktop's Resource Saver
+    # idle-shutdown the Linux VM after 300s with no containers, and the resume
+    # wedged. NanoClaw idles ~28 of every 30 minutes, so it crosses that
+    # threshold constantly. Restarting Docker is the known remedy, and doing
+    # it here turns a multi-hour outage into one missed task.
+    RECOVERY="no auto-restart attempted"
+    STAMP_AGE_MIN=$(( DOCKER_RESTART_MIN_INTERVAL_MIN + 1 ))
+    if [ -f "$DOCKER_RESTART_STAMP" ]; then
+      STAMP_MTIME=$(stat -f %m "$DOCKER_RESTART_STAMP" 2>/dev/null \
+        || stat -c %Y "$DOCKER_RESTART_STAMP" 2>/dev/null)
+      [ -n "$STAMP_MTIME" ] && STAMP_AGE_MIN=$(( (NOW_EPOCH - STAMP_MTIME) / 60 ))
+    fi
+
+    if [ "$STAMP_AGE_MIN" -ge "$DOCKER_RESTART_MIN_INTERVAL_MIN" ]; then
+      # Stamp BEFORE attempting. A restart that hangs must not leave the
+      # rate limit unarmed for the next run to retry into.
+      touch "$DOCKER_RESTART_STAMP"
+      run_with_timeout "$DOCKER_RESTART_TIMEOUT" docker desktop restart \
+        >/dev/null 2>&1
+      if [ "$RWT_TIMED_OUT" -eq 1 ]; then
+        RECOVERY="auto-restart timed out after ${DOCKER_RESTART_TIMEOUT}s"
+      elif [ "$RWT_RC" -ne 0 ]; then
+        RECOVERY="auto-restart failed (exit ${RWT_RC})"
+      else
+        RECOVERY="auto-restart issued; next heartbeat confirms"
+      fi
+    else
+      RECOVERY="auto-restart suppressed (last attempt ${STAMP_AGE_MIN}m ago, min ${DOCKER_RESTART_MIN_INTERVAL_MIN}m)"
+    fi
+
+    # Alert regardless of the outcome. A self-healed outage is still an
+    # outage, and silent recovery would hide a daemon wedging nightly.
+    hc_fail "docker daemon did not answer within ${DOCKER_PROBE_TIMEOUT}s - every agent container will fail (com.nanoclaw is up); ${RECOVERY}"
+    ;;
+  cli-error)
+    hc_fail "docker CLI unusable (exit ${DOCKER_RC}) - every agent container will fail"
+    ;;
+  image-missing)
+    hc_fail "agent image ${AGENT_IMAGE} not found - every agent container will fail (rebuild: container/build.sh)"
+    ;;
+esac
 
 # NanoClaw is up. Is the thing that watches everything else still alive?
 WATCHDOG_STATE="${PROJECT_ROOT}/groups/telegram_ops/watchdog-state.json"
