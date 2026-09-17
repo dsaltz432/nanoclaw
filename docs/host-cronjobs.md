@@ -224,6 +224,15 @@ After editing a **template**, you must re-render and reload the installed copy
 | `ff-news` | Interval | every 900s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) |
 | `ff-live` | Interval | every 7200s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
 | `ff-daily` | Calendar | 6:40 AM | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
+| `ff-claims` | Interval | every 900s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session; calls headless `claude -p` with no tools |
+
+The dashboard's **Admin → Host Tasks** page lists these jobs from the
+descriptor table in `dashboard/server/routes/scheduled-tasks.ts`. Its
+"last run" is the mtime of the descriptor's `logPath`, so point that at the
+file the **script itself** writes (`logs/backup.log`, `data/health-probe/jobs.txt`
+for the heartbeat), not at the plist's `StandardOutPath` capture, which for
+several jobs stays empty for months and reads as "108d ago". Adding a job
+here means adding a row there.
 
 `ff-live` / `ff-daily` are the reference for a job that must work **without a reboot**:
 inline `/bin/bash -c` program, logs under `~/.local`. `ff-news` predates that and points

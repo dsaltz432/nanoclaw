@@ -3,7 +3,6 @@ import { execFile } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import db from "../db.js";
 
 /**
  * Fantasy Football routes.
@@ -37,7 +36,6 @@ const TTL_MS: Record<string, number> = {
   assets: 600_000,
   news: 60_000,
   "news-read": 0, // a write; never cached
-  alerts: 30_000,
   now: 60_000,
   "trade-eval": 0, // never cached — it is a function of the user's own input
   // A full-league package search is seconds of CPU; the result only moves when
@@ -45,6 +43,21 @@ const TTL_MS: Record<string, number> = {
   "trade-generate": 600_000,
   // Ownership and add counts move on the hour, not the minute.
   trends: 300_000,
+  // Job health for the content layer; the underlying job runs every 15 min.
+  "content-status": 30_000,
+  // Raw claims list; new rows land every 15 minutes at most.
+  claims: 60_000,
+  // Layer 3: rankings x claims x projections. Inputs move hourly at most.
+  consensus: 300_000,
+  dossier: 120_000,
+  // The landing digest composes waivers + trends + consensus; waivers alone is seconds.
+  today: 120_000,
+  // Phase 5 tabs. reading is cheap and changes every 15 min; moves composes waivers.
+  reading: 60_000,
+  "reading-read": 0,
+  lineup: 120_000,
+  moves: 120_000,
+  "trade-intel": 300_000,
 };
 
 type CacheEntry = { at: number; value: unknown };
@@ -95,6 +108,14 @@ const ALLOWED_PARAMS = new Set([
   "pin_theirs",
   "counterparty",
   "include_rostered",
+  "source",
+  "kind",
+  "player",
+  "action",
+  "horizon",
+  "only_resolved",
+  "position",
+  "include",
 ]);
 
 function collectParams(req: Request): Record<string, string> {
@@ -155,9 +176,38 @@ router.get("/api/fantasy/news", (req, res) => serve("news", req, res));
 router.get("/api/fantasy/trade-generate", (req, res) => serve("trade-generate", req, res));
 router.get("/api/fantasy/now", (req, res) => serve("now", req, res));
 router.get("/api/fantasy/trends", (req, res) => serve("trends", req, res));
+router.get("/api/fantasy/content-status", (req, res) => serve("content-status", req, res));
+router.get("/api/fantasy/claims", (req, res) => serve("claims", req, res));
+router.get("/api/fantasy/today", (req, res) => serve("today", req, res));
+router.get("/api/fantasy/reading", (req, res) => serve("reading", req, res));
+router.get("/api/fantasy/lineup", (req, res) => serve("lineup", req, res));
+router.get("/api/fantasy/moves", (req, res) => serve("moves", req, res));
+router.get("/api/fantasy/trade-intel", (req, res) => serve("trade-intel", req, res));
 
 /**
- * The one write in this file. News read state.
+ * Mark Reading items (articles or notes) read. Same table as the news write
+ * below, so it invalidates the same cached payloads plus the Reading feed.
+ */
+router.post("/api/fantasy/reading/read", async (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((x): x is string => typeof x === "string" && /^[a-f0-9]{40}$/.test(x))
+    : [];
+  if (!ids.length) return res.status(400).json({ error: "no ids" });
+  try {
+    const value = await runFf("reading-read", { ids: ids.slice(0, 200).join(",") });
+    for (const k of [...cache.keys()])
+      if (k.startsWith("reading?") || k.startsWith("news?") || k.startsWith("now?")) cache.delete(k);
+    res.json(value);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+router.get("/api/fantasy/consensus", (req, res) => serve("consensus", req, res));
+router.get("/api/fantasy/dossier", (req, res) => serve("dossier", req, res));
+
+/**
+ * News read state (the other write in this file; Reading has its own above).
  *
  * POST rather than a parameter on the news GET, for a boring but fatal reason:
  * GET payloads here are cached for a minute, so a mark folded into the read path
@@ -192,55 +242,6 @@ router.post("/api/fantasy/news/read", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
-});
-
-/**
- * Alerts. Two owners, deliberately kept apart:
- *   - the alert CONTENT and its delivery log live in ff.db, which is the only
- *     thing that knows what "Jeanty sprained ankle" means
- *   - the JOB that would deliver it lives in NanoClaw's scheduled_tasks, which
- *     is the only thing that knows whether anything is running
- * Merging them here rather than teaching either side about the other keeps one
- * source of truth for each, and lets the page say "the rule exists but nothing
- * runs it" — which is the true state today and the most useful thing it can say.
- */
-router.get("/api/fantasy/alerts", async (req, res) => {
-  const inner: Record<string, unknown> = await new Promise((resolve) => {
-    const fake = { ...req, query: { ...req.query } } as Request;
-    const capture = {
-      json: (v: unknown) => resolve(v as Record<string, unknown>),
-      status: () => capture,
-    } as unknown as Response;
-    serve("alerts", fake, capture);
-  });
-
-  let tasks: unknown[] = [];
-  try {
-    tasks = db
-      .prepare(
-        "SELECT id, name, group_folder, chat_jid, schedule_type, schedule_value, " +
-          "status, next_run, last_run, last_result FROM scheduled_tasks " +
-          "WHERE status <> 'completed' AND (" +
-          "  lower(IFNULL(name,'')) LIKE '%fantasy%' OR lower(group_folder) LIKE '%fantasy%'" +
-          "  OR lower(IFNULL(name,'')) LIKE '%waiver%' OR lower(prompt) LIKE '%ff.cli%')"
-      )
-      .all();
-  } catch {
-    tasks = [];
-  }
-
-  res.json({
-    ...inner,
-    schedule: {
-      tasks,
-      configured: tasks.length > 0,
-      note:
-        tasks.length > 0
-          ? "Job health lives in Admin → Tasks; this is only the fantasy subset."
-          : "No scheduled job runs these rules yet. The alerts below are evaluated " +
-            "when you open this page, which means nothing reaches you unless you look.",
-    },
-  });
 });
 
 export default router;

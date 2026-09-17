@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Fantasy football news refresh. Runs on the HOST every 15 minutes via launchd.
+# Two steps: Sleeper/Rotowire notes (below), then expert-site articles and
+# player news (the content layer, bottom of this file).
 #
 # Deliberately not a NanoClaw scheduled task. This is a data pull with no
 # judgement in it — fetch Sleeper's player index, then fetch notes for the
@@ -33,7 +35,6 @@
 
 set -uo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FF_DIR="${FF_ROOT:-${HOME}/Documents/repositories/fantasy-football-agent}"
 LOCK="/tmp/nanoclaw-ff-news.lock"
 WINDOW_HOURS="${FF_NEWS_WINDOW_HOURS:-2}"
@@ -48,7 +49,9 @@ fi
 # One run at a time. A catch-up run after downtime can take 45s; at a 15 minute
 # interval that will never collide, but a hung network call could, and two
 # processes writing the same SQLite file is not worth finding out about later.
-exec 9>"${LOCK}"
+# Opened for APPEND: `9>` would truncate the file at open, emptying the pid
+# the fallback below reads, so on macOS the check never fired.
+exec 9>>"${LOCK}"
 if ! flock -n 9 2>/dev/null; then
   # macOS has no flock(1) by default; fall back to a pid check.
   if [ -s "${LOCK}" ] && kill -0 "$(cat "${LOCK}" 2>/dev/null)" 2>/dev/null; then
@@ -88,3 +91,34 @@ if [ "${STATUS}" -ne 0 ]; then
 fi
 
 echo "$(stamp) ok ${OUT}"
+
+# Expert-site content (fantasy-football-agent CONTENT-PLAN.md): articles and
+# player news from Fantasy Footballers, CBS, FantasyPros, Footballguys and
+# DraftSharks. Feed polls plus one fetch per NEW article, so a quiet quarter
+# hour is five requests. Each site is isolated (a broken parser is a failed
+# `content.<site>.articles` ingest_runs row, not a failed job), so this step
+# only fails the job if the pipeline itself cannot run. FantasyPros asks for
+# a 5s crawl delay and gets it, which is most of the wall time.
+COUT=$(python3 - "${CONTENT_WINDOW_HOURS:-24}" <<'PY' 2>&1
+import sys, time
+sys.path.insert(0, ".")
+from ff import db
+from ff.content import pipeline as content
+
+hours = int(sys.argv[1])
+conn = db.connect()
+t0 = time.time()
+before = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+res = content.run_articles(conn, hours=hours, limit=30)
+after = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+fails = [n for n, st, _r, _e in res if st != "ok"]
+print("content new=%d total=%d fails=%s elapsed=%.1fs"
+      % (after - before, after, ",".join(fails) or "none", time.time() - t0))
+PY
+)
+CSTATUS=$?
+if [ "${CSTATUS}" -ne 0 ]; then
+  echo "$(stamp) FAIL content ${COUT}" >&2
+  exit "${CSTATUS}"
+fi
+echo "$(stamp) ok $(echo "${COUT}" | grep -v "^  " | tail -1)"

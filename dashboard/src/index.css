@@ -128,6 +128,12 @@
     min-width: 32px;
   }
 
+  /* The Select popover is portalled to <body>, outside .ff-scope, so it
+     carries its own hook. 40px rows with a mouse, 44px under a thumb. */
+  .ff-listbox [role='option'] {
+    min-height: 44px;
+  }
+
   /* The source-link icon is an 11px glyph on purpose — it sits inside a
      sentence and a bigger icon would shove the prose around. Grow the HIT
      AREA instead of the mark, which is what a thumb actually needs. */

@@ -39,6 +39,43 @@ is visible rather than silent. `audit` additionally re-derives four published
 transaction counts from the live store, so a dropped week or a mis-parsed status
 fails loudly instead of quietly invalidating every downstream conclusion.
 
+### The content layer
+
+Since 2026-09-15 the data layer also ingests expert-site content — the plan,
+per-site feasibility and rules are in `fantasy-football-agent/CONTENT-PLAN.md`,
+the code in `ff/content/`. Six sites: The Fantasy Footballers, CBS Sports,
+FantasyPros (its article blog via RSS, plus rankings; its player-news scrape
+is off), Footballguys, DraftSharks and FantasyLife (ESPN is WAF-blocked and
+skipped).
+Articles and player-news blurbs land in `articles`, rankings snapshots in
+`rankings`, and the Fantasy Footballers' three analysts' projections in
+`projections` as source `ffballers`. Names resolve to Sleeper ids through a
+constrained resolver that returns NULL on ambiguity rather than guessing.
+`python3 -m ff.cli content all --summary` runs everything by hand; the host
+jobs below run it on a schedule.
+
+Layer 2 turns each stored article into player-level **claims** (`claims`
+table: player, action add/drop/start/sit/buy/sell/hold/stash/watch, horizon
+week/ros/dynasty, the author's confidence, a one-line rationale). One
+headless `claude -p` call per article with `--tools ""`, no MCP, no session
+and a JSON schema enforced — an article that tries to instruct the model can
+at worst corrupt its own row. `--bare` must not be used: it skips keychain
+credential loading. `python3 -m ff.cli claims --dry-run` shows what one
+article would produce without writing; `ff.cli claims --limit N` drains the
+queue. Per-article status lives in `article_extractions` and on the Admin
+subtab; `ff.cli api claims` lists recent claims.
+
+Layer 3 folds both into per-player consensus (`ff/content/consensus.py`):
+`ff.cli api consensus league=… scope=weekly|ros|dynasty [position=] [include=available|mine]`
+returns the median position rank across sources with spread and movement,
+FantasyPros' expert min/max/std, a confidence-weighted claims tally with the
+strongest rationales, roster status and league-correct projections from three
+sources; `ff.cli api dossier player=<id>` is the same for one player across
+every scope and league. `ff.cli consensus --league … --scope …` prints the
+board. The Telegram agent's memory points it at both. This is untrusted text like everything else
+in this group — cleaned on write, defanged on read, flagged when it reads as
+an instruction.
+
 ## Container mounts
 
 Four mounts, deliberately layered. The agent reads player-news text written by
@@ -79,8 +116,8 @@ text written by other people. `ff/sanitize.py` is the boundary:
 
 ## Dashboard tab
 
-`http://<host-ip>:3100/fantasy`. A league selector scopes everything below it, a
-**Right now** block sits above the subtabs, then four subtabs.
+`http://<host-ip>:3100/fantasy`. A league selector scopes everything below it;
+**Today** is the landing subtab and carries the **Right now** block at its top.
 
 **Right now** exists because the tabs did not talk to each other. On a live
 example the news layer knew a starter had a sprained ankle, that his projection
@@ -106,10 +143,16 @@ the default assumption stays that the projection is right.
 
 | Subtab | What it shows |
 |--------|---------------|
-| **Waiver wire** | Your roster and projected lineup, bench sorted weakest-first; **suggested roster moves** as add/drop pairs split into free agents (addable now) and waiver claims (Wednesday); the full board, searchable and filterable by position or FLEX, showing **which slot each player would take and from whom**; suggested bid as percent of budget; the tier price table; rivals' remaining budget; budget-burn curves; zero-point starter risk. |
-| **Trades** | A **trade builder** — one panel that prices the working deal AND searches from it. Chips in "You give"/"You get" can be pinned; pinned players are held constant while the league is searched for the rest. Prices both sides two ways (league VOR and FantasyCalc market value, draft picks included) with dynasty/redraft modes. Below it, **your roster and any rival's side by side** with click-to-add and click-to-pin; positional surplus and shortfall; counterparty behaviour last, since it is background rather than deal-making. |
-| **News** | **My news / All news** — a card per player, ranked by how much it could change a decision, with every note, the projection move, the designation and what corroborates it; cards whose only news is a box score with an unmoved projection fold into a "No change (n)" row; full-text search; article links out to the source. Alerts are deliberately absent — see below. |
-| **Alerts** | The four firing rules in plain language, the de-duplicated alert log (what fired, how many times, whether it was ever delivered), and whether any job is actually running them. |
+| **Today** | The landing view (`ff.cli api today`). **Right now** at the top, then tiles, then: **your roster as the sites see it** (consensus rank across sources with spread and movement, the claims tally, and flags where the sites disagree with your lineup); **moves** with the expert overlay (top three, "more on Moves"); **available and being talked about** (three, then a fold); one-line pointers to Trades (sell/buy counts) and Moves (crowd); **consensus movers** once two snapshots exist. |
+| **Lineup** | Start / sit this week (`ff.cli api lineup`). Tiles for your set lineup vs the projection-optimal one; a **look at these** list of lineup changes the numbers suggest and disagreements where the sites' this-week claims point the other way (with who he'd displace); starters and bench with Rotowire under this league's scoring plus ESPN and the Fantasy Footballers, a ± when they disagree, the consensus rank and the this-week claims; **streaming** picks at QB/TE/DEF/K. |
+| **Moves** | Add / drop / claim / stash (`ff.cli api moves`). The engine's add/drop pairs by lineup gain with rank, sites-say and crowd on each row; the candidate **board** (rest-of-season points and rank for the dynasty league); **drop candidates** with drop or hold talk; **stash** (contingent value plus stash claims); **the crowd**; and the full waiver engine — price table, rivals' budgets, burn curves, searchable board — behind a fold. |
+| **Trades** | **Trade intel** first (`ff.cli api trade-intel`): sell talk on your roster, buy targets on rival rosters, and for the dynasty league the value gaps between FantasyPros dynasty ECR and FantasyCalc market rank (cheap by the market / sell high). Then the trade builder, rosters side by side, positional fit and counterparty behaviour as before. |
+| **Rankings** | The consensus board (`ff.cli api consensus`): scope, position, everyone / available / mine, claims window; median position rank across sources with spread and move, per-source ranks, claims badges with the strongest rationale, roster status, league-correct projections from three sources. A "most discussed" strip on top; the board folds after 25 rows. |
+| **Reading** | One feed (`ff.cli api reading`): articles with the model's one-line summary and the claims each produced (your players highlighted), and Rotowire wire notes with topic tags; filter to your players, articles vs wire, site, claim horizon, window, unread only. Read state is shared with the old News tab (`news_read`, keyed on article or note id). Box-score-only notes are shown only for your players. No trending sidebars: that signal lives on Moves and Today. |
+| **Player dossier** (panel) | Opened from player names on Today, Lineup, Moves, Trade intel, Rankings and Reading (`ff.cli api dossier`): status and projections in all three leagues, rankings per scope by source with FantasyPros' expert range, every claim with rationale and link, recent wire notes. |
+| **Admin** | Ingest health for the content layer: per-site jobs, the claims-extraction job, every article with its extraction status, the run log. |
+
+Retired as tabs (code kept): Waiver wire (inside Moves' fold), Trends (its actionable rungs are on Moves and Today), News (folded into Reading), Experts (renamed Rankings). The Alerts section was removed outright on 2026-09-16 (rule engine, `alert_log`, `ff.cli alerts`, tab, route) so a future alerting design starts clean. **Dynasty is league behaviour, not a tab**: selecting the dynasty league puts Trades on dynasty ECR vs market, Moves on rest-of-season, Rankings on the dynasty scope.
 
 **Every panel is served by `python3 -m ff.cli api <endpoint>`.** The Express
 route shells out and caches; nothing is recomputed in TypeScript. League-correct
@@ -197,10 +240,9 @@ the next run; everyone else is addable now. The estimate is only as current as
 the last `live` transaction pull, and every payload carrying it says so.
 
 **One event, one presentation.** Jeanty's ankle was appearing four times on one
-page: the summary, a News→Alerts card ~400px below it, the player card below
-that, and the Alerts-tab log. The summary was also a lossy subset of the card
-under it. The News→Alerts card was cut: **"Right now" owns the synthesis, the
-Alerts tab owns the rule engine and firing history**, and the player card owns
+page: the summary, a News card ~400px below it, the player card below that,
+and a log. The summary was also a lossy subset of the card under it. The
+duplicate card was cut: **"Right now" owns the synthesis**, and the player card owns
 the dossier. Three surfaces, three jobs, no repeated sentences.
 
 **"Right now" collapses when you switch tabs.** It opens expanded, then folds to
@@ -225,8 +267,8 @@ every consumer prints what it is handed. Formatting the same number in two
 languages produced a real bug: a delta of exactly −2.25 rendered as *"fell 2.2"*
 in Python's `%.1f` and `-2.3` in JavaScript's `toFixed(1)`, four pixels apart.
 
-**Why alerts are narrow.** "There is news about a player you own" is not an alert
-— there is always news. An alert needs a state change: a designation, a material
+**Why "Right now" is narrow.** "There is news about a player you own" is not an item
+— there is always news. An item needs a state change: a designation, a material
 projection move (2.0 league-correct points), a fresh injury or role report, or
 somebody named as taking your player's work. Notes are classified on the
 *headline* only; scanning the analysis paragraph turned every box-score recap
@@ -262,38 +304,6 @@ that is the FLEX slot, occupied by a replaceable back. A board that prints
 "your weakest starting slot is a flex and a startable TE can fill it". The column
 names the slot and the incumbent so the two cannot be confused.
 
-## Alerts: where they live, and why not in Admin
-
-`Admin → Tasks` owns **job health** — cron, last run, duration, exit status,
-trigger-now — and picks up fantasy jobs automatically the moment one is
-registered, exactly as it does for Sports Briefing and the mortgage tracker.
-Duplicating that in the Fantasy tab would create two places to check that can
-disagree.
-
-The Fantasy `Alerts` subtab owns what Admin structurally cannot: Admin knows a
-task ran for 43 seconds and exited 0. It has no idea it said *"Jeanty sprained
-ankle"*, whether that was the fourth day of the same sprain, or whether it ever
-reached you. So the split is:
-
-| Question | Where |
-|---|---|
-| Is the job running? Did it fail? Run it now. | Admin → Tasks |
-| What did the alerts say? Was it new? Did it reach me? | Fantasy → Alerts |
-
-`ff.db` holds the alert log; NanoClaw's `scheduled_tasks` holds the job. The
-route merges them rather than teaching either side about the other, which is what
-lets the page say *"the rule exists but nothing runs it"* — the true state today.
-
-**The log is keyed on the CONDITION, not the run.** An injury that persists for
-four days is one alert seen four times, not four alerts. Without that, a job on a
-thirty-minute cron re-announces the same sprain until it gets muted. And like the
-projection snapshots, it can only be populated going forward: whether an alert was
-worth sending has no retroactive answer unless the firing was written down.
-
-**Nothing here sends anything.** `python3 -m ff.cli alerts --emit` returns the
-text and marks the rows; a scheduled task owns the channel. It prints nothing
-when there is nothing new, which is the behaviour a quiet job needs.
-
 ## Scheduling
 
 **Not yet configured.** Ingest is deterministic Python with no model in the loop,
@@ -324,16 +334,22 @@ cannot be.
 
 ## Scheduled jobs
 
-Three host launchd jobs, split by how fast the data underneath them moves.
+Four host launchd jobs, split by how fast the data underneath them moves.
 
 | Job | Cadence | Refreshes | Script / template |
 |---|---|---|---|
-| `com.nanoclaw.ff-news` | every 15 min | Sleeper player index, Rotowire notes | `scripts/ff-news.sh` · `launchd/com.nanoclaw.ff-news.plist` |
-| `com.nanoclaw.ff-live` | every 2h | transactions, matchups, FAAB, **rosters** | `scripts/ff-refresh.sh live` · `launchd/com.nanoclaw.ff-live.plist` |
-| `com.nanoclaw.ff-daily` | 06:40 daily | projections, ownership, market values, injuries, **schedules/Vegas lines** | `scripts/ff-refresh.sh daily` · `launchd/com.nanoclaw.ff-daily.plist` |
+| `com.nanoclaw.ff-news` | every 15 min | Sleeper player index, Rotowire notes, **expert-site articles + player news** (content layer) | `scripts/ff-news.sh` · `launchd/com.nanoclaw.ff-news.plist` |
+| `com.nanoclaw.ff-live` | every 2h | transactions, matchups, FAAB, **rosters**, **FantasyPros weekly + ROS ECR and Fantasy Footballers projections** (content layer) | `scripts/ff-refresh.sh live` · `launchd/com.nanoclaw.ff-live.plist` |
+| `com.nanoclaw.ff-daily` | 06:40 daily | projections, ownership, market values, injuries, **schedules/Vegas lines**, **CBS + Footballguys rankings, dynasty ECR** (content layer) | `scripts/ff-refresh.sh daily` · `launchd/com.nanoclaw.ff-daily.plist` |
+| `com.nanoclaw.ff-claims` | every 15 min | **claim extraction** (content layer 2): up to 8 stored articles per run through headless `claude -p` with no tools, JSON-schema output, on the host's Claude Code login | `scripts/ff-claims.sh` · `launchd/com.nanoclaw.ff-claims.plist` · install `scripts/install-ff-claims-plist.sh` |
+
+All four appear on the dashboard's **Scheduled Tasks** page (last exit, running
+state, log tail, trigger-now) via the descriptor list in
+`dashboard/server/routes/scheduled-tasks.ts`; the Fantasy › Admin subtab shows
+what they *wrote* (per-site ingest runs, articles, claims).
 
 Install: `scripts/install-ff-news-plist.sh` and `scripts/install-ff-refresh-plists.sh`
-(both idempotent). News logs to `logs/ff-news.log`; the other two log to
+(both idempotent). News logs to `logs/ff-news.log`; the other three log to
 `~/.local/share/nanoclaw/logs/ff-{live,daily}.log` — outside `~/Documents`, because
 launchd is denied spawn-time access there for a job loaded mid-session
 (see [host-cronjobs.md](host-cronjobs.md#exit-78-with-empty-logs--the-documents-spawn-time-gotcha)).
@@ -376,6 +392,7 @@ goes stale where it has numbers and stays empty for weeks not yet published.
 
 `sleeper.drafts` is genuinely static in-season and is correctly left to `backfill`.
 
-**Still not scheduled:** alerting. `ff.cli alerts --emit` has no job, by design —
-see the alerting section above; ingestion and notification are kept apart so the
-alert cadence can change without touching the refresh cadence.
+**Not scheduled, by design:** alerting. The previous alert engine was removed
+on 2026-09-16 so a future one can start clean; ingestion and notification
+stay separate so the alert cadence can change without touching the refresh
+cadence.

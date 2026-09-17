@@ -607,3 +607,38 @@ export function SourceLink({ href, label = "ESPN player news" }: { href: string;
     </a>
   );
 }
+
+/**
+ * The one fold control every long list shares: "show N more" / "show all N" /
+ * "show fewer". Renders nothing when there is nothing hidden and nothing to
+ * collapse, so call sites can drop it in unconditionally. `ff-inline` keeps
+ * the coarse-pointer padding rule from turning it into a 36px block.
+ */
+export function FoldToggle({
+  total,
+  shown,
+  expanded = false,
+  onToggle,
+  mode = "more",
+  className = "",
+}: {
+  total: number;
+  shown: number;
+  /** When given, the control also offers "show fewer" once open. */
+  expanded?: boolean;
+  onToggle: () => void;
+  /** "all" reads "show all 120"; "more" reads "show 30 more". */
+  mode?: "all" | "more";
+  className?: string;
+}) {
+  const hidden = Math.max(0, total - shown);
+  if (hidden === 0 && !expanded) return null;
+  return (
+    <button
+      onClick={onToggle}
+      className={`ff-inline mt-2 text-xs text-indigo-400 hover:text-indigo-300 ${className}`}
+    >
+      {expanded && hidden === 0 ? "show fewer" : mode === "all" ? `show all ${total}` : `show ${hidden} more`}
+    </button>
+  );
+}

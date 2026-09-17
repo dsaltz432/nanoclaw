@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TradeIntel from "./TradeIntel";
+import { Select } from "./Select";
 import { Badge, Balance, C, Card, NewsPeek, Note, PeekNote, Td, Th } from "./viz";
 
 type Asset = {
@@ -186,7 +188,7 @@ type Generated = {
   reason?: string;
 };
 
-export default function TradesTab({ league }: { league: string }) {
+export default function TradesTab({ league, onPlayer }: { league: string; onPlayer?: (id: string) => void }) {
   const [data, setData] = useState<TradesData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [give, setGive] = useState<Asset[]>([]);
@@ -339,6 +341,10 @@ export default function TradesTab({ league }: { league: string }) {
 
   return (
     <div className="space-y-4">
+      {/* Phase 5: the decision first. Sell talk on my roster, buy targets on
+          rivals', and for dynasty the ECR-vs-market value gaps. The builder
+          and counterparty history follow, unchanged. */}
+      <TradeIntel league={league} onPlayer={onPlayer} />
       {/* A DYNASTY MODE / REDRAFT MODE banner used to sit here, restating which
           mode you were in and why it weights market value differently. The
           league selector directly above already says which league this is, and
@@ -390,19 +396,13 @@ export default function TradesTab({ league }: { league: string }) {
           onPin={(p) => togglePin("theirs", p)}
           news={data.news_by_player}
           picker={
-            <select
+            <Select
+              aria-label="Trade partner"
+              size="sm"
               value={partnerId ?? ""}
-              onChange={(e) => setPartnerId(e.target.value)}
-              className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200"
-            >
-              {data.rosters
-                .filter((r) => !r.is_me)
-                .map((r) => (
-                  <option key={r.owner_id} value={r.owner_id}>
-                    {r.owner}
-                  </option>
-                ))}
-            </select>
+              onChange={setPartnerId}
+              options={data.rosters.filter((r) => !r.is_me).map((r) => ({ value: r.owner_id, label: r.owner }))}
+            />
           }
         />
       </div>

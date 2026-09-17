@@ -2,7 +2,8 @@
 #
 # Fantasy football DATA refresh. Runs on the HOST via launchd, in two flavours:
 #
-#   ff-refresh.sh live     every 2h  — transactions, matchups, FAAB, ROSTERS
+#   ff-refresh.sh live     every 2h  — transactions, matchups, FAAB, ROSTERS,
+#                                      expert rankings snapshots (content layer)
 #   ff-refresh.sh daily    06:40     — projections, ownership, market values
 #
 # Companion to ff-news.sh, which refreshes only news every 15 minutes. Same
@@ -60,7 +61,9 @@ fi
 # One run at a time, and note this lock is SHARED between the live and daily
 # flavours on purpose: both write the same SQLite file, and 06:40 is inside the
 # 2-hourly grid, so the two will collide roughly once a day by construction.
-exec 9>"${LOCK}"
+# Opened for APPEND: `9>` would truncate the file at open, emptying the pid
+# the fallback below reads, so on macOS the check never fired.
+exec 9>>"${LOCK}"
 if ! flock -n 9 2>/dev/null; then
     if [ -s "${LOCK}" ] && kill -0 "$(cat "${LOCK}" 2>/dev/null)" 2>/dev/null; then
         echo "$(stamp) SKIP previous run still going (pid $(cat "${LOCK}"))"
@@ -135,6 +138,55 @@ PY
     if [ "${RSTATUS}" -ne 0 ]; then
         echo "$(stamp) FAIL roster refresh exited ${RSTATUS}" >&2
         exit "${RSTATUS}"
+    fi
+fi
+
+# Expert rankings snapshots (fantasy-football-agent CONTENT-PLAN.md, source
+# review 2026-09-16). Split by how fast each list moves:
+#   live  (2h)   FantasyPros weekly + ROS ECR, Fantasy Footballers projections
+#   daily        CBS + Footballguys (0.88-0.98 correlated with ECR: a sanity
+#                check), Footballguys dynasty, FantasyPros dynasty ECR
+# Snapshots are keyed on the date, so re-runs overwrite. Most of the wall
+# time is FantasyPros' 5s crawl delay.
+if [ "${MODE}" = "daily" ]; then
+    python3 - <<'PY'
+import sys, time
+sys.path.insert(0, ".")
+from ff import db
+from ff.content import pipeline as content
+
+conn = db.connect()
+t0 = time.time()
+res = content.run_rankings(conn, sources=["cbs", "footballguys"])
+res += content.run_rankings(conn, sources=["fantasypros"], scopes=["dynasty"])
+fails = [n for n, st, _r, _e in res if st != "ok"]
+print("rankings(daily) steps=%d fails=%s elapsed=%.0fs"
+      % (len(res), ",".join(fails) or "none", time.time() - t0))
+PY
+    KSTATUS=$?
+    if [ "${KSTATUS}" -ne 0 ]; then
+        echo "$(stamp) FAIL content rankings (daily) exited ${KSTATUS}" >&2
+        exit "${KSTATUS}"
+    fi
+fi
+if [ "${MODE}" = "live" ]; then
+    python3 - <<'PY'
+import sys, time
+sys.path.insert(0, ".")
+from ff import db
+from ff.content import pipeline as content
+
+conn = db.connect()
+t0 = time.time()
+res = content.run_rankings(conn, sources=["fantasypros", "ffballers"], scopes=["weekly", "ros"])
+fails = [n for n, st, _r, _e in res if st != "ok"]
+print("rankings steps=%d fails=%s elapsed=%.0fs"
+      % (len(res), ",".join(fails) or "none", time.time() - t0))
+PY
+    KSTATUS=$?
+    if [ "${KSTATUS}" -ne 0 ]; then
+        echo "$(stamp) FAIL content rankings exited ${KSTATUS}" >&2
+        exit "${KSTATUS}"
     fi
 fi
 

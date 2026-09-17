@@ -42,7 +42,7 @@ wrapper can't page anyone; see [message-delivery.md](message-delivery.md)).
   reported as a crash loop.
 
 `jobs.txt` freshness covers: backup, email-metadata, spotify-cleanup, ff-daily (daily);
-ff-news (15 min), ff-live (2h) as intervals; backup-verify (weekly); briefing-upload +
+ff-news (15 min), ff-live (2h), ff-claims (15 min) as intervals; backup-verify (weekly); briefing-upload +
 trip-briefing-upload as never-alerting `event` jobs.
 
 **Topology:** Three layers cover three failure modes.

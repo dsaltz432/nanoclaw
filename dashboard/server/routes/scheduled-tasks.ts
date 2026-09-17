@@ -48,8 +48,18 @@ const JOBS: JobDescriptor[] = [
     label: "Backup",
     launchdLabel: "com.nanoclaw.backup",
     schedule: "Daily 3:15 AM",
-    logPath: repoLog("backup.out.log"),
+    // backup.sh writes its own dated log; the plist's stdout capture
+    // (backup.out.log) has been empty since May and read as "108d ago".
+    logPath: repoLog("backup.log"),
     errorLogPath: repoLog("backup.error.log"),
+  },
+  {
+    key: "backup-verify",
+    label: "Backup Verify (restore test)",
+    launchdLabel: "com.nanoclaw.backup-verify",
+    schedule: "Weekly, Sun 5:00 AM",
+    logPath: repoLog("backup-verify.log"),
+    errorLogPath: homeLog("backup-verify.error.log"),
   },
   {
     key: "email-metadata",
@@ -64,7 +74,10 @@ const JOBS: JobDescriptor[] = [
     label: "Health Heartbeat",
     launchdLabel: "com.nanoclaw.heartbeat",
     schedule: "Every 5 min",
-    logPath: repoLog("heartbeat.log"),
+    // heartbeat.sh writes no log; its output is the health-probe snapshot.
+    // jobs.txt is rewritten every run (mtime = last run) and its content —
+    // per-job freshness — is the most useful thing to show as the "tail".
+    logPath: path.join(nanoclawRoot, "data", "health-probe", "jobs.txt"),
     errorLogPath: repoLog("heartbeat.error.log"),
   },
   {
@@ -72,7 +85,8 @@ const JOBS: JobDescriptor[] = [
     label: "Sports Briefing Upload",
     launchdLabel: "com.nanoclaw.briefing-upload",
     schedule: "On new briefing",
-    logPath: repoLog("briefing-upload.out.log"),
+    // the script's own log; the plist stdout capture (*.out.log) stays empty
+    logPath: repoLog("briefing-upload.log"),
     errorLogPath: repoLog("briefing-upload.error.log"),
   },
   {
@@ -80,8 +94,43 @@ const JOBS: JobDescriptor[] = [
     label: "Trip Briefing Upload",
     launchdLabel: "com.nanoclaw.trip-briefing-upload",
     schedule: "On new trip briefing",
-    logPath: repoLog("trip-briefing-upload.out.log"),
+    logPath: repoLog("trip-briefing-upload.log"),
     errorLogPath: repoLog("trip-briefing-upload.error.log"),
+  },
+  // Fantasy football host jobs (docs/fantasy-football.md "Scheduled jobs").
+  // ff-news predates the ~/.local convention and logs under the repo; the
+  // other three follow the ff-live plist pattern.
+  {
+    key: "ff-news",
+    label: "Fantasy: news + articles",
+    launchdLabel: "com.nanoclaw.ff-news",
+    schedule: "Every 15 min",
+    logPath: repoLog("ff-news.log"),
+    errorLogPath: repoLog("ff-news.error.log"),
+  },
+  {
+    key: "ff-claims",
+    label: "Fantasy: claim extraction",
+    launchdLabel: "com.nanoclaw.ff-claims",
+    schedule: "Every 15 min",
+    logPath: homeLog("ff-claims.log"),
+    errorLogPath: homeLog("ff-claims.error.log"),
+  },
+  {
+    key: "ff-live",
+    label: "Fantasy: live refresh + rankings",
+    launchdLabel: "com.nanoclaw.ff-live",
+    schedule: "Every 2 h",
+    logPath: homeLog("ff-live.log"),
+    errorLogPath: homeLog("ff-live.error.log"),
+  },
+  {
+    key: "ff-daily",
+    label: "Fantasy: daily refresh",
+    launchdLabel: "com.nanoclaw.ff-daily",
+    schedule: "Daily 6:40 AM",
+    logPath: homeLog("ff-daily.log"),
+    errorLogPath: homeLog("ff-daily.error.log"),
   },
 ];
 

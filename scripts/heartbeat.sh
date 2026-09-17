@@ -94,6 +94,7 @@ emit_job com.nanoclaw.ff-daily        daily "$DAILY_MAX_AGE_MIN" "${HOME}/.local
 # Interval jobs: max age = a few missed fires plus grace, not a day.
 emit_job com.nanoclaw.ff-news         interval 60   "${LOG_DIR}/ff-news.log"
 emit_job com.nanoclaw.ff-live         interval 360  "${HOME}/.local/share/nanoclaw/logs/ff-live.log"
+emit_job com.nanoclaw.ff-claims       interval 60   "${HOME}/.local/share/nanoclaw/logs/ff-claims.log"
 # backup-verify runs weekly (Sun 05:00); 7 days + a day of grace. The script
 # appends to this log on every run, success or failure, so mtime is reliable.
 emit_job com.nanoclaw.backup-verify   weekly 11640  "${LOG_DIR}/backup-verify.log"

@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import AlertsTab from "./fantasy/AlertsTab";
-import RightNow from "./fantasy/RightNow";
-import NewsTab from "./fantasy/NewsTab";
+import AdminTab from "./fantasy/AdminTab";
+import ExpertsTab from "./fantasy/ExpertsTab";
+import LineupTab from "./fantasy/LineupTab";
+import MovesTab from "./fantasy/MovesTab";
+import PlayerDossier from "./fantasy/PlayerDossier";
+import ReadingTab from "./fantasy/ReadingTab";
+import TodayTab from "./fantasy/TodayTab";
 import TradesTab from "./fantasy/TradesTab";
-import WaiversTab from "./fantasy/WaiversTab";
 import { Badge } from "./fantasy/viz";
+import { Select } from "./fantasy/Select";
 import { MethodProvider, MethodologyPage } from "./fantasy/method";
-import TrendsTab from "./fantasy/TrendsTab";
 
 /**
  * Fantasy Football.
@@ -20,14 +23,27 @@ import TrendsTab from "./fantasy/TrendsTab";
  * wrong somewhere. Every panel re-fetches when the league changes.
  */
 
-type Tab = "waivers" | "trades" | "trends" | "news" | "alerts";
+type Tab = "today" | "lineup" | "moves" | "trades" | "rankings" | "reading" | "admin";
 
+// Phase 5 (CONTENT-PLAN.md): tabs by decision, not by data source.
+//   Today     the brief
+//   Lineup    start / sit this week
+//   Moves     add / drop / claim / stash (the waiver engine is a fold inside)
+//   Trades    sell candidates, buy targets, then the builder
+//   Rankings  the consensus board
+//   Reading   articles and wire notes, one feed
+// Waiver wire, Trends, News and Experts are absorbed; Alerts is hidden until
+// an implementation earns its place. Dynasty is league behaviour, not a tab.
 const TABS: { key: Tab; label: string }[] = [
-  { key: "waivers", label: "Waiver wire" },
+  { key: "today", label: "Today" },
+  { key: "lineup", label: "Lineup" },
+  { key: "moves", label: "Moves" },
   { key: "trades", label: "Trades" },
-  { key: "trends", label: "Trends" },
-  { key: "news", label: "News" },
-  { key: "alerts", label: "Alerts" },
+  { key: "rankings", label: "Rankings" },
+  { key: "reading", label: "Reading" },
+  // Ingest health for the content layer: which sites ran, what they wrote,
+  // and every article as it landed. League-independent.
+  { key: "admin", label: "Admin" },
 ];
 
 type League = {
@@ -58,20 +74,15 @@ type Overview = {
 
 
 export default function FantasyPage() {
-  const [tab, setTab] = useState<Tab>("waivers");
+  const [tab, setTab] = useState<Tab>("today");
+  // Any player name on any tab opens the dossier: rankings across
+  // sites, claims with rationale, notes, and status in all three leagues.
+  const [dossier, setDossier] = useState<string | null>(null);
   const [league, setLeague] = useState<string>("redraft");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
   const [showMethod, setShowMethod] = useState(false);
-  // A summary should not tax every subsequent view. It opens expanded, and
-  // folds to a one-line headline while you are still on the landing view.
-  const [nowCollapsed, setNowCollapsed] = useState(false);
-  // ...and once you pick a tab it goes away entirely. Its job is to spare you
-  // cross-referencing three tabs to find the day's one important item; a tab
-  // you have deliberately opened is not a view that needs saving from that,
-  // and carrying the strip into all five made it read as chrome.
-  const [tabChosen, setTabChosen] = useState(false);
 
   useEffect(() => {
     fetch("/api/fantasy/overview")
@@ -155,21 +166,14 @@ export default function FantasyPage() {
           is what stops you reading a guillotine number as a redraft one. */}
       {overview && (
         <div className="mb-4">
-          <label className="sr-only" htmlFor="ff-league">
-            League
-          </label>
-          <select
-            id="ff-league"
+          <Select
+            aria-label="League"
+            tone="accent"
             value={league}
-            onChange={(e) => setLeague(e.target.value)}
-            className="w-full rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-2.5 text-sm font-medium text-indigo-200 sm:w-auto"
-          >
-            {overview.leagues.map((l) => (
-              <option key={l.league_key} value={l.league_key} className="bg-gray-900 text-gray-100">
-                {l.name}
-              </option>
-            ))}
-          </select>
+            onChange={setLeague}
+            options={overview.leagues.map((l) => ({ value: l.league_key, label: l.name }))}
+            className="w-full sm:w-auto sm:min-w-[16rem]"
+          />
           {current && (
             <p className="mt-1 text-[11px] text-gray-500">
               {current.total_rosters} teams · ${current.faab_budget} FAAB ·{" "}
@@ -204,27 +208,15 @@ export default function FantasyPage() {
         </div>
       )}
 
-      {/* Above the subtabs on purpose — it draws from all of them, and the
-          failure it fixes was that the day's most important item was only
-          visible by cross-referencing three. */}
-      {!tabChosen && (
-        <RightNow
-          league={league}
-          collapsed={nowCollapsed}
-          onToggle={() => setNowCollapsed((v) => !v)}
-          key={`rn-${league}`}
-        />
-      )}
-
       {/* ── subtabs ─────────────────────────────────────────────────── */}
-      <div className="mb-2 -mx-1 flex gap-1 overflow-x-auto rounded-lg bg-gray-900 p-1 px-1 sm:mx-0 sm:w-fit">
+      {/* Wraps to a second row on a phone. It used to scroll sideways with
+          nothing signalling it, so Reading and Admin were off-screen and
+          effectively invisible at 390px. */}
+      <div className="mb-2 flex flex-wrap gap-1 rounded-lg bg-gray-900 p-1 sm:w-fit sm:flex-nowrap">
         {TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => {
-              setTab(t.key);
-              setTabChosen(true);
-            }}
+            onClick={() => setTab(t.key)}
             className={`shrink-0 rounded-md px-2 py-2.5 text-sm font-medium transition-colors sm:px-4 ${
               tab === t.key ? "bg-gray-800 text-gray-100" : "text-gray-400 hover:text-gray-300"
             }`}
@@ -234,15 +226,16 @@ export default function FantasyPage() {
         ))}
       </div>
 
-      {tab === "waivers" && (
-        <WaiversTab league={league} key={`w-${league}`} />
-      )}
-      {tab === "trades" && <TradesTab league={league} key={`t-${league}`} />}
-      {tab === "trends" && <TrendsTab league={league} key={`tr-${league}`} />}
-      {tab === "news" && <NewsTab league={league} key={`n-${league}`} />}
-      {tab === "alerts" && <AlertsTab league={league} key={`a-${league}`} />}
+      {tab === "today" && <TodayTab league={league} onPlayer={setDossier} onTab={setTab} key={`td-${league}`} />}
+      {tab === "lineup" && <LineupTab league={league} onPlayer={setDossier} key={`l-${league}`} />}
+      {tab === "moves" && <MovesTab league={league} onPlayer={setDossier} key={`m-${league}`} />}
+      {tab === "trades" && <TradesTab league={league} onPlayer={setDossier} key={`t-${league}`} />}
+      {tab === "rankings" && <ExpertsTab league={league} onPlayer={setDossier} key={`e-${league}`} />}
+      {tab === "reading" && <ReadingTab league={league} onPlayer={setDossier} key={`r-${league}`} />}
+      {tab === "admin" && <AdminTab />}
+      {dossier && <PlayerDossier playerId={dossier} onClose={() => setDossier(null)} />}
 
-      {current?.status === "pre_draft" && tab !== "news" && (
+      {current?.status === "pre_draft" && tab !== "reading" && tab !== "admin" && (
         <p className="mt-4 text-xs text-gray-600">
           {current.name} has not drafted yet, so roster-dependent panels will be empty until it does.
         </p>
