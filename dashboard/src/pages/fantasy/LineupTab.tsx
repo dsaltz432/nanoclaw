@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, StatTile, Td, Th } from "./viz";
 import { ACTION_TONE, projShort, srcShort } from "./labels";
+import { MatchupCell, NoteLine, RoleBadge, UsageCell, type Matchup, type Note, type Usage } from "./NoteLine";
 
 /**
  * Lineup — start / sit this week.
@@ -40,9 +41,22 @@ type Row = {
   current_starter: boolean;
   optimal_starter: boolean;
   points?: number;
+  usage: Usage;
+  matchup: Matchup;
+  note: Note;
 };
 
-type Stream = { player_id: string; name: string; team: string | null; rank: Rank; proj: Record<string, number>; claims: { n: number; net: number; by_action: Record<string, number>; evidence: { rationale: string; source: string }[] } | null };
+type Stream = {
+  player_id: string;
+  name: string;
+  team: string | null;
+  rank: Rank;
+  proj: Record<string, number>;
+  claims: { n: number; net: number; by_action: Record<string, number>; evidence: { rationale: string; source: string }[] } | null;
+  usage: Usage;
+  matchup: Matchup;
+  note: Note;
+};
 
 type Data = {
   week: number;
@@ -53,6 +67,11 @@ type Data = {
   disagreements: { kind: "sit" | "start"; player: Row; over?: Row | null; text: string }[];
   streaming: Record<string, Stream[]>;
   note: string;
+  context_note: string;
+  usage_week: number | null;
+  usage_prev_week: number | null;
+  role_change_points: number;
+  note_hours: number;
   error?: string;
 };
 
@@ -88,6 +107,9 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
           <Badge tone="warning">{r.injury_status}</Badge>
         </>
       )}
+      {/* The newest injury / out / role / return wire note, inline, so a
+          starter's status is visible without opening the dossier. */}
+      <NoteLine note={r.note} />
     </>
   );
 
@@ -163,6 +185,8 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
             <Th>Player</Th>
             <Th>Set</Th>
             <Th className="text-right">Proj</Th>
+            <Th>Matchup</Th>
+            <Th>Usage</Th>
             <Th>Rank</Th>
             <Th>Sites say (this week)</Th>
           </tr>
@@ -179,6 +203,12 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
               </Td>
               <Td data-label="Proj" className="text-right">
                 <ProjCell r={r} />
+              </Td>
+              <Td data-label="Matchup" className="whitespace-nowrap text-xs tabular-nums">
+                <MatchupCell matchup={r.matchup} position={r.position} />
+              </Td>
+              <Td data-label="Usage" className="whitespace-nowrap text-xs tabular-nums">
+                <UsageCell usage={r.usage} position={r.position} />
               </Td>
               <Td data-label="Rank" className="text-xs">
                 <RankCell r={r} />
@@ -256,7 +286,17 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
                 {Array.from(look.values()).map(({ r, numbers, sites }) => (
                   <tr key={r.player_id} className="border-t border-gray-800/60 align-top">
                     <Td data-label="" className="ff-row-head whitespace-nowrap">
-                      <Name r={r} />
+                      <div>
+                        <Name r={r} />
+                        {/* A bench player whose snap share jumped is the
+                            reason this table exists; flag him at the top. */}
+                        {r.usage?.role_change && (
+                          <>
+                            {" "}
+                            <RoleBadge change={r.usage.role_change} />
+                          </>
+                        )}
+                      </div>
                     </Td>
                     <Td data-label="Set" className="text-xs">
                       <SetCell r={r} />
@@ -300,7 +340,17 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
         </Card>
       )}
 
-      <Card title="Starters" subtitle={`The projection-optimal lineup for week ${data.week}. Proj is Rotowire under this league's scoring, with ESPN and the Fantasy Footballers beside it.`}>
+      <Card
+        title="Starters"
+        subtitle={
+          `The projection-optimal lineup for week ${data.week}. Proj is Rotowire under this league's scoring, with ESPN and the Fantasy Footballers beside it.` +
+          (data.usage_week != null
+            ? ` Matchup is the opponent and the Vegas implied team total; usage is snap and target share for week ${data.usage_week}` +
+              (data.usage_prev_week != null ? ` (change from week ${data.usage_prev_week})` : "") +
+              "."
+            : "")
+        }
+      >
         <Table rows={data.optimal} slotCol />
       </Card>
       <Card title="Bench" subtitle="Highest projection first.">
@@ -348,8 +398,15 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
                             {pos}
                             {s.rank?.median ?? "—"}
                             {s.proj.rotowire != null && <span className="text-gray-600"> · {s.proj.rotowire.toFixed(0)} pts</span>}
+                            {s.matchup && (
+                              <>
+                                <span className="text-gray-600"> · </span>
+                                <MatchupCell matchup={s.matchup} position={pos} />
+                              </>
+                            )}
                           </span>
                         </div>
+                        {s.note && <NoteLine note={s.note} className="whitespace-normal text-gray-500" />}
                         {s.claims && (
                           <div className="text-gray-500">
                             {Object.entries(s.claims.by_action)
@@ -369,6 +426,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
         )}
       </Card>
       <p className="text-[11px] text-gray-600">{data.note}</p>
+      <p className="text-[11px] text-gray-600">{data.context_note}</p>
     </div>
   );
 }

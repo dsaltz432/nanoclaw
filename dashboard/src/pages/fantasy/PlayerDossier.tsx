@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge } from "./viz";
 import { ACTION_TONE, SCOPE_LABEL, horizonLabel, projShort, srcLabel } from "./labels";
+import { Delta, MatchupCell, RoleBadge, type Matchup, type Usage } from "./NoteLine";
 
 /**
  * Player dossier — everything the store knows about one player, in one
@@ -57,6 +58,9 @@ type Data = {
   } | null;
   news: { published_at: string; headline: string; story?: string; flagged?: boolean }[];
   leagues: Record<string, { status: string; owner: string | null; is_me: boolean; proj: Record<string, number> }>;
+  usage: (NonNullable<Usage> & { opponent: string | null })[];
+  matchup: Matchup;
+  role_change_points: number;
   error?: string;
 };
 
@@ -79,6 +83,9 @@ export default function PlayerDossier({ playerId, onClose }: { playerId: string;
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  // A defence's number is what it faces; everyone else's is his own team's.
+  const implied = data?.matchup ? (data.player.position === "DEF" ? data.matchup.opp_implied_total : data.matchup.implied_total) : null;
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6" onClick={onClose}>
@@ -139,6 +146,97 @@ export default function PlayerDossier({ playerId, onClose }: { playerId: string;
                 </div>
               ))}
             </div>
+
+            {/* ── this week / usage ──────────────────────────────────── */}
+            {/* Context, not a projection input: the opponent and Vegas
+                implied total for the target week, then nflverse snap and
+                target share for the last few completed weeks. */}
+            {data.matchup && (
+              <div className="mb-4 text-xs text-gray-400">
+                <span className="text-gray-500">week {data.week}:</span>{" "}
+                {data.matchup.bye ? (
+                  <Badge tone="warning">BYE</Badge>
+                ) : (
+                  <>
+                    {/* The cell prints "vs DET · 29.5"; here the number is
+                        spelled out as "implied" so the strip reads as prose. */}
+                    <MatchupCell matchup={{ ...data.matchup, implied_total: null, opp_implied_total: null }} position={data.player.position} />
+                    {implied != null && (
+                      <span className="tabular-nums">
+                        {" "}
+                        · implied{" "}
+                        <span className="text-gray-200" title={data.player.position === "DEF" ? "what the defense faces" : undefined}>
+                          {implied.toFixed(1)}
+                        </span>
+                      </span>
+                    )}
+                    {data.matchup.gameday && (
+                      <span className="text-gray-600">
+                        {" "}
+                        · {data.matchup.gameday}
+                        {data.matchup.gametime ? ` ${data.matchup.gametime}` : ""}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {(data.usage?.length ?? 0) > 0 && (
+              <div className="mb-4">
+                <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">Usage</h4>
+                <table className="w-full max-w-md text-xs tabular-nums">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-gray-600">
+                      <th className="py-1 pr-3 font-medium">Week</th>
+                      <th className="py-1 pr-3 font-medium">Opp</th>
+                      <th className="py-1 pr-3 font-medium">Snaps</th>
+                      <th className="py-1 pr-3 font-medium">Targets</th>
+                      <th className="py-1 pr-3 font-medium">Touches</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.usage.map((u) => (
+                      <tr key={u.week} className="border-t border-gray-800/60 text-gray-300">
+                        <td className="py-1 pr-3 text-gray-500">{u.week}</td>
+                        <td className="py-1 pr-3 text-gray-500">{u.opponent ?? "—"}</td>
+                        <td className="whitespace-nowrap py-1 pr-3" title={u.snaps != null ? `${u.snaps} snaps` : undefined}>
+                          {u.played && u.snap_pct != null ? (
+                            <>
+                              {u.snap_pct}%
+                              <Delta d={u.snap_delta} />
+                            </>
+                          ) : (
+                            <span className="text-gray-700">{u.played ? "—" : "DNP"}</span>
+                          )}
+                          {u.role_change && (
+                            <>
+                              {" "}
+                              <RoleBadge change={u.role_change} />
+                            </>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap py-1 pr-3" title={u.targets != null ? `${u.targets} targets` : undefined}>
+                          {data.player.position !== "QB" && u.target_share != null ? (
+                            <>
+                              {u.target_share}%
+                              <Delta d={u.target_delta} />
+                            </>
+                          ) : (
+                            <span className="text-gray-700">—</span>
+                          )}
+                        </td>
+                        <td className="py-1 pr-3" title={u.carries != null ? `${u.carries} carries` : undefined}>
+                          {u.touches ?? <span className="text-gray-700">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[11px] text-gray-600">
+                  nflverse snap counts and target share; a move of {data.role_change_points}+ snap points is flagged. Context, not a projection input.
+                </p>
+              </div>
+            )}
 
             {/* ── rankings ───────────────────────────────────────────── */}
             {/* Three mini-cards, one per list. As a six-column table this was

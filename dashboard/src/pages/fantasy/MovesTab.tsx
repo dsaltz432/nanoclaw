@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
 import { ACTION_TONE, srcShort } from "./labels";
+import { NoteLine, type Note } from "./NoteLine";
 import WaiversTab from "./WaiversTab";
 import { Select } from "./Select";
 
@@ -25,6 +26,7 @@ type Overlay = {
   ranks: Record<string, number>;
   claims: { n: number; n_sources: number; net: number; by_action: Record<string, number>; by_horizon: Record<string, number>; evidence: { action: string; horizon: string; rationale: string; source: string }[] } | null;
   crowd: { verdict: string | null; why: string | null; adds_24: number | null; pct_owned: number | null } | null;
+  note: Note;
 } | null;
 
 type Move = {
@@ -80,6 +82,7 @@ type Data = {
   stash: Stash[];
   crowd: Crowd[];
   notes: { inference: string | null; method: string | null };
+  note_hours: number;
   error?: string;
 };
 
@@ -133,6 +136,8 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
       <span className="text-gray-700">—</span>
     );
 
+  // The newest injury / out / role / return wire note rides in the Sites
+  // cell (same shape as Lineup's NoteLine) so no table gains a column.
   const Sites = ({ o }: { o: Overlay }) =>
     o?.claims ? (
       <span>
@@ -153,6 +158,11 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
             <span className="text-gray-600">{srcShort(o.claims.evidence[0].source)}:</span> {o.claims.evidence[0].rationale}
           </div>
         )}
+        <NoteLine note={o.note} />
+      </span>
+    ) : o?.note ? (
+      <span>
+        <NoteLine note={o.note} className="max-w-[26rem] whitespace-normal text-[11px] font-normal text-gray-400" />
       </span>
     ) : (
       <span className="text-xs text-gray-700">quiet</span>
@@ -419,6 +429,7 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
                 <span className="ml-auto text-xs">
                   <Rank o={d.overlay} />
                 </span>
+                {d.overlay?.note && <NoteLine note={d.overlay.note} className="basis-full whitespace-normal text-[11px] text-gray-400" />}
               </li>
             ))}
           </ul>
