@@ -851,8 +851,14 @@ function MyRoster({ data }: { data: Waivers }) {
         )
       }
     >
+      {/* `min-w-0` on both columns: a grid item's default min-width is auto
+          (its min-content), so the row's non-shrinking parts — slot, peek
+          button, badge, projection — plus the peek panel's text pushed each
+          column to ~380px on a 390px phone and the card scrolled sideways
+          inside <main>. With it, the column takes the track width and the
+          name truncates as designed. */}
       <div className="grid gap-6 md:grid-cols-2">
-        <div>
+        <div className="min-w-0">
           <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">Starting lineup</h4>
           <ul className="space-y-0.5">
             {slots.map((s, i) => (
@@ -878,7 +884,7 @@ function MyRoster({ data }: { data: Waivers }) {
             ))}
           </ul>
         </div>
-        <div>
+        <div className="min-w-0">
           <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">
             Bench — drop candidates first
           </h4>

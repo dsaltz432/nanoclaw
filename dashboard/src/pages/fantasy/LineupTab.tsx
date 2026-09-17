@@ -58,8 +58,36 @@ type Stream = {
   note: Note;
 };
 
+/** One surviving roster in the guillotine league, by projected set total. */
+type RosterRow = {
+  roster_id: string;
+  owner_id: string;
+  owner: string;
+  is_me: boolean;
+  set: number;
+  optimal: number;
+  starters_without_projection: number;
+};
+
+/** Guillotine only; null in the other two leagues. */
+type Survival = {
+  week: number;
+  teams_alive: number;
+  eliminated_so_far: number;
+  mine: RosterRow | null;
+  lowest_rival: RosterRow | null;
+  margin_above_lowest: number | null;
+  margin_if_optimal: number | null;
+  my_rank_from_bottom: number | null;
+  median_set: number | null;
+  distribution: RosterRow[];
+  last_week: null | { week: number; chop_line: number; chopped: string; my_points: number | null; my_rank_from_bottom: number | null; teams: number };
+  note: string;
+} | null;
+
 type Data = {
   week: number;
+  survival?: Survival;
   optimal: Row[];
   bench: Row[];
   totals: { optimal: number; current: number };
@@ -256,8 +284,71 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
   const streams = Object.entries(data.streaming);
   const openStreams = allStreams ? streams : streams.filter(([pos, rows]) => weak(pos, rows));
 
+  // Guillotine: the question is not "am I optimal" but "am I above the chop
+  // line". The lowest six rosters are the line as the projections see it;
+  // your own row is appended when you sit comfortably above them.
+  const survival = data.survival ?? null;
+  const SURVIVAL_ROWS = 6;
+  const survivalRows = (() => {
+    if (!survival) return [];
+    const low = survival.distribution.slice(0, SURVIVAL_ROWS);
+    const mine = survival.distribution.find((r) => r.is_me);
+    return mine && !low.some((r) => r.roster_id === mine.roster_id) ? [...low, mine] : low;
+  })();
+  const margin = survival?.margin_above_lowest ?? null;
+  const marginTone: "critical" | "warning" | "good" = margin == null ? "good" : margin < 5 ? "critical" : margin < 15 ? "warning" : "good";
+  const marginHint =
+    survival?.margin_if_optimal != null && margin != null && survival.margin_if_optimal !== margin
+      ? `+${survival.margin_if_optimal.toFixed(1)} if optimal`
+      : undefined;
+
   return (
     <div className="space-y-4">
+      {survival && (
+        <Card
+          title="Survival"
+          subtitle={`week ${survival.week} · ${survival.teams_alive} teams alive · ${survival.eliminated_so_far} chopped so far`}
+        >
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatTile label="Your set lineup" value={survival.mine?.set.toFixed(1) ?? "—"} />
+            <StatTile label="Lowest rival" value={survival.lowest_rival?.set.toFixed(1) ?? "—"} hint={survival.lowest_rival?.owner} />
+            <StatTile label="Margin above the line" value={margin != null ? `${margin >= 0 ? "+" : ""}${margin.toFixed(1)}` : "—"} tone={marginTone} hint={marginHint} />
+            <StatTile
+              label="From the bottom"
+              value={survival.my_rank_from_bottom != null ? `${survival.my_rank_from_bottom} of ${survival.teams_alive}` : "—"}
+              hint={survival.median_set != null ? `median ${survival.median_set.toFixed(1)}` : undefined}
+            />
+          </div>
+          {survivalRows.length > 0 && (
+            <ul className="mt-3 space-y-0.5 text-xs">
+              {survivalRows.map((r) => (
+                <li
+                  key={r.roster_id}
+                  className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-2 py-1 ${r.is_me ? "bg-indigo-500/10 text-gray-100" : "text-gray-300"}`}
+                >
+                  <span className="min-w-0 truncate">
+                    {r.owner}
+                    {r.is_me && <span className="ml-1 text-indigo-400">you</span>}
+                  </span>
+                  <span className="tabular-nums">
+                    · {r.set.toFixed(1)} <span className="text-gray-500">(optimal {r.optimal.toFixed(1)})</span>
+                  </span>
+                  {r.starters_without_projection > 0 && <Badge tone="warning">{r.starters_without_projection} empty</Badge>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {survival.last_week && (
+            <p className="mt-2 text-xs text-gray-500">
+              Week {survival.last_week.week}: chop line {survival.last_week.chop_line} ({survival.last_week.chopped}) · you scored{" "}
+              {survival.last_week.my_points != null ? survival.last_week.my_points.toFixed(1) : "—"}, {survival.last_week.my_rank_from_bottom ?? "—"} from the bottom of{" "}
+              {survival.last_week.teams}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-gray-600">{survival.note}</p>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="Your set lineup" value={data.totals.current.toFixed(1)} hint={`week ${data.week}, league-correct`} />
         <StatTile

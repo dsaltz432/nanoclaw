@@ -69,8 +69,89 @@ type Drop = { player_id: string; name: string; position: string; team: string | 
 type Stash = { kind: "contingent" | "stash_talk"; player_id?: string; name?: string; position?: string; team?: string | null; rank?: Rank; overlay: Overlay; [k: string]: unknown };
 type Crowd = { player_id: string; name: string; position: string | null; team: string | null; availability: string; verdict: string; why: string | null; overlay: Overlay };
 
+/** A player released by the roster chopped last week (guillotine only). */
+type Released = {
+  player_id: string;
+  name: string;
+  position: string | null;
+  team: string | null;
+  injury_status: string | null;
+  claimed_by: string | null;
+  claimed_by_me: boolean;
+  board: null | {
+    projected: number | null;
+    bar: number | null;
+    over_bar: number | null;
+    displaces: { slot: string; name: string; points: number } | null;
+    availability: string | null;
+    clears_at: string | null;
+    bid_applies: boolean;
+    suggested_bid: number | null;
+    suggested_pct: number | null;
+    market_bid_if_contested: number | null;
+    tier: string | null;
+    tier_p90: number | null;
+    tier_n: number | null;
+    tier_thin: boolean | null;
+    ros_points: number | null;
+    no_bid_reason: string | null;
+  };
+  guidance: null | {
+    band: "alpha" | "average" | "conservative" | "token";
+    band_pct: number;
+    ceiling: number;
+    market_p75: number | null;
+    market_p90: number | null;
+    tier_n: number | null;
+    tier_thin: boolean | null;
+    board_suggested: number | null;
+    bid: number | null;
+    bid_pct_of_budget: number | null;
+    bid_pct_of_mine: number | null;
+    rivals_who_can_outbid: number;
+    rivals_flush: number;
+    why: string[];
+  };
+};
+
+type Chopped =
+  | {
+      week: number | null;
+      eliminated: string[];
+      budget: number;
+      my_budget_left: number;
+      rivals_flush: number;
+      rivals_alive: number;
+      players: Released[];
+      bands: Record<string, number>;
+      note: string;
+    }
+  | { week: null; players: []; note: string };
+
+type Guillotine = {
+  chopped: Chopped;
+  qb_premium: {
+    superflex: boolean;
+    teams: number;
+    qb_starters_max: number;
+    nfl_starting_jobs: number;
+    qb_vs_rb: number | null;
+    qb_replacement: number | null;
+    rb_replacement: number | null;
+    note: string;
+  };
+} | null;
+
+const BAND_TONE: Record<NonNullable<Released["guidance"]>["band"], "critical" | "warning" | "info" | "neutral"> = {
+  alpha: "critical",
+  average: "warning",
+  conservative: "info",
+  token: "neutral",
+};
+
 type Data = {
   week: number;
+  guillotine?: Guillotine;
   horizon: "week" | "ros";
   rank_scope: string;
   lineup_total: number | null;
@@ -209,8 +290,120 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
   const isException = (c: Cand) => sharedDisplaces != null && displacesKey(c.displaces) !== displacesKey(sharedDisplaces);
   const stash = allStash ? data.stash : data.stash.slice(0, STASH_SHOWN);
 
+  // Guillotine: last week's chopped roster is the week's market, priced by
+  // the same board as the fold and capped by the FantasyLife bands.
+  const g = data.guillotine ?? null;
+  const chopped = g?.chopped ?? null;
+  const choppedFull = chopped && chopped.week != null && "eliminated" in chopped ? chopped : null;
+
+  const Fate = ({ p }: { p: Released }) =>
+    p.claimed_by != null ? (
+      <Badge tone="neutral">claimed by {p.claimed_by_me ? "you" : p.claimed_by}</Badge>
+    ) : p.board == null ? (
+      <span className="text-gray-600">unpriced</span>
+    ) : p.board.availability === "free_agent" ? (
+      <span className="text-green-400">free agent</span>
+    ) : (
+      <span className="text-gray-400">on waivers{p.board.clears_at ? ` until ${p.board.clears_at}` : ""}</span>
+    );
+
   return (
     <div className="space-y-4">
+      {g && chopped && (
+        <Card
+          title="Chopped roster"
+          subtitle={
+            choppedFull
+              ? `week ${choppedFull.week} chop: ${choppedFull.eliminated.join(", ")} · your budget left $${choppedFull.my_budget_left} of $${choppedFull.budget} · ${choppedFull.rivals_flush} of ${choppedFull.rivals_alive} rivals still hold 50%+`
+              : undefined
+          }
+        >
+          {chopped.players.length === 0 ? (
+            <p className="text-xs text-gray-600">{chopped.note}</p>
+          ) : (
+            <>
+              <div className="ff-stack-wrap overflow-x-auto">
+                <table className="ff-stack w-full">
+                  <thead>
+                    <tr>
+                      <Th>Player</Th>
+                      <Th>Fate</Th>
+                      <Th className="text-right">Proj</Th>
+                      <Th className="text-right">Bid</Th>
+                      <Th>Rivals</Th>
+                      <Th>Why</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chopped.players.map((p) => (
+                      <tr key={p.player_id} className="border-t border-gray-800/60 align-top">
+                        <Td data-label="" className="ff-row-head whitespace-nowrap">
+                          <Name id={p.player_id} name={p.name} pos={p.position} team={p.team} inj={p.injury_status} />
+                        </Td>
+                        <Td data-label="Fate" className="text-xs">
+                          <Fate p={p} />
+                        </Td>
+                        <Td data-label="Proj" className="whitespace-nowrap text-right tabular-nums">
+                          {p.board?.projected != null ? (
+                            <span>
+                              <span className="text-gray-200">{p.board.projected.toFixed(1)}</span>
+                              {p.board.over_bar != null && (
+                                <span className="ml-1 text-[11px] text-gray-500">
+                                  ({p.board.over_bar >= 0 ? "+" : ""}
+                                  {p.board.over_bar.toFixed(1)})
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-gray-700">—</span>
+                          )}
+                        </Td>
+                        <Td data-label="Bid" className="text-right text-xs">
+                          {p.guidance?.bid != null ? (
+                            <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5 gap-y-0.5">
+                              <span className="font-semibold tabular-nums text-gray-100">${p.guidance.bid}</span>
+                              {p.guidance.bid_pct_of_budget != null && <span className="text-gray-500">{p.guidance.bid_pct_of_budget}% of budget</span>}
+                              <Badge tone={BAND_TONE[p.guidance.band]}>{p.guidance.band}</Badge>
+                            </span>
+                          ) : (
+                            <span className="text-gray-700">—</span>
+                          )}
+                        </Td>
+                        <Td data-label="Rivals" className="whitespace-nowrap text-xs text-gray-400">
+                          {p.guidance ? `${p.guidance.rivals_who_can_outbid} can outbid` : "—"}
+                        </Td>
+                        <Td data-label="Why" className="text-[11px] text-gray-500">
+                          {p.guidance && p.guidance.why.length > 0 ? (
+                            <div className="max-w-[26rem]">
+                              {p.guidance.why.map((w, i) => (
+                                <div key={i}>{w}</div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-700">—</span>
+                          )}
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-600">{chopped.note}</p>
+            </>
+          )}
+        </Card>
+      )}
+
+      {g && (
+        <Card title="Superflex QB premium">
+          <p className="text-sm text-gray-200">
+            {g.qb_premium.teams} teams · up to {g.qb_premium.qb_starters_max} QB starters vs {g.qb_premium.nfl_starting_jobs} NFL jobs
+            {g.qb_premium.qb_vs_rb != null && <> · QB worth {g.qb_premium.qb_vs_rb}x RB here</>}
+          </p>
+          <p className="mt-1 text-xs text-gray-500">{g.qb_premium.note}</p>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="Lineup now" value={data.lineup_total?.toFixed(1) ?? "—"} hint={`week ${data.week}`} />
         <StatTile
