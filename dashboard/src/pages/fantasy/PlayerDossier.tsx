@@ -40,11 +40,24 @@ type Evidence = {
   flagged: boolean;
 };
 
+type RankPoint = { snapshot_date: string; median: number; best: number; worst: number; n: number };
+
 type Data = {
-  player: { player_id: string; full_name: string; position: string; team: string | null; injury_status: string | null };
+  player: {
+    player_id: string;
+    full_name: string;
+    position: string;
+    team: string | null;
+    injury_status: string | null;
+    age: number | null;
+    years_exp: number | null;
+    rookie: boolean;
+  };
   season: string;
   week: number;
   rankings: Record<string, RankScope>;
+  /** Consensus per snapshot, oldest first, up to 14; a scope with no history is absent. */
+  rank_history: Partial<Record<"weekly" | "ros" | "dynasty", RankPoint[]>>;
   claims: {
     n: number;
     n_sources: number;
@@ -63,6 +76,56 @@ type Data = {
   role_change_points: number;
   error?: string;
 };
+
+/** "09-16" from "2026-09-16". */
+const mmdd = (d: string) => d.slice(5, 10);
+
+/**
+ * Consensus rank over the last snapshots. The Y axis is inverted — rank 1 sits
+ * at the top, since lower is better — so a line that climbs reads as the sites
+ * warming to him, which is the direction a reader expects. The whole thing is
+ * 120px wide so three of them fit across the dialog on a desktop and one fits
+ * a phone sheet with room to spare.
+ */
+function Sparkline({ points }: { points: RankPoint[] }) {
+  if (points.length === 1) return <div className="mt-1 text-[11px] text-gray-600">1 snapshot</div>;
+  if (points.length < 2) return null;
+  const W = 120;
+  const H = 28;
+  const LABEL_H = 12;
+  const padX = 3;
+  const padY = 3;
+  const meds = points.map((p) => p.median);
+  const lo = Math.min(...meds);
+  const hi = Math.max(...meds);
+  const x = (i: number) => padX + (i / (points.length - 1)) * (W - padX * 2);
+  // Flat history: draw it through the middle rather than divide by zero.
+  const y = (v: number) => (hi === lo ? H / 2 : padY + ((v - lo) / (hi - lo)) * (H - padY * 2));
+  const coords = points.map((p, i) => `${x(i).toFixed(1)},${y(p.median).toFixed(1)}`);
+  const last = points[points.length - 1]!;
+  const first = points[0]!;
+  return (
+    <svg
+      width={W}
+      height={H + LABEL_H}
+      viewBox={`0 0 ${W} ${H + LABEL_H}`}
+      className="mt-1 block max-w-full"
+      role="img"
+      aria-label={`consensus rank over ${points.length} snapshots`}
+      data-sparkline
+    >
+      <title>{points.map((p) => `${p.snapshot_date}: ${p.median}`).join("\n")}</title>
+      <polyline fill="none" stroke="#3987e5" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" points={coords.join(" ")} />
+      <circle cx={x(points.length - 1)} cy={y(last.median)} r={2.2} fill="#3987e5" />
+      <text x={padX} y={H + LABEL_H - 2} fontSize={8} fill="#6b7280" textAnchor="start">
+        {mmdd(first.snapshot_date)}
+      </text>
+      <text x={W - padX} y={H + LABEL_H - 2} fontSize={8} fill="#6b7280" textAnchor="end">
+        {mmdd(last.snapshot_date)}
+      </text>
+    </svg>
+  );
+}
 
 export default function PlayerDossier({ playerId, onClose }: { playerId: string; onClose: () => void }) {
   const [data, setData] = useState<Data | null>(null);
@@ -105,6 +168,15 @@ export default function PlayerDossier({ playerId, onClose }: { playerId: string;
                 <p className="text-xs text-gray-500">
                   {data.player.position}
                   {data.player.team ? ` · ${data.player.team}` : ""}
+                  {data.player.age != null && ` · age ${data.player.age}`}
+                  {data.player.rookie && (
+                    <>
+                      {" "}
+                      <Badge tone="info" title="rookie: 0 years of experience">
+                        rookie
+                      </Badge>
+                    </>
+                  )}
                   {data.player.injury_status && (
                     <>
                       {" "}
@@ -266,6 +338,7 @@ export default function PlayerDossier({ playerId, onClose }: { playerId: string;
                             )}
                           </span>
                         </div>
+                        {data.rank_history?.[s] && <Sparkline points={data.rank_history[s]!} />}
                         <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-gray-400">
                           {Object.entries(r.ranks)
                             .sort((a, b) => a[1] - b[1])
