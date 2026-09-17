@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
 import RightNow from "./RightNow";
-import { ACTION_TONE, srcShort } from "./labels";
+import { ACTION_TONE, CHANGE_TONE, ago, changeLabel, srcShort } from "./labels";
 
 /**
  * Today — the landing view. Five questions, in the order you ask them:
@@ -10,6 +10,10 @@ import { ACTION_TONE, srcShort } from "./labels";
  *   2. Where do the sites disagree with my lineup? (roster with flags)
  *   3. What are the moves, and do the sites agree? (waiver engine + overlay)
  *   4. Who is being talked about that I could add? (claims among free agents)
+ *
+ * "Since yesterday" sits between the two: the payload is built by the ff-news
+ * job and stored (`_generated_at`), and once a day a snapshot is filed, so the
+ * digest can say what changed rather than only what is.
  *
  * Trade talk and the crowd board used to be repeated here in full; they are
  * byte-for-byte the Trades and Moves lists, so Today now shows one line each
@@ -60,6 +64,7 @@ type Talk = { player_id: string; name: string; pos: string; team: string | null;
 type TradeRow = { player_id: string; name: string; pos: string; team: string | null; owner: string | null; rank: Rank; claims: ClaimsSlim };
 type Crowd = { player_id: string; name: string; pos: string; team: string | null; availability: string; verdict: string; why: string | null; overlay: Overlay };
 type Mover = { player_id: string; name: string; pos: string; team: string | null; status: string; owner: string | null; rank: Rank; delta: number };
+type Change = { kind: string; player_id: string | null; name: string | null; text: string };
 
 type Data = {
   league: string;
@@ -76,6 +81,9 @@ type Data = {
   prev_snapshot: string | null;
   rank_sources: string[];
   coverage: { articles: number; claims: number; sources: number };
+  changes?: { since: string | null; items: Change[] };
+  _generated_at?: string | null;
+  _cached?: boolean;
   error?: string;
 };
 
@@ -185,6 +193,8 @@ export default function TodayTab({
   const sharedDrop =
     allMoves.length > 1 && firstDrop && allMoves.every((m) => m.drop?.player_id === firstDrop.player_id) ? firstDrop : null;
   const talk = data ? (allTalk ? data.talk : data.talk.slice(0, TALK_SHOWN)) : [];
+  const changes = data?.changes?.items ?? [];
+  const built = ago(data?._generated_at);
 
   return (
     <div className="space-y-4">
@@ -195,6 +205,33 @@ export default function TodayTab({
         <div className="p-6 text-sm text-gray-500">Loading…</div>
       ) : (
         <>
+          {/* 1b ── since yesterday: the diff against the last daily snapshot */}
+          <Card
+            title="Since yesterday"
+            subtitle={
+              data.changes?.since
+                ? `What moved in this digest since the ${data.changes.since} snapshot.`
+                : "The digest is snapshotted once a day; tomorrow this compares against today."
+            }
+            right={built && <span className="whitespace-nowrap text-[11px] text-gray-600">digest built {built}</span>}
+          >
+            {!data.changes?.since ? (
+              <p className="text-xs text-gray-600">First day — no comparison yet.</p>
+            ) : changes.length === 0 ? (
+              <p className="text-xs text-gray-600">Nothing changed since {data.changes.since}.</p>
+            ) : (
+              <ul className="space-y-1">
+                {changes.map((c, i) => (
+                  <li key={`${c.kind}-${c.player_id ?? i}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+                    <Badge tone={CHANGE_TONE[c.kind] ?? "neutral"}>{changeLabel(c.kind)}</Badge>
+                    {c.player_id ? <Name id={c.player_id} name={c.name} /> : <span className="text-gray-100">{c.name}</span>}
+                    <span className="text-xs text-gray-400">{c.text}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
           {/* Three tiles, not four: the ingest count ("1234 claims from 185
               articles") is Admin's number, not a decision input. */}
           <div className="grid grid-cols-3 gap-3">

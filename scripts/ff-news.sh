@@ -122,3 +122,18 @@ if [ "${CSTATUS}" -ne 0 ]; then
   exit "${CSTATUS}"
 fi
 echo "$(stamp) ok $(echo "${COUT}" | grep -v "^  " | tail -1)"
+
+# The Today digest, precomputed (fantasy-football-agent ff/content/digest.py).
+# Composing it is ~3-7s per league, so the dashboard and the agent read the
+# stored copy (served while younger than 20 min) and this job keeps it warm.
+# The first run after 06:00 also files the day's snapshot that the digest's
+# "since yesterday" diff reads. A league that cannot be built is a failed
+# `digest.cache` ingest_runs row and a FAIL(...) in the line below; the job
+# itself fails only if the python cannot run.
+DOUT=$(python3 -m ff.cli digest-cache 2>&1)
+DSTATUS=$?
+if [ "${DSTATUS}" -ne 0 ]; then
+  echo "$(stamp) FAIL digest-cache ${DOUT}" >&2
+  exit "${DSTATUS}"
+fi
+echo "$(stamp) ok $(echo "${DOUT}" | tail -1)"

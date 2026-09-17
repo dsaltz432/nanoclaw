@@ -74,3 +74,42 @@ export const ACTION_TONE: Record<string, "good" | "critical" | "warning" | "info
   drop: "critical",
   sell: "warning",
 };
+
+/** Today's "since yesterday" diff: change kind -> badge tone and the word printed beside it. */
+export const CHANGE_TONE: Record<string, "good" | "critical" | "warning" | "info" | "neutral"> = {
+  needs_you: "critical",
+  flag_new: "warning",
+  flag_cleared: "good",
+  rank_up: "good",
+  rank_down: "warning",
+  sell_new: "warning",
+  buy_new: "info",
+  talk_new: "info",
+  talk_gone: "neutral",
+};
+export const CHANGE_LABEL: Record<string, string> = {
+  needs_you: "needs you",
+  flag_new: "flag",
+  flag_cleared: "cleared",
+  rank_up: "rank up",
+  rank_down: "rank down",
+  sell_new: "sell",
+  buy_new: "buy",
+  talk_new: "talk",
+  talk_gone: "quiet",
+};
+export const changeLabel = (k: string): string => CHANGE_LABEL[k] ?? k.replace(/_/g, " ");
+
+/** "4 min ago" for a UTC ISO timestamp; null when it does not parse. */
+export function ago(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
