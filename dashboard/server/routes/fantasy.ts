@@ -50,8 +50,10 @@ const TTL_MS: Record<string, number> = {
   // Layer 3: rankings x claims x projections. Inputs move hourly at most.
   consensus: 300_000,
   dossier: 120_000,
-  // The landing digest composes waivers + trends + consensus; waivers alone is seconds.
-  today: 120_000,
+  // The landing digest is precomputed by the ff-news job into payload_cache
+  // (served in ~0.2s), so the route cache only needs to absorb a burst of
+  // tabs, not hide a slow build.
+  today: 30_000,
   // Phase 5 tabs. reading is cheap and changes every 15 min; moves composes waivers.
   reading: 60_000,
   "reading-read": 0,
@@ -116,6 +118,8 @@ const ALLOWED_PARAMS = new Set([
   "only_resolved",
   "position",
   "include",
+  // Rankings: pin the consensus board to an earlier snapshot date.
+  "snapshot",
 ]);
 
 function collectParams(req: Request): Record<string, string> {

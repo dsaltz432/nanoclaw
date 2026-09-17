@@ -43,7 +43,11 @@ wrapper can't page anyone; see [message-delivery.md](message-delivery.md)).
 
 `jobs.txt` freshness covers: backup, email-metadata, spotify-cleanup, ff-daily (daily);
 ff-news (15 min), ff-live (2h), ff-claims (15 min) as intervals; backup-verify (weekly); briefing-upload +
-trip-briefing-upload as never-alerting `event` jobs.
+trip-briefing-upload as never-alerting `event` jobs; and one `ff-content.<site>.<job>` interval
+line per fantasy content adapter, aged from its newest *successful* `ingest_runs` row (articles 60
+min, live rankings 360, daily rankings the daily allowance) with `ok` or `FAIL:<error>` in the
+source field, so a broken parser inside a green job still surfaces (see
+[fantasy-football.md](fantasy-football.md#scheduled-jobs)).
 
 **Topology:** Three layers cover three failure modes.
 1. **HC.io alerts** = host machine is down, NanoClaw service is dead, or heartbeat plist itself

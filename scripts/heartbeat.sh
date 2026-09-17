@@ -103,6 +103,41 @@ emit_job com.nanoclaw.backup-verify   weekly 11640  "${LOG_DIR}/backup-verify.lo
 emit_job com.nanoclaw.briefing-upload      event - "${LOG_DIR}/briefing-upload.log"
 emit_job com.nanoclaw.trip-briefing-upload event - "${LOG_DIR}/trip-briefing-upload.log"
 
+# --- fantasy content-layer runs ----------------------------------------------
+#
+# ff-news / ff-live / ff-daily above only say the JOB fired. Each expert-site
+# adapter inside them is its own `content.<site>.<articles|rankings>` row in
+# the data layer's ingest_runs table, and a broken parser is a FAILED row
+# while the job itself keeps exiting 0. So: one line per enabled adapter,
+# aged from its newest SUCCESSFUL run. A parser that starts failing stops
+# refreshing that age, and the watchdog's ordinary "job stale" rule fires
+# within the adapter's cadence (articles 15 min -> 60; live rankings 2h ->
+# 360; daily rankings -> the daily allowance). The 5th field carries the
+# newest run's state so the alert names the fault: ok, or FAIL:<error>.
+FF_DB="${FF_DB:-${HOME}/Documents/repositories/fantasy-football-agent/store/ff.db}"
+if [ -f "$FF_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  # Enabled adapters and their cadence, mirrored from ff/content/pipeline.py
+  # (ARTICLE_SOURCES, RANKING_SOURCES, RANKING_CADENCE_MIN).
+  FF_CONTENT_JOBS="ffballers.articles:60 cbs.articles:60 fantasypros.articles:60 footballguys.articles:60 draftsharks.articles:60 fantasylife.articles:60 fantasypros.rankings:360 ffballers.rankings:360 cbs.rankings:${DAILY_MAX_AGE_MIN} footballguys.rankings:${DAILY_MAX_AGE_MIN}"
+  for spec in $FF_CONTENT_JOBS; do
+    src="${spec%%:*}"; max_age="${spec##*:}"
+    # started_at is local ISO with a numeric offset; strftime('%s') of the
+    # first 19 chars treats it as UTC, so apply the offset ourselves.
+    row=$(sqlite3 -separator '|' "file:${FF_DB}?mode=ro" "
+      SELECT
+        COALESCE((SELECT CAST((strftime('%s','now') - (strftime('%s', substr(started_at,1,19))
+                 - (CAST(substr(started_at,20,3) AS INTEGER)*3600 + CAST(substr(started_at,23,2) AS INTEGER)*60
+                    * (CASE WHEN substr(started_at,20,1)='-' THEN -1 ELSE 1 END)))) / 60 AS INTEGER)
+                  FROM ingest_runs WHERE source='content.${src}' AND ok=1 ORDER BY id DESC LIMIT 1), -1),
+        COALESCE((SELECT CASE WHEN ok=1 THEN 'ok' ELSE 'FAIL:' || replace(replace(COALESCE(error,'?'),'|','/'),char(10),' ') END
+                  FROM ingest_runs WHERE source='content.${src}' ORDER BY id DESC LIMIT 1), 'never')
+    " 2>/dev/null)
+    age="${row%%|*}"; state="${row#*|}"
+    [ -z "$row" ] && { age=-1; state="query-failed"; }
+    echo "ff-content.${src}|interval|${max_age}|${age}|${state:0:120}" >> "$TMP_JOBS"
+  done
+fi
+
 # --- service restart detection ---------------------------------------------
 #
 # com.nanoclaw is KeepAlive with launchd's default ~10s throttle, while this
