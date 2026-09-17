@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import TradeIntel from "./TradeIntel";
+import TradeIntel, { type Pick as IntelPick, type PriceSide, type Row as IntelRow } from "./TradeIntel";
 import { Select } from "./Select";
+import { ACTION_TONE } from "./labels";
 import { Badge, Balance, C, Card, NewsPeek, Note, PeekNote, Td, Th } from "./viz";
 
 type Asset = {
@@ -31,10 +32,35 @@ type Roster = {
   above_replacement: number;
 };
 
+type EvalEvidence = {
+  action: string;
+  horizon: string;
+  confidence: number | null;
+  rationale: string;
+  source: string;
+  title: string;
+  url: string;
+  author: string;
+  published_at: string | null;
+  flagged: boolean;
+};
+
+type EvalClaims = {
+  n: number;
+  n_sources: number;
+  net: number;
+  weighted_net: number;
+  by_action: Record<string, number>;
+  by_horizon: Record<string, number>;
+  evidence: EvalEvidence[];
+};
+
 type Priced = RosterPlayer & {
   replacement: number | null;
   market_rank: number | null;
   known: boolean;
+  /** What the sites said about him in the claims window; null when nothing. */
+  claims: EvalClaims | null;
 };
 
 type Evaluation = {
@@ -336,6 +362,48 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
     setPartnerId(p.owner_id);
   }, []);
 
+  // "price this" on an intel row: the row becomes a builder asset, lands on
+  // the side it can only be on (add() checks ownership against the rosters,
+  // and a "get" also sets the counterparty), and the builder scrolls up into
+  // view so the valuation is the next thing you read.
+  const builderRef = useRef<HTMLDivElement>(null);
+  const scrollToBuilder = useCallback(() => {
+    builderRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const priceRow = useCallback(
+    (row: IntelRow, side: PriceSide) => {
+      add(side, {
+        player_id: row.player_id,
+        name: row.name,
+        position: row.pos,
+        team: row.team,
+        is_pick: false,
+        market_value: row.market_value,
+        ros_points: null,
+        owner: row.owner,
+      });
+      scrollToBuilder();
+    },
+    [add, scrollToBuilder]
+  );
+
+  const pricePick = useCallback(
+    (p: IntelPick) => {
+      add("give", {
+        player_id: p.asset_id,
+        name: p.name,
+        position: "PICK",
+        team: null,
+        is_pick: true,
+        market_value: p.market_value,
+        ros_points: null,
+      });
+      scrollToBuilder();
+    },
+    [add, scrollToBuilder]
+  );
+
   if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
   if (!data) return <div className="p-6 text-sm text-gray-500">Loading trade data…</div>;
 
@@ -344,7 +412,7 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
       {/* Phase 5: the decision first. Sell talk on my roster, buy targets on
           rivals', and for dynasty the ECR-vs-market value gaps. The builder
           and counterparty history follow, unchanged. */}
-      <TradeIntel league={league} onPlayer={onPlayer} />
+      <TradeIntel league={league} onPlayer={onPlayer} onPrice={priceRow} onPricePick={pricePick} />
       {/* A DYNASTY MODE / REDRAFT MODE banner used to sit here, restating which
           mode you were in and why it weights market value differently. The
           league selector directly above already says which league this is, and
@@ -352,25 +420,27 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
           telling you something you had just chosen. Which value table backs the
           numbers, and why the two modes weight differently, is on the
           Methodology page under FantasyCalc. */}
-      <TradeBuilder
-        league={league}
-        give={give}
-        get={get}
-        setGive={setGive}
-        setGet={setGet}
-        evaluation={evaluation}
-        lockedTo={lockedTo}
-        lockedToName={lockedToName}
-        pinMine={pinMine}
-        pinTheirs={pinTheirs}
-        onTogglePin={togglePin}
-        onGenerate={runGenerate}
-        generating={generating}
-        generated={generated}
-        onLoad={loadPackage}
-        partnerName={data.rosters.find((r) => r.owner_id === partnerId)?.owner ?? null}
-        partnerId={partnerId}
-      />
+      <div ref={builderRef} className="scroll-mt-4">
+        <TradeBuilder
+          league={league}
+          give={give}
+          get={get}
+          setGive={setGive}
+          setGet={setGet}
+          evaluation={evaluation}
+          lockedTo={lockedTo}
+          lockedToName={lockedToName}
+          pinMine={pinMine}
+          pinTheirs={pinTheirs}
+          onTogglePin={togglePin}
+          onGenerate={runGenerate}
+          generating={generating}
+          generated={generated}
+          onLoad={loadPackage}
+          partnerName={data.rosters.find((r) => r.owner_id === partnerId)?.owner ?? null}
+          partnerId={partnerId}
+        />
+      </div>
 
       {/* ── the two rosters, side by side, click to build the deal ─── */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -1291,7 +1361,10 @@ function BuilderSide({
   }, [priced]);
 
   return (
-    <div className="rounded-lg border border-gray-800 p-3">
+    // min-w-0: a grid item defaults to min-width auto, so a row of
+    // non-shrinking chips (price, badges, pin) would widen the column past
+    // the phone viewport instead of truncating the name.
+    <div className="min-w-0 rounded-lg border border-gray-800 p-3">
       <div className="mb-2 flex items-center gap-2">
         <span className="inline-block h-2 w-2 rounded-full" style={{ background: accent }} />
         <h4 className="text-sm font-medium text-gray-200">{title}</h4>
@@ -1314,7 +1387,7 @@ function BuilderSide({
             return (
               <li
                 key={a.player_id}
-                className={`flex items-center gap-2 rounded border px-2 py-1.5 ${
+                className={`flex min-w-0 items-center gap-2 overflow-hidden rounded border px-2 py-1.5 ${
                   isPinned
                     ? "border-amber-500/40 bg-amber-500/5"
                     : "border-gray-800 bg-gray-950/40"
@@ -1326,9 +1399,39 @@ function BuilderSide({
                 <span className="shrink-0 text-right text-xs tabular-nums text-gray-400">
                   {p?.market_value != null ? p.market_value.toLocaleString() : "—"}
                   {p?.league_vor != null && (
-                    <span className="ml-2 text-gray-600">VOR {p.league_vor.toFixed(1)}</span>
+                    // A row with badges is 45px too wide for a 390px phone
+                    // even with the name at zero width, so the VOR figure
+                    // (repeated in the valuation panel below) yields there.
+                    <span className={`ml-2 text-gray-600 ${p.claims ? "hidden sm:inline" : ""}`}>
+                      VOR {p.league_vor.toFixed(1)}
+                    </span>
                   )}
                 </span>
+                {/* What the sites say: the two most-repeated actions. Badges
+                    never shrink, so it is the name that truncates; on a phone
+                    only the top action fits alongside the price. */}
+                {p?.claims && (
+                  <span className="flex shrink-0 items-center gap-1" data-claims={a.player_id}>
+                    {Object.entries(p.claims.by_action)
+                      .sort((x, y) => y[1] - x[1])
+                      .slice(0, 2)
+                      .map(([action, n], i) => (
+                        <span key={action} className={i === 0 ? "contents" : "hidden sm:contents"}>
+                          <Badge
+                            tone={ACTION_TONE[action] ?? "neutral"}
+                            title={
+                              p.claims?.evidence[0]
+                                ? `${p.claims.evidence[0].source}: ${p.claims.evidence[0].rationale}`
+                                : undefined
+                            }
+                          >
+                            {action}
+                            {n > 1 ? ` ×${n}` : ""}
+                          </Badge>
+                        </span>
+                      ))}
+                  </span>
+                )}
                 <button
                   onClick={() => onTogglePin(a)}
                   title="Pin — every generated package will contain this player"
