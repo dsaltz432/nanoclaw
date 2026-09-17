@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
 import { Select } from "./Select";
+import { ago, srcShort } from "./labels";
 
 /**
  * Admin — did the content layer actually run, and what did it write.
@@ -94,6 +95,27 @@ type Core = {
   window: { runs: number; fails: number };
 };
 
+type Tally = { resolved: number; unresolved: number; ambiguous: number };
+/** A name the resolver could not map to a Sleeper id (team/position appended), and how often it saw it. */
+type TopName = [string, number];
+
+type Resolver = {
+  last_runs: Record<
+    "articles" | "rankings",
+    { at: string | null; totals: Tally | null; by_source: Record<string, Tally & { top: TopName[] }> }
+  >;
+  rankings: { source: string; snapshot: string; rows: number; unresolved: number; top: TopName[] }[];
+  claims: {
+    hours: number;
+    n: number;
+    unresolved: number;
+    top: TopName[];
+    by_source: { source: string; n: number; unresolved: number }[];
+  };
+};
+
+type GatedSource = { source: string; gated: number; gated_window: number; total: number };
+
 type Data = {
   hours: number;
   generated_at: string;
@@ -127,6 +149,9 @@ type Data = {
     rankings: { at?: string; season?: number; week?: number; resolver?: Record<string, number> } | null;
   };
   commands: { articles: string; rankings: string };
+  /** Optional only so a cached payload from before these fields existed still renders. */
+  resolver?: Resolver;
+  gated_by_source?: GatedSource[];
   _stale?: boolean;
   _error?: string;
   error?: string;
@@ -186,6 +211,15 @@ export default function AdminTab() {
   const coreProblems = [...data.core, data.claims].filter(
     (c) => c.state === "failing" || c.state === "late"
   );
+  const resolver = data.resolver;
+  // Worst offenders first: the one row you came to check should not hide
+  // between five clean ones.
+  const rankingTables = [...(resolver?.rankings ?? [])].sort(
+    (a, b) => b.unresolved - a.unresolved || a.source.localeCompare(b.source)
+  );
+  const gated = [...(data.gated_by_source ?? [])].sort(
+    (a, b) => b.gated_window - a.gated_window || b.gated - a.gated || a.source.localeCompare(b.source)
+  );
 
   return (
     <div className="space-y-4">
@@ -233,10 +267,12 @@ export default function AdminTab() {
         </div>
       )}
 
-      {/* Six tiles in a 2/3 grid: five left an orphan on a phone. The
-          "Content" tile moved here from Today — an ingest statistic, not a
+      {/* Seven tiles. The first six fill a 2/3 grid on phone and tablet; the
+          seventh (unresolved names) spans the full row below them so it never
+          sits as an orphan, and rejoins the grid at lg where four fit across.
+          The "Content" tile moved here from Today — an ingest statistic, not a
           decision input — so "Claims extracted" now reports the backlog. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <StatTile
           label={`Articles fetched, ${data.hours}h`}
           value={data.totals.fetched_window}
@@ -265,6 +301,16 @@ export default function AdminTab() {
           hint="reads as instruction / paywalled"
           tone={data.totals.flagged > 0 ? "warning" : "default"}
         />
+        {resolver && (
+          <div className="col-span-2 flex flex-col sm:col-span-3 lg:col-span-1 [&>div]:flex-1">
+            <StatTile
+              label={`Unresolved (claims, ${resolver.claims.hours}h)`}
+              value={resolver.claims.unresolved}
+              hint={`of ${resolver.claims.n} claims · names with no Sleeper id`}
+              tone={resolver.claims.unresolved > 0 ? "warning" : "default"}
+            />
+          </div>
+        )}
       </div>
 
       {/* ── per-source job health ───────────────────────────────────── */}
@@ -446,7 +492,7 @@ export default function AdminTab() {
             </tbody>
           </table>
         </div>
-        {data.last_run.articles?.resolver && (
+        {!resolver && data.last_run.articles?.resolver && (
           <p className="mt-3 text-[11px] text-gray-600">
             Last article run resolved {data.last_run.articles.resolver.resolved} player names,{" "}
             {data.last_run.articles.resolver.unresolved} unknown, {data.last_run.articles.resolver.ambiguous}{" "}
@@ -455,6 +501,163 @@ export default function AdminTab() {
           </p>
         )}
       </Card>
+
+      {/* ── resolver: names that did not map to a Sleeper id ────────── */}
+      {resolver && (
+        <Card
+          title="Resolver"
+          subtitle={
+            <>
+              Player names the resolver could not map to a Sleeper id, per run and per table.{" "}
+              <span className="text-gray-400">Unresolved</span> is expected for IDP and college players;{" "}
+              <span className="text-gray-400">ambiguous</span> means two Sleeper players share the name and no
+              team or position broke the tie. Names are shown exactly as the site printed them.
+            </>
+          }
+        >
+          {/* 1. the two most recent runs, side by side */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <LastRun label="Last article run" run={resolver.last_runs.articles} />
+            <LastRun label="Last rankings run" run={resolver.last_runs.rankings} />
+          </div>
+
+          {/* 2. what is sitting unresolved in the stored tables right now */}
+          <h4 className="mb-1.5 mt-4 text-xs font-medium text-gray-300">Unresolved in the tables</h4>
+          <div className="ff-stack-wrap overflow-x-auto">
+            <table className="ff-stack w-full">
+              <thead>
+                <tr>
+                  <Th>Table</Th>
+                  <Th>Snapshot</Th>
+                  <Th className="text-right" title="unresolved / rows">
+                    Unresolved
+                  </Th>
+                  <Th>Names</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankingTables.map((r) => (
+                  <tr key={`${r.source}-${r.snapshot}`} className="border-t border-gray-800/60 align-top">
+                    <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">
+                      <span>
+                        {srcShort(r.source)} <span className="text-gray-600">rankings</span>
+                      </span>
+                    </Td>
+                    <Td data-label="Snapshot" className="whitespace-nowrap text-xs text-gray-500">
+                      {r.snapshot}
+                    </Td>
+                    <Td data-label="Unresolved" className="whitespace-nowrap text-right text-xs tabular-nums">
+                      <span>
+                        <span className={r.unresolved > 0 ? "text-amber-300" : "text-gray-400"}>{r.unresolved}</span>
+                        <span className="text-gray-600"> / {r.rows}</span>
+                      </span>
+                    </Td>
+                    <Td data-label="Names">
+                      <NamesCell unresolved={r.unresolved} top={r.top} />
+                    </Td>
+                  </tr>
+                ))}
+                <tr className="border-t border-gray-800/60 align-top">
+                  <Td data-label="" className="ff-row-head text-xs text-gray-300">
+                    <span className="block">
+                      claims <span className="text-gray-600">(last {resolver.claims.hours}h)</span>
+                      {resolver.claims.by_source.some((s) => s.unresolved > 0) && (
+                        <span className="block text-[11px] font-normal tabular-nums text-gray-600">
+                          {resolver.claims.by_source
+                            .filter((s) => s.unresolved > 0)
+                            .sort((a, b) => b.unresolved - a.unresolved)
+                            .map((s) => `${srcShort(s.source)} ${s.unresolved}`)
+                            .join(" · ")}
+                        </span>
+                      )}
+                    </span>
+                  </Td>
+                  <Td data-label="Snapshot" className="whitespace-nowrap text-xs text-gray-600">
+                    —
+                  </Td>
+                  <Td data-label="Unresolved" className="whitespace-nowrap text-right text-xs tabular-nums">
+                    <span>
+                      <span className={resolver.claims.unresolved > 0 ? "text-amber-300" : "text-gray-400"}>
+                        {resolver.claims.unresolved}
+                      </span>
+                      <span className="text-gray-600"> / {resolver.claims.n}</span>
+                    </span>
+                  </Td>
+                  <Td data-label="Names">
+                    <NamesCell unresolved={resolver.claims.unresolved} top={resolver.claims.top} />
+                  </Td>
+                </tr>
+                {rankingTables.length === 0 && (
+                  <tr className="border-t border-gray-800/60">
+                    <Td data-label="" className="text-xs text-gray-500" colSpan={4}>
+                      No rankings snapshots stored yet.
+                    </Td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 3. paywall teasers, which the resolver never sees */}
+          <h4 className="mt-4 text-xs font-medium text-gray-300">Paywalled teasers per source</h4>
+          <p className="mb-1.5 text-[11px] text-gray-600">
+            Stored with gated=1; never fetched harder and never extracted from.
+          </p>
+          <div className="ff-stack-wrap overflow-x-auto">
+            <table className="ff-stack w-full">
+              <thead>
+                <tr>
+                  <Th>Source</Th>
+                  <Th className="text-right" title="gated / stored, all time">
+                    Gated
+                  </Th>
+                  <Th className="text-right" title="gated articles fetched in the window">
+                    {data.hours}h
+                  </Th>
+                  <Th>{null}</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {gated.map((g) => (
+                  <tr key={g.source} className="border-t border-gray-800/60">
+                    <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">
+                      {srcShort(g.source)}
+                    </Td>
+                    <Td data-label="Gated" className="whitespace-nowrap text-right text-xs tabular-nums">
+                      <span>
+                        <span className={g.gated > 0 ? "text-gray-300" : "text-gray-400"}>{g.gated}</span>
+                        <span className="text-gray-600"> / {g.total}</span>
+                      </span>
+                    </Td>
+                    <Td
+                      data-label={`${data.hours}h`}
+                      className={`whitespace-nowrap text-right text-xs tabular-nums ${g.gated_window > 0 ? "text-amber-300" : "text-gray-500"}`}
+                    >
+                      {g.gated_window}
+                    </Td>
+                    {g.gated_window > 0 ? (
+                      <Td data-label="">
+                        <Badge tone="warning" title={`${g.gated_window} paywalled article${g.gated_window === 1 ? "" : "s"} landed in the last ${data.hours}h`}>
+                          gated in window
+                        </Badge>
+                      </Td>
+                    ) : (
+                      <Td data-label="" className="hidden sm:table-cell">{null}</Td>
+                    )}
+                  </tr>
+                ))}
+                {gated.length === 0 && (
+                  <tr className="border-t border-gray-800/60">
+                    <Td data-label="" className="text-xs text-gray-500" colSpan={4}>
+                      Nothing stored yet.
+                    </Td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* ── every article as it landed ──────────────────────────────── */}
       <Card
@@ -629,7 +832,11 @@ export default function AdminTab() {
                       {fmtShort(r.started_at)}
                     </Td>
                     <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">{r.source}</Td>
-                    <Td data-label="Detail" className="text-xs text-gray-500">{r.detail || ""}</Td>
+                    {/* Content runs write "resolved 120 · unresolved 3 · ambiguous 1 · Name FA RB×1";
+                        the names can run long, so clip and keep the full line on hover. */}
+                    <Td data-label="Detail" className="max-w-[24rem] truncate text-xs text-gray-500" title={r.detail ?? ""}>
+                      {r.detail || ""}
+                    </Td>
                     <Td data-label="Result">
                       <Badge tone={r.ok === 1 ? "good" : r.ok === 0 ? "critical" : "neutral"}>
                         {r.ok === 1 ? "ok" : r.ok === 0 ? "fail" : "running"}
@@ -661,6 +868,76 @@ export default function AdminTab() {
 
 function labelFor(data: Data, source: string): string {
   return data.sources.find((s) => s.source === source)?.label ?? source;
+}
+
+/** One resolver run: when, the totals, and per site what it could not map. */
+function LastRun({ label, run }: { label: string; run: Resolver["last_runs"]["articles"] }) {
+  const sources = Object.entries(run.by_source).sort(
+    (a, b) => b[1].unresolved - a[1].unresolved || a[0].localeCompare(b[0])
+  );
+  return (
+    <div className="min-w-0 rounded-md border border-gray-800/60 px-3 py-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="text-xs font-medium text-gray-300">{label}</span>
+        <span className="text-xs text-gray-500" title={run.at ?? ""}>
+          {run.at ? (ago(run.at) ?? run.at) : "never"}
+        </span>
+      </div>
+      <div className="mt-1 text-xs tabular-nums text-gray-400">
+        {run.totals ? (
+          <>
+            resolved {run.totals.resolved} · unresolved {run.totals.unresolved} · ambiguous {run.totals.ambiguous}
+          </>
+        ) : (
+          <span className="text-gray-600">no totals recorded</span>
+        )}
+      </div>
+      {sources.length === 0 ? (
+        <p className="mt-1.5 text-[11px] text-gray-600">per-source breakdown appears after the next run</p>
+      ) : (
+        <ul className="mt-1.5 space-y-1 text-xs">
+          {sources.map(([src, t]) =>
+            t.unresolved === 0 && t.top.length === 0 ? (
+              <li key={src} className="text-gray-600">
+                {srcShort(src)} clean
+              </li>
+            ) : (
+              <li key={src} className="flex flex-wrap items-center gap-1 text-gray-300">
+                <span className="mr-1 tabular-nums">
+                  {srcShort(src)} <span className="text-gray-500">unresolved</span> {t.unresolved}
+                </span>
+                <TopNames top={t.top} />
+              </li>
+            )
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The names as neutral chips, "×n" only when a name was seen more than once. */
+function TopNames({ top }: { top: TopName[] }) {
+  return (
+    <>
+      {top.map(([name, n], i) => (
+        <Badge key={`${name}-${i}`} tone="neutral" title={n > 1 ? `seen ${n} times` : ""}>
+          {n > 1 ? `${name} ×${n}` : name}
+        </Badge>
+      ))}
+    </>
+  );
+}
+
+/** Table cell: green "clean" when nothing is unresolved, otherwise the chips. One wrapper, for the stacked layout. */
+function NamesCell({ unresolved, top }: { unresolved: number; top: TopName[] }) {
+  if (unresolved === 0) return <Badge tone="good">clean</Badge>;
+  if (top.length === 0) return <span className="text-xs text-gray-600">names not recorded</span>;
+  return (
+    <span className="flex min-w-0 flex-wrap gap-1">
+      <TopNames top={top} />
+    </span>
+  );
 }
 
 function fmt(iso: string | null | undefined): string {
