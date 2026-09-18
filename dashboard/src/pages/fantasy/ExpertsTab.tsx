@@ -114,6 +114,9 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   const [scope, setScopeRaw] = useState<Scope>(league === "dynasty" ? "dynasty" : "weekly");
   const [mode, setMode] = useState<Mode>("board");
   const [position, setPosition] = useState<string>("");
+  // By-position mode is one position at a time, fetched as its own list, so
+  // QB / K / DEF are never truncated off the end of a FLEX-ordered board.
+  const [posTab, setPosTab] = useState<string>("QB");
   const [include, setInclude] = useState<string>("");
   const [hours, setHours] = useState<number>(168);
   // "" means "latest": the first fetch carries no snapshot param and the
@@ -134,8 +137,9 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   };
 
   useEffect(() => {
-    const q = new URLSearchParams({ league, scope, hours: String(hours), limit: mode === "bypos" ? "400" : "120" });
+    const q = new URLSearchParams({ league, scope, hours: String(hours), limit: mode === "bypos" ? "200" : "120" });
     if (mode === "board" && position) q.set("position", position);
+    if (mode === "bypos") q.set("position", posTab);
     if (include) q.set("include", include);
     if (snapshot) q.set("snapshot", snapshot);
     setData(null);
@@ -151,7 +155,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         if (Array.isArray(d.snapshots)) setSnapshots(d.snapshots);
       })
       .catch((e) => setErr(String(e)));
-  }, [league, scope, mode, position, include, hours, snapshot]);
+  }, [league, scope, mode, position, posTab, include, hours, snapshot]);
 
   if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
 
@@ -307,7 +311,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
     </div>
   );
 
-  const sections = data && mode === "bypos" ? groupByPosition(data.rows) : [];
+  const sections = data && mode === "bypos" ? groupByPosition(data.rows).filter((sec) => sec.pos === posTab) : [];
 
   return (
     <div className="space-y-4">
@@ -333,14 +337,16 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             { value: "bypos", label: "by position", hint: "one section per position, ranked within it" },
           ]}
         />
-        {/* The position filter is what by-position mode replaces. */}
-        {mode === "board" && (
+        {/* The position filter is what by-position mode replaces with tabs. */}
+        {mode === "board" ? (
           <Select
             aria-label="Position"
             value={position}
             onChange={setPosition}
             options={POSITIONS.map((p) => ({ value: p, label: p || "all positions" }))}
           />
+        ) : (
+          <Segmented aria-label="Position tab" value={posTab} onChange={setPosTab} options={POS_ORDER.map((p) => ({ value: p, label: p }))} />
         )}
         <Segmented
           aria-label="Include"
@@ -432,8 +438,8 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             /* ── by position ────────────────────────────────────────── */
             <>
               <p className="text-[11px] text-gray-600" data-snapshot-line>
-                {snapshotLine} · {data.rows.length} players across {sections.length} positions. Each section is ranked on its own;
-                the prefix is the player's place within his position.
+                {snapshotLine} · {posTab} only, ranked within the position; the prefix is the player's place in it. Pick another
+                position above.
               </p>
               {sections.map(({ pos, rows }) => {
                 const open = openSections.has(pos);
