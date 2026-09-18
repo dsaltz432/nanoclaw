@@ -317,9 +317,11 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
           value={scope}
           onChange={(v) => setScope(v as Scope)}
           options={[
+            // Dynasty lists only mean something in the dynasty league, where
+            // they are also the default; the other two leagues never see them.
+            ...(league === "dynasty" ? [{ value: "dynasty", label: SCOPE_LABEL.dynasty }] : []),
             { value: "weekly", label: SCOPE_LABEL.weekly },
             { value: "ros", label: SCOPE_LABEL.ros },
-            { value: "dynasty", label: SCOPE_LABEL.dynasty },
           ]}
         />
         <Segmented

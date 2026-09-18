@@ -146,7 +146,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
       <span className="text-gray-100">{r.projected?.toFixed(1) ?? "—"}</span>
       {/* The other two sources are a desktop detail; on a phone the
           league-correct number and the disagreement flag are the answer. */}
-      <span className="ml-1.5 hidden text-[11px] text-gray-600 sm:inline">
+      <span className="ml-1.5 hidden text-[11px] text-gray-600 xl:inline">
         {Object.entries(r.proj)
           .filter(([s]) => s !== "rotowire")
           .map(([s, v]) => `${projShort(s)} ${v.toFixed(0)}`)
@@ -213,8 +213,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
             <Th>Player</Th>
             <Th>Set</Th>
             <Th className="text-right">Proj</Th>
-            <Th>Matchup</Th>
-            <Th>Usage</Th>
+            <Th>Matchup · usage</Th>
             <Th>Rank</Th>
             <Th>Sites say (this week)</Th>
           </tr>
@@ -232,16 +231,22 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
               <Td data-label="Proj" className="text-right">
                 <ProjCell r={r} />
               </Td>
-              <Td data-label="Matchup" className="whitespace-nowrap text-xs tabular-nums">
-                <MatchupCell matchup={r.matchup} position={r.position} />
-              </Td>
-              <Td data-label="Usage" className="whitespace-nowrap text-xs tabular-nums">
-                <UsageCell usage={r.usage} position={r.position} />
+              {/* Two short facts stacked in one column: side by side they
+                  pushed the starters table 170px past its card at 1259px. */}
+              <Td data-label="Matchup · usage" className="whitespace-nowrap text-xs tabular-nums">
+                <div>
+                  <div>
+                    <MatchupCell matchup={r.matchup} position={r.position} />
+                  </div>
+                  <div className="text-gray-400">
+                    <UsageCell usage={r.usage} position={r.position} />
+                  </div>
+                </div>
               </Td>
               <Td data-label="Rank" className="text-xs">
                 <RankCell r={r} />
               </Td>
-              <Td data-label="Sites say" className="text-xs">
+              <Td data-label="Sites say" className="text-xs sm:min-w-[13rem]">
                 <ClaimsCell c={r.claims} />
               </Td>
             </tr>
@@ -407,7 +412,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
                         <span className="text-gray-700">agree</span>
                       )}
                     </Td>
-                    <Td data-label="Sites say" className="text-xs">
+                    <Td data-label="Sites say" className="text-xs sm:min-w-[16rem]">
                       {sites ? (
                         <div>
                           <Badge tone={sites.kind === "sit" ? "critical" : "good"}>{sites.kind}</Badge>
@@ -466,53 +471,84 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
         {openStreams.length === 0 ? (
           <p className="text-xs text-gray-600">Your set starter out-projects the best available at every streamable position.</p>
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {openStreams.map(([pos, rows]) => (
-              <div key={pos} className="rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                  {pos}
-                  {starterProj(pos) > 0 && <span className="normal-case tracking-normal text-gray-600"> · set starter {starterProj(pos).toFixed(1)}</span>}
-                </div>
-                {rows.length === 0 ? (
-                  <div className="text-xs text-gray-600">nobody ranked available</div>
-                ) : (
-                  <ul className="space-y-1">
-                    {rows.map((s) => (
-                      <li key={s.player_id} className="text-xs">
-                        <div className="flex items-baseline gap-2">
-                          <button onClick={() => onPlayer(s.player_id)} className="min-w-0 text-left text-gray-200 hover:text-indigo-300 hover:underline">
-                            {s.name}
-                          </button>
-                          <span className="text-gray-600">{s.team}</span>
-                          {/* shrink-0 so the name, not the rank, gives way. */}
-                          <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums text-gray-400">
-                            {pos}
-                            {s.rank?.median ?? "—"}
-                            {s.proj.rotowire != null && <span className="text-gray-600"> · {s.proj.rotowire.toFixed(0)} pts</span>}
-                            {s.matchup && (
-                              <>
-                                <span className="text-gray-600"> · </span>
-                                <MatchupCell matchup={s.matchup} position={pos} />
-                              </>
+          <div className="ff-stack-wrap overflow-x-auto">
+            <table className="ff-stack w-full">
+              <thead>
+                <tr>
+                  <Th>Pos</Th>
+                  <Th>Player</Th>
+                  <Th>Rank</Th>
+                  <Th className="text-right">Proj</Th>
+                  <Th>Matchup</Th>
+                  <Th>Sites say</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {openStreams.flatMap(([pos, rows]) =>
+                  rows.length === 0
+                    ? [
+                        <tr key={pos} className="border-t border-gray-800/60">
+                          <Td data-label="Pos" className="text-xs font-medium text-gray-400">{pos}</Td>
+                          <Td data-label="" className="text-xs text-gray-600" colSpan={5}>nobody ranked available</Td>
+                        </tr>,
+                      ]
+                    : rows.map((s, i) => (
+                        <tr key={`${pos}-${s.player_id}`} className={`align-top ${i === 0 ? "border-t border-gray-800/60" : "border-t border-gray-800/30"}`}>
+                          <Td data-label="Pos" className="whitespace-nowrap text-xs font-medium text-gray-400">
+                            {i === 0 ? (
+                              <div>
+                                {pos}
+                                {starterProj(pos) > 0 && <div className="font-normal text-gray-600">set starter {starterProj(pos).toFixed(1)}</div>}
+                              </div>
+                            ) : (
+                              // Stacked on a phone the label needs a value; on a desktop the group header carries it.
+                              <span className="sm:hidden">{pos}</span>
                             )}
-                          </span>
-                        </div>
-                        {s.note && <NoteLine note={s.note} className="whitespace-normal text-gray-500" />}
-                        {s.claims && (
-                          <div className="text-gray-500">
-                            {Object.entries(s.claims.by_action)
-                              .slice(0, 2)
-                              .map(([a, n]) => `${a}${n > 1 ? ` ×${n}` : ""}`)
-                              .join(", ")}
-                            {s.claims.evidence[0] && <> · {s.claims.evidence[0].rationale}</>}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                          </Td>
+                          <Td data-label="" className="ff-row-head whitespace-nowrap">
+                            <button onClick={() => onPlayer(s.player_id)} className="text-left text-gray-100 hover:text-indigo-300 hover:underline">
+                              {s.name}
+                            </button>
+                            <span className="ml-1.5 text-xs text-gray-500">
+                              {pos}
+                              {s.team ? ` · ${s.team}` : ""}
+                            </span>
+                            {s.note && <NoteLine note={s.note} className="whitespace-normal" />}
+                          </Td>
+                          <Td data-label="Rank" className="whitespace-nowrap text-xs tabular-nums text-gray-300">
+                            {s.rank ? `${pos}${s.rank.median}` : "—"}
+                          </Td>
+                          <Td data-label="Proj" className="whitespace-nowrap text-right tabular-nums text-gray-100">
+                            {s.proj.rotowire != null ? s.proj.rotowire.toFixed(1) : "—"}
+                          </Td>
+                          <Td data-label="Matchup" className="whitespace-nowrap text-xs tabular-nums">
+                            <MatchupCell matchup={s.matchup} position={pos} />
+                          </Td>
+                          <Td data-label="Sites say" className="text-xs sm:min-w-[13rem]">
+                            {s.claims ? (
+                              <div>
+                                <span className="inline-flex flex-wrap gap-1">
+                                  {Object.entries(s.claims.by_action)
+                                    .sort((x, y) => y[1] - x[1])
+                                    .slice(0, 2)
+                                    .map(([a, n]) => (
+                                      <Badge key={a} tone={ACTION_TONE[a] ?? "neutral"}>
+                                        {a}
+                                        {n > 1 ? ` ×${n}` : ""}
+                                      </Badge>
+                                    ))}
+                                </span>
+                                {s.claims.evidence[0] && <div className="mt-0.5 max-w-[24rem] text-[11px] text-gray-500">{s.claims.evidence[0].rationale}</div>}
+                              </div>
+                            ) : (
+                              <span className="text-gray-700">quiet</span>
+                            )}
+                          </Td>
+                        </tr>
+                      ))
                 )}
-              </div>
-            ))}
+              </tbody>
+            </table>
           </div>
         )}
       </Card>

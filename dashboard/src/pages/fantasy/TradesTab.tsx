@@ -678,7 +678,8 @@ function RosterPanel({
               <Th className="hidden text-right sm:table-cell">
                 {mode === "dynasty" ? "ROS" : "Market"}
               </Th>
-              <Th className="text-right">VOR</Th>
+              {/* VOR is a desktop detail: with it the roster panel ran 8px past a phone. */}
+              <Th className="hidden text-right sm:table-cell">VOR</Th>
               <Th>&nbsp;</Th>
               <Th>&nbsp;</Th>
             </tr>
@@ -716,7 +717,7 @@ function RosterPanel({
                       ? p.ros_points?.toFixed(0) ?? "—"
                       : p.market_value?.toLocaleString() ?? "—"}
                   </Td>
-                  <Td className="text-right tabular-nums text-gray-500">
+                  <Td className="hidden text-right tabular-nums text-gray-500 sm:table-cell">
                     {p.league_vor != null ? p.league_vor.toFixed(0) : "—"}
                   </Td>
                   <Td>

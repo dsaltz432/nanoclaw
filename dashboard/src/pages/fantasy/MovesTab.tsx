@@ -265,7 +265,33 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
   const BOARD_SHOWN = 8;
   const STASH_SHOWN = 3;
   const movesAll = [...data.add_now, ...data.claim_wednesday];
-  const moves = allMoves ? movesAll : movesAll.slice(0, MOVES_SHOWN);
+  // The engine's add/drop pairs used to be their own table above the board,
+  // which showed the same players twice. They are now a column on the board.
+  const moveById = new Map<string, Move>();
+  for (const m of movesAll) if (!moveById.has(m.player_id)) moveById.set(m.player_id, m);
+  const MoveCell = ({ m }: { m: Move | null }) =>
+    m ? (
+      <div>
+        {m.availability === "free_agent" ? <Badge tone="good">add now</Badge> : <Badge tone="warning">claim</Badge>}
+        <span className="ml-1 tabular-nums text-green-400">+{m.gain.toFixed(1)}</span>
+        <div className="text-gray-500">
+          {m.drop && !sharedDrop && (
+            <>
+              drop {m.drop.name} <span className="text-gray-600">({m.drop.projected.toFixed(1)})</span>
+            </>
+          )}
+          {m.availability !== "free_agent" && (
+            <>
+              {m.drop && !sharedDrop ? " · " : ""}
+              {m.clears_at ?? ""}
+              {m.suggested_pct != null && <> · bid {m.suggested_pct}%</>}
+            </>
+          )}
+        </div>
+      </div>
+    ) : (
+      <span className="text-gray-700" title="does not improve your starting lineup">—</span>
+    );
   // Thirteen rows all dropping the same bench player is one fact, not a column.
   const firstDrop = movesAll[0]?.drop ?? null;
   const sharedDrop =
@@ -273,7 +299,9 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
   // Rest-of-season points put five team defences above every skill player on
   // the dynasty board; nobody is stashing a kicker for 2027.
   const boardPool = data.horizon === "ros" ? data.board.filter((c) => c.position !== "DEF" && c.position !== "K") : data.board;
-  const boardAll = boardPool.filter((c) => !boardPos || c.position === boardPos);
+  const boardAll = boardPool
+    .filter((c) => !boardPos || c.position === boardPos)
+    .sort((x, y) => (moveById.has(y.player_id) ? 1 : 0) - (moveById.has(x.player_id) ? 1 : 0));
   const board = allBoard ? boardAll : boardAll.slice(0, BOARD_SHOWN);
   const positions = Array.from(new Set(boardPool.map((c) => c.position))).sort();
   // "FLEX Kayshon Boutte (7.0)" on 35 of 40 rows made an 80px column four
@@ -417,102 +445,18 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
       </div>
 
       <Card
-        title={data.horizon === "ros" ? "Moves (rest of season)" : "Moves"}
-        subtitle={
-          <>
-            The engine's add/drop pairs by lineup gain. Free agents cost nothing and can be added now; claims clear Wednesday and the bid is a percent of budget.
-            {sharedDrop && (
-              <>
-                {" "}
-                All drop <span className="text-gray-300">{sharedDrop.name}</span> ({sharedDrop.projected.toFixed(1)}).
-              </>
-            )}
-          </>
-        }
-      >
-        {movesAll.length === 0 ? (
-          <p className="text-xs text-gray-600">No add improves your starting lineup right now. The board below is everyone worth a look anyway.</p>
-        ) : (
-          <>
-            <div className="ff-stack-wrap overflow-x-auto">
-              <table className="ff-stack w-full">
-                <thead>
-                  <tr>
-                    <Th>Add</Th>
-                    <Th className="text-right">Gain</Th>
-                    {!sharedDrop && <Th>Drop</Th>}
-                    <Th>When</Th>
-                    <Th>Rank</Th>
-                    <Th>Sites say</Th>
-                    {/* Crowd folds into the Sites cell below xl; seven columns
-                        pushed it and half the prose past the card edge. */}
-                    <Th className="hidden xl:table-cell">Crowd</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {moves.map((m) => (
-                    <tr key={m.player_id + m.availability} className="border-t border-gray-800/60 align-top">
-                      <Td data-label="" className="ff-row-head whitespace-nowrap">
-                        <Name id={m.player_id} name={m.name} pos={m.position} team={m.team} inj={m.injury_status} />
-                      </Td>
-                      <Td data-label="Gain" className="text-right tabular-nums text-green-400">+{m.gain.toFixed(1)}</Td>
-                      {!sharedDrop && (
-                        <Td data-label="Drop" className="text-xs text-gray-400">
-                          {m.drop ? (
-                            <>
-                              {m.drop.name} <span className="text-gray-600">({m.drop.projected.toFixed(1)})</span>
-                            </>
-                          ) : (
-                            "—"
-                          )}
-                        </Td>
-                      )}
-                      <Td data-label="When" className="text-xs">
-                        {m.availability === "free_agent" ? (
-                          <Badge tone="good">add now</Badge>
-                        ) : (
-                          <span className="text-gray-400">
-                            <Badge tone="warning">claim</Badge>
-                            <span className="block text-gray-500">
-                              {m.clears_at ?? ""}
-                              {m.suggested_pct != null && <> · bid {m.suggested_pct}%</>}
-                            </span>
-                          </span>
-                        )}
-                      </Td>
-                      <Td data-label="Rank" className="text-xs">
-                        <Rank o={m.overlay} />
-                      </Td>
-                      <Td data-label="Sites say" className="text-xs">
-                        <div>
-                          <Sites o={m.overlay} />
-                          {m.overlay?.crowd?.verdict && (
-                            <div className="mt-1 xl:hidden">
-                              <CrowdCell o={m.overlay} />
-                            </div>
-                          )}
-                        </div>
-                      </Td>
-                      <Td data-label="Crowd" className="hidden whitespace-nowrap xl:table-cell">
-                        <CrowdCell o={m.overlay} />
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <FoldToggle total={movesAll.length} shown={moves.length} expanded={allMoves} onToggle={() => setAllMoves((v) => !v)} mode="all" />
-          </>
-        )}
-      </Card>
-
-      <Card
         title="Board"
         subtitle={
           <>
             {data.horizon === "ros"
               ? "Available players ordered by rest-of-season points under this league's scoring, with the rest-of-season consensus rank. Defences and kickers are left out."
               : "Available players who clear the replacement bar, by projection under this league's scoring."}
+            {" "}Move is the engine's call: who to drop for him and whether he is a free add or a Wednesday claim with a bid as percent of budget.
+            {sharedDrop && (
+              <>
+                {" "}Every move here drops <span className="text-gray-300">{sharedDrop.name}</span> ({sharedDrop.projected.toFixed(1)}).
+              </>
+            )}
             {data.horizon !== "ros" &&
               (sharedDisplaces ? (
                 <>
@@ -541,6 +485,7 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
             <thead>
               <tr>
                 <Th>Player</Th>
+                <Th>Move</Th>
                 <Th className="text-right">{data.horizon === "ros" ? "ROS pts" : "Proj"}</Th>
                 {!sharedDisplaces && <Th>Displaces</Th>}
                 <Th>Availability</Th>
@@ -559,6 +504,9 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
                         displaces {c.displaces ? `${c.displaces.slot} ${c.displaces.name} (${c.displaces.points.toFixed(1)})` : "nobody"}
                       </div>
                     )}
+                  </Td>
+                  <Td data-label="Move" className="text-xs">
+                    <MoveCell m={moveById.get(c.player_id) ?? null} />
                   </Td>
                   <Td data-label={data.horizon === "ros" ? "ROS pts" : "Proj"} className="whitespace-nowrap text-right tabular-nums text-gray-200">
                     {data.horizon === "ros" ? (c.ros_points?.toFixed(0) ?? "—") : (c.projected?.toFixed(1) ?? "—")}
@@ -599,7 +547,7 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
               ))}
               {boardAll.length === 0 && (
                 <tr>
-                  <Td data-label="" className="text-xs text-gray-600" colSpan={7}>
+                  <Td data-label="" className="text-xs text-gray-600" colSpan={8}>
                     Nobody at this position clears the bar.
                   </Td>
                 </tr>

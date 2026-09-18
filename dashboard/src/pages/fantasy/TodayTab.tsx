@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
+import { Badge, Card, FoldToggle, Td, Th } from "./viz";
 import RightNow from "./RightNow";
 import { ACTION_TONE, CHANGE_TONE, ago, changeLabel, srcShort } from "./labels";
 
@@ -231,19 +231,6 @@ export default function TodayTab({
               </ul>
             )}
           </Card>
-
-          {/* Three tiles, not four: the ingest count ("1234 claims from 185
-              articles") is Admin's number, not a decision input. */}
-          <div className="grid grid-cols-3 gap-3">
-            <StatTile label="Lineup now" value={data.lineup_total?.toFixed(1) ?? "—"} hint={`week ${data.week}, league-correct`} />
-            <StatTile
-              label="Roster flags"
-              value={data.roster.filter((r) => r.flags.length).length}
-              hint="where the sites disagree with your lineup"
-              tone={data.roster.some((r) => r.flags.some((f) => f.kind === "sit" || f.kind === "drop")) ? "warning" : "default"}
-            />
-            <StatTile label="Being talked about" value={data.talk.length} hint="available players with claims" />
-          </div>
 
           {/* 2 ── my roster, expert view */}
           <Card
