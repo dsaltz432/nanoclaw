@@ -30,9 +30,9 @@ const MAX_BUFFER = 64 * 1024 * 1024;
 // Endpoint -> cache TTL. The waiver board rebuilds the whole price table from six
 // seasons of sealed bids and takes a few seconds; news is cheap but changes often.
 const TTL_MS: Record<string, number> = {
-  overview: 60_000,
+  overview: 30_000, // the audit inside it is cached daily in the data layer
   waivers: 300_000,
-  trades: 300_000,
+  trades: 30_000,
   assets: 600_000,
   news: 60_000,
   "news-read": 0, // a write; never cached
@@ -57,9 +57,12 @@ const TTL_MS: Record<string, number> = {
   // Phase 5 tabs. reading is cheap and changes every 15 min; moves composes waivers.
   reading: 60_000,
   "reading-read": 0,
-  lineup: 120_000,
-  moves: 120_000,
-  "trade-intel": 300_000,
+  // lineup / moves / trade-intel / trades are precomputed per league by the
+  // ff-news job (api.cached_tab, 20 min), so the CLI answers in ~0.2s and the
+  // route cache only absorbs a burst of tabs.
+  lineup: 30_000,
+  moves: 30_000,
+  "trade-intel": 30_000,
 };
 
 type CacheEntry = { at: number; value: unknown };

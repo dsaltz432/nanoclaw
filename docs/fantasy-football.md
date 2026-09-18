@@ -155,7 +155,13 @@ the default assumption stays that the projection is right.
 Retired as tabs: Waiver wire (code kept; renders inside Moves' fold), Experts (renamed Rankings). The News and Trends files were deleted on 2026-09-16 (their actionable rungs live on Moves, Today and Reading). The Alerts section was removed outright on 2026-09-16 (rule engine, `alert_log`, `ff.cli alerts`, tab, route) so a future alerting design starts clean. **Dynasty is league behaviour, not a tab**: selecting the dynasty league puts Trades on dynasty ECR vs market, Moves on rest-of-season, Rankings on the dynasty scope.
 
 **Every panel is served by `python3 -m ff.cli api <endpoint>`.** The Express
-route shells out and caches; nothing is recomputed in TypeScript. League-correct
+route shells out and caches; nothing is recomputed in TypeScript. Since
+2026-09-17 the per-league tabs (today, lineup, moves, trade-intel, trades) are
+precomputed into the data layer's `payload_cache` by the ff-news job every 15
+minutes (`ff.cli digest-cache`) and served while younger than 20 minutes, so a
+subtab answers in ~0.2 s instead of 1–4 s; `fresh=1` forces a live build. The
+audit behind `overview` is cached for six hours the same way (it used to run on
+every page load at ~5 s). The scoring pass itself is memoised per process. League-correct
 scoring, the FAAB contest reconstruction and the untrusted-text boundary have
 exactly one implementation, and a second one in the dashboard would be a second
 set of conventions quietly producing a second set of answers — the failure mode
