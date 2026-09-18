@@ -261,7 +261,6 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
     </div>
   );
 
-  const diff = Math.round((data.totals.optimal - data.totals.current) * 10) / 10;
 
   // "Look at these" used to list changes and disagreements separately, so a
   // player with both (Dak: numbers say bench, sites say start) appeared twice.
@@ -359,17 +358,6 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Your set lineup" value={data.totals.current.toFixed(1)} hint={`week ${data.week}, league-correct`} />
-        <StatTile
-          label="Projection-optimal"
-          value={data.totals.optimal.toFixed(1)}
-          hint={diff > 0 ? `+${diff} if you switch` : "matches your lineup"}
-          tone={diff >= 1 ? "warning" : "good"}
-        />
-        <StatTile label="Lineup changes" value={data.changes.length} hint="players the numbers would swap" tone={data.changes.length ? "warning" : "default"} />
-        <StatTile label="Sites disagree" value={data.disagreements.length} hint="with the projection-optimal lineup" tone={data.disagreements.length ? "warning" : "default"} />
-      </div>
 
       {look.size > 0 && (
         <Card title="Look at these" subtitle="Where your set lineup, the projections and the sites do not all agree. Nothing here is an override.">
