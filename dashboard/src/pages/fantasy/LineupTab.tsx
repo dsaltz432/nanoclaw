@@ -40,6 +40,7 @@ type Row = {
   claims: Claims;
   current_starter: boolean;
   optimal_starter: boolean;
+  reserve?: boolean;
   points?: number;
   usage: Usage;
   matchup: Matchup;
@@ -90,6 +91,8 @@ type Data = {
   survival?: Survival;
   optimal: Row[];
   bench: Row[];
+  reserve?: Row[];
+  reserve_note?: string;
   totals: { optimal: number; current: number };
   changes: { in?: Row; out?: Row; reason: string }[];
   disagreements: { kind: "sit" | "start"; player: Row; over?: Row | null; text: string }[];
@@ -196,7 +199,9 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
     );
 
   const SetCell = ({ r }: { r: Row }) =>
-    r.current_starter === r.optimal_starter ? (
+    r.reserve ? (
+      <Badge tone="neutral">IR slot</Badge>
+    ) : r.current_starter === r.optimal_starter ? (
       <span className="text-gray-600">{r.current_starter ? "starting" : "bench"}</span>
     ) : r.optimal_starter ? (
       <Badge tone="warning">on your bench</Badge>
@@ -452,6 +457,11 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
       <Card title="Bench" subtitle="Highest projection first.">
         <Table rows={data.bench} slotCol={false} />
       </Card>
+      {(data.reserve ?? []).length > 0 && (
+        <Card title="IR / taxi" subtitle={data.reserve_note}>
+          <Table rows={data.reserve ?? []} slotCol={false} />
+        </Card>
+      )}
 
       <Card
         title="Streaming"
