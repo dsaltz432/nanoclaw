@@ -10,7 +10,15 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'CONTAINER_TIMEOUT',
+  'CLAUDE_MODEL',
 ]);
+
+// Default model for every agent container, as an alias ("opus") or an exact
+// id; a group's containerConfig.model overrides it. Empty means the Agent
+// SDK's own default (Sonnet at the time of writing). Passed to the container
+// as ANTHROPIC_MODEL, which Claude Code honours as its model setting.
+export const CLAUDE_MODEL: string =
+  process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL || '';
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';

@@ -326,6 +326,7 @@ reason and message. Cadence is still to be decided.
 | Trigger | none — every message in the chat invokes the agent |
 | Session | `data/sessions/fantasy-football/.claude/` |
 | Mounts | `fantasy-football-agent` read-only at `/workspace/extra/ff`, with `store/` nested read-write so `ff.cli daily` can refresh |
+| Model | `opus` (containerConfig.model on the registered group; an alias, so it follows the current Opus without a pin). Other groups use the `.env` `CLAUDE_MODEL` default, else the Agent SDK's own (Sonnet). Passed to the container as `ANTHROPIC_MODEL`. |
 
 The repo is mounted **read-only on purpose**: this group reads third-party news
 text, and it must not be able to rewrite the analysis it is quoting. Only

@@ -15,6 +15,7 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
+  CLAUDE_MODEL,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -244,6 +245,7 @@ const LOGGABLE_ENV_KEYS = new Set([
   'LANG',
   'NODE_ENV',
   'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
 ]);
 
 /** @internal - exported for testing */
@@ -265,6 +267,7 @@ const CONTAINER_PIDS_LIMIT = 2048;
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  model: string = CLAUDE_MODEL,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -289,6 +292,12 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Model: the group's own setting, else the .env default, else the SDK's.
+  // An alias like "opus" follows the tier's current model without a pin.
+  if (model) {
+    args.push('-e', `ANTHROPIC_MODEL=${model}`);
+  }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
@@ -365,7 +374,11 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    group.containerConfig?.model || CLAUDE_MODEL,
+  );
 
   logger.debug(
     {

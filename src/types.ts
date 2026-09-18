@@ -31,6 +31,10 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   noGmailMount?: boolean; // Prevent Gmail credentials from being mounted
+  // Model for this group's agent: an alias ("opus", "sonnet", "haiku") that
+  // resolves to the current model of that tier, or an exact id. Overrides the
+  // CLAUDE_MODEL default from .env; unset on both means the SDK's default.
+  model?: string;
 }
 
 export interface RegisteredGroup {
