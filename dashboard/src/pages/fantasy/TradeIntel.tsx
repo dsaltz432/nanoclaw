@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, Td, Th } from "./viz";
-import { ACTION_TONE, srcShort } from "./labels";
+import { ACTION_TONE } from "./labels";
+import { SrcLink } from "./NoteLine";
 
 /**
  * Trade intel — the decision layer above the trade builder.
@@ -30,7 +31,7 @@ export type Row = {
   market_value: number | null;
   market_rank: number | null;
   market_trend_30d: number | null;
-  claims: { n: number; n_sources: number; net: number; by_action: Record<string, number>; by_horizon: Record<string, number>; evidence: { action: string; horizon: string; rationale: string; source: string }[] } | null;
+  claims: { n: number; n_sources: number; net: number; by_action: Record<string, number>; by_horizon: Record<string, number>; evidence: { action: string; horizon: string; rationale: string; source: string; title?: string | null; url?: string | null }[] } | null;
   gap?: number;
   /** Weakening rows only: the reasons, already worded ("drop talk ×2"). */
   why?: string[];
@@ -67,6 +68,7 @@ type Data = {
   value_gaps: { buy_cheap: Row[]; sell_high: Row[]; note: string } | null;
   weakening?: Row[];
   weakening_note?: string;
+  sell_note?: string;
   /** Dynasty league only. */
   picks?: Picks | null;
   error?: string;
@@ -134,12 +136,31 @@ export default function TradeIntel({
     </span>
   );
 
-  const Evidence = ({ r }: { r: Row }) =>
-    r.claims?.evidence[0] ? (
-      <div className="text-xs text-gray-500">
-        <span className="text-gray-600">{srcShort(r.claims.evidence[0].source)}:</span> {r.claims.evidence[0].rationale}
-      </div>
-    ) : null;
+  /**
+   * The claims that actually put this row on its list, one per source and
+   * newest first, each linked to the article it came from. The server now
+   * filters evidence to the triggering action, so a sell row quotes the sell
+   * case rather than whatever the most confident claim of any kind happened
+   * to be — which for Christian Watson was a glowing start call.
+   */
+  const Evidence = ({ r }: { r: Row }) => {
+    const ev = r.claims?.evidence ?? [];
+    if (ev.length === 0) return null;
+    return (
+      <ul className="mt-0.5 space-y-0.5">
+        {ev.map((e, i) => (
+          <li key={i} className="flex gap-1.5 text-xs text-gray-500">
+            <span aria-hidden="true" className="text-gray-700">
+              ·
+            </span>
+            <span className="min-w-0">
+              <SrcLink e={e} /> {e.rationale}
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
 
   const PriceBtn = ({ r, side }: { r: Row; side: PriceSide }) =>
     onPrice ? (
@@ -189,10 +210,10 @@ export default function TradeIntel({
       {/* Sell talk and the softer "weakening" signal share a column so the
           two reads on your own roster sit together. */}
       <div className="space-y-4 self-start">
-        <Card title="Sell talk on your roster" subtitle="Players you own the sites say sell.">
+        <Card title="Sell talk on your roster" subtitle={data.sell_note ?? "Players you own the sites say sell."}>
           <List rows={data.sell} empty="No sell talk on your roster in the window." action="sell" />
         </Card>
-        <Card title="Weakening" subtitle="Softer than a sell call.">
+        <Card title="Weakening" subtitle={data.weakening_note ?? "Softer than a sell call."}>
           {weakening.length === 0 ? (
             <p className="text-xs text-gray-600">Nothing on your roster is softening in the window.</p>
           ) : (
@@ -216,7 +237,6 @@ export default function TradeIntel({
               ))}
             </ul>
           )}
-          {data.weakening_note && <p className="mt-3 text-[11px] leading-relaxed text-gray-600">{data.weakening_note}</p>}
         </Card>
       </div>
       <Card title="Buy targets on rival rosters" subtitle="Players rivals own the sites say buy. Owner shown; the builder below prices the deal.">

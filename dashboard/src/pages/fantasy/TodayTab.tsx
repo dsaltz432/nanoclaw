@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SrcLink } from "./NoteLine";
 import { Badge, Card, FoldToggle, Td, Th } from "./viz";
 import RightNow from "./RightNow";
 import { ACTION_TONE, CHANGE_TONE, ago, changeLabel, srcShort } from "./labels";
@@ -280,7 +281,7 @@ export default function TodayTab({
                             <Claims c={r.overlay?.claims} />
                             {r.overlay?.claims?.evidence[0] && (
                               <div className="mt-0.5 max-w-[26rem] text-gray-500" title={r.overlay.claims.evidence[0].title}>
-                                <span className="text-gray-600">{srcShort(r.overlay.claims.evidence[0].source)}:</span>{" "}
+                                <SrcLink e={r.overlay.claims.evidence[0]} />{" "}
                                 {r.overlay.claims.evidence[0].rationale}
                               </div>
                             )}
@@ -381,7 +382,7 @@ export default function TodayTab({
                               <Claims c={m.overlay?.claims} />
                               {m.overlay?.claims?.evidence[0] && (
                                 <div className="mt-0.5 max-w-[26rem] text-gray-500">
-                                  <span className="text-gray-600">{srcShort(m.overlay.claims.evidence[0].source)}:</span>{" "}
+                                  <SrcLink e={m.overlay.claims.evidence[0]} />{" "}
                                   {m.overlay.claims.evidence[0].rationale}
                                 </div>
                               )}
@@ -419,7 +420,7 @@ export default function TodayTab({
                       </div>
                       {t.claims.evidence[0] && (
                         <div className="text-xs text-gray-500">
-                          <span className="text-gray-600">{srcShort(t.claims.evidence[0].source)}:</span>{" "}
+                          <SrcLink e={t.claims.evidence[0]} />{" "}
                           {t.claims.evidence[0].rationale}
                         </div>
                       )}

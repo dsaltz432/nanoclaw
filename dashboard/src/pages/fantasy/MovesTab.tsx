@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
 import { ACTION_TONE, srcShort } from "./labels";
-import { NoteLine, type Note } from "./NoteLine";
+import { SrcLink, NoteLine, type Note } from "./NoteLine";
 import WaiversTab from "./WaiversTab";
 import { Select } from "./Select";
 
@@ -236,7 +236,7 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
         </span>
         {o.claims.evidence[0] && (
           <div className="mt-0.5 max-w-[26rem] text-[11px] text-gray-500">
-            <span className="text-gray-600">{srcShort(o.claims.evidence[0].source)}:</span> {o.claims.evidence[0].rationale}
+            <SrcLink e={o.claims.evidence[0]} /> {o.claims.evidence[0].rationale}
           </div>
         )}
         <NoteLine note={o.note} />

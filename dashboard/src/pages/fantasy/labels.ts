@@ -30,6 +30,17 @@ export const SOURCE_LABEL: Record<string, string> = {
   rotowire: "Rotowire wire",
 };
 
+/**
+ * Projection sources spelled out, for the swap-details comparison. Distinct
+ * from SOURCE_LABEL, whose "Rotowire wire" names the news feed and reads
+ * wrong above a column of projected points.
+ */
+export const PROJ_LABEL: Record<string, string> = {
+  rotowire: "Rotowire",
+  espn: "ESPN",
+  ffballers: "Fantasy Footballers",
+};
+
 /** Projection sources print lowercase beside a number: "roto 12 · espn 11 · ffb 13". */
 export const PROJ_SHORT: Record<string, string> = {
   rotowire: "roto",
@@ -40,6 +51,7 @@ export const PROJ_SHORT: Record<string, string> = {
 export const srcShort = (s: string): string => SOURCE_SHORT[s] ?? s;
 export const srcLabel = (s: string): string => SOURCE_LABEL[s] ?? s;
 export const projShort = (s: string): string => PROJ_SHORT[s] ?? s;
+export const projLabel = (s: string): string => PROJ_LABEL[s] ?? SOURCE_LABEL[s] ?? s;
 
 /** Ranking scopes (the consensus lists) and claim horizons, as prose. */
 export const SCOPE_LABEL = {
@@ -74,6 +86,58 @@ export const ACTION_TONE: Record<string, "good" | "critical" | "warning" | "info
   drop: "critical",
   sell: "warning",
 };
+
+/**
+ * Which call contradicts which. `hold` is opposed by both selling and
+ * cutting, since the prompt defines it as "explicitly keep, do not sell or
+ * drop".
+ */
+const OPPOSITE: Record<string, string[]> = {
+  start: ["sit"],
+  sit: ["start"],
+  buy: ["sell"],
+  sell: ["buy"],
+  add: ["drop"],
+  drop: ["add"],
+  hold: ["sell", "drop"],
+  stash: ["drop"],
+};
+
+/** A minority smaller than this is one dissenting voice, not a split. */
+const SPLIT_SHARE = 0.25;
+
+/**
+ * The one call a board row should lead with, and the opposing call when the
+ * sites genuinely disagree.
+ *
+ * Printing all nine actions averaged four badges a row and ran to seven,
+ * where a third of them were a single claim and `watch` — 7% of all claim
+ * volume — contributes nothing to the tally by design. The detailed mix is
+ * what the Lineup, Moves and Trades tabs are each for; a ranked list needs
+ * the lean and whether it is contested.
+ */
+export function claimLean(
+  byAction: Record<string, number>
+): { lead: [string, number]; counter: [string, number] | null } | null {
+  const votes = Object.entries(byAction).filter(([a, n]) => a !== "watch" && n > 0);
+  if (votes.length === 0) return null;
+  const lead = votes.reduce((hi, x) => (x[1] > hi[1] ? x : hi));
+  const opposed = (OPPOSITE[lead[0]] ?? [])
+    .map((a) => [a, byAction[a] ?? 0] as [string, number])
+    .filter(([, n]) => n > 0);
+  const counter = opposed.length ? opposed.reduce((hi, x) => (x[1] > hi[1] ? x : hi)) : null;
+  return {
+    lead,
+    counter: counter && counter[1] / (lead[1] + counter[1]) >= SPLIT_SHARE ? counter : null,
+  };
+}
+
+/** "start ×9 · buy ×2 · hold ×2 · watch" — the full mix, for a tooltip. */
+export const claimMix = (byAction: Record<string, number>): string =>
+  Object.entries(byAction)
+    .sort((a, b) => b[1] - a[1])
+    .map(([a, n]) => `${a}${n > 1 ? ` ×${n}` : ""}`)
+    .join(" · ");
 
 /** Today's "since yesterday" diff: change kind -> badge tone and the word printed beside it. */
 export const CHANGE_TONE: Record<string, "good" | "critical" | "warning" | "info" | "neutral"> = {

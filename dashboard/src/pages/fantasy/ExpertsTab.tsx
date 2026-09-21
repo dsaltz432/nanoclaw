@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { SrcLink } from "./NoteLine";
 import { Badge, Card, FoldToggle, Td, Th } from "./viz";
-import { ACTION_TONE, SCOPE_LABEL, projShort, srcShort } from "./labels";
+import { ACTION_TONE, SCOPE_LABEL, claimLean, claimMix, projShort, srcShort } from "./labels";
 import { Segmented, Select } from "./Select";
 
 /**
@@ -24,6 +25,9 @@ type Claims = {
   n_sources: number;
   n_articles: number;
   by_action: Record<string, number>;
+  /** Week-horizon claims published before this player's last kickoff. */
+  stale_by_action?: Record<string, number>;
+  n_stale?: number;
   by_horizon: Record<string, number>;
   bullish: number;
   bearish: number;
@@ -112,10 +116,11 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [scope, setScopeRaw] = useState<Scope>(league === "dynasty" ? "dynasty" : "weekly");
-  const [mode, setMode] = useState<Mode>("board");
-  const [position, setPosition] = useState<string>("");
-  // By-position mode is one position at a time, fetched as its own list, so
-  // QB / K / DEF are never truncated off the end of a FLEX-ordered board.
+  // One position at a time, fetched as its own list, so QB / K / DEF are
+  // never truncated off the end of a FLEX-ordered board. "" is All, which is
+  // the one ordered list the server sorts for us — the old "board" view.
+  // QB by default: All is a cross-position order, and a position rank of 12
+  // means something different for a quarterback than for a receiver.
   const [posTab, setPosTab] = useState<string>("QB");
   const [include, setInclude] = useState<string>("");
   const [hours, setHours] = useState<number>(168);
@@ -136,10 +141,12 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
     setSnapshots([]);
   };
 
+  // All = the server-ordered board; a position = that position's own list.
+  const mode: Mode = posTab === "" ? "board" : "bypos";
+
   useEffect(() => {
     const q = new URLSearchParams({ league, scope, hours: String(hours), limit: mode === "bypos" ? "200" : "120" });
-    if (mode === "board" && position) q.set("position", position);
-    if (mode === "bypos") q.set("position", posTab);
+    if (posTab) q.set("position", posTab);
     if (include) q.set("include", include);
     if (snapshot) q.set("snapshot", snapshot);
     setData(null);
@@ -155,15 +162,17 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         if (Array.isArray(d.snapshots)) setSnapshots(d.snapshots);
       })
       .catch((e) => setErr(String(e)));
-  }, [league, scope, mode, position, posTab, include, hours, snapshot]);
+  }, [league, scope, mode, posTab, include, hours, snapshot]);
 
   if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
 
   const dynasty = scope === "dynasty";
-  const showMove = !!data?.prev_snapshot;
   const snapshotOptions = snapshots.map((d, i) => ({ value: d, label: i === 0 ? `${d} (latest)` : d }));
   const snapshotValue = snapshot || snapshots[0] || "";
-  const snapshotLine = data ? `snapshot ${data.snapshot ?? "—"} · vs ${data.prev_snapshot ?? "no earlier snapshot"}` : "";
+  // "vs <date>" named the comparison the Move column drew. With that column
+  // gone nothing on this page is measured against the earlier snapshot, so
+  // the line says which snapshot you are reading and stops there.
+  const snapshotLine = data ? `snapshot ${data.snapshot ?? "—"}` : "";
 
   const header = (
     <tr>
@@ -172,12 +181,6 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
       <Th>Status</Th>
       <Th className="text-right">Rank</Th>
       <Th className="text-right">Spread</Th>
-      {/* A column of 120 dashes until a second snapshot lands. */}
-      {showMove && (
-        <Th className="text-right" title="move since the previous snapshot">
-          Move
-        </Th>
-      )}
       <Th>By source</Th>
       <Th>Sites say</Th>
       <Th className="text-right" title="league-correct projection per source">
@@ -232,18 +235,6 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
       </Td>
       <Td data-label="Rank" className="text-right tabular-nums text-gray-100">{r.rank?.median ?? <span className="text-gray-700">—</span>}</Td>
       <Td data-label="Spread" className="text-right text-xs tabular-nums text-gray-500">{r.rank ? `${r.rank.best}–${r.rank.worst}` : ""}</Td>
-      {showMove && (
-        <Td data-label="Move" className="text-right text-xs tabular-nums">
-          {r.delta == null ? (
-            <span className="text-gray-700">—</span>
-          ) : (
-            <span className={r.delta > 0 ? "text-green-400" : r.delta < 0 ? "text-red-400" : "text-gray-500"}>
-              {r.delta > 0 ? "+" : ""}
-              {r.delta}
-            </span>
-          )}
-        </Td>
-      )}
       <Td data-label="By source" className="text-[11px] text-gray-500">
         <span className="inline-flex flex-wrap gap-x-1.5">
           {Object.entries(r.ranks)
@@ -258,23 +249,52 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
       <Td data-label="Sites say" className="max-w-[28rem] text-xs">
         {r.claims ? (
           <div>
-            <div className="mb-0.5 flex flex-wrap gap-1">
-              {Object.entries(r.claims.by_action)
-                .sort((a, b) => b[1] - a[1])
-                .map(([a, n]) => (
+            <div className="mb-0.5 flex flex-wrap items-center gap-1" title={`all calls: ${claimMix(r.claims.by_action)}`}>
+              {/* The lean, and the opposing call only where it is a real
+                  split rather than one dissenter. The whole mix is on hover;
+                  Lineup, Moves and Trades each own their own slice of it. */}
+              {(() => {
+                const chip = ([a, n]: [string, number]) => (
                   <Badge key={a} tone={ACTION_TONE[a] ?? "neutral"}>
                     {a}
                     {n > 1 ? ` ×${n}` : ""}
                   </Badge>
-                ))}
-              <span className={`ml-1 tabular-nums ${r.claims.net > 0 ? "text-green-400" : r.claims.net < 0 ? "text-red-400" : "text-gray-500"}`}>
-                {r.claims.net > 0 ? "+" : ""}
-                {r.claims.net}
-              </span>
+                );
+                const pair = (l: NonNullable<ReturnType<typeof claimLean>>) => (
+                  <>
+                    {chip(l.lead)}
+                    {l.counter && (
+                      <>
+                        <span className="text-gray-700">/</span>
+                        {chip(l.counter)}
+                      </>
+                    )}
+                  </>
+                );
+                const lean = claimLean(r.claims.by_action);
+                if (lean) return pair(lean);
+                // Nothing since his last kickoff — Monday and Tuesday, mostly.
+                // Show what was said, dimmed and dated, rather than an empty
+                // cell that cannot be told from "nobody is writing about him".
+                const old = claimLean(r.claims.stale_by_action ?? {});
+                if (!old) return null;
+                return (
+                  <span className="inline-flex items-center gap-1 opacity-50" title="published before this player's last game">
+                    {pair(old)}
+                    <span className="text-[11px] italic text-gray-500">before his last game</span>
+                  </span>
+                );
+              })()}
+              {Object.keys(r.claims.by_action).length > 0 && (
+                <span className={`ml-1 tabular-nums ${r.claims.net > 0 ? "text-green-400" : r.claims.net < 0 ? "text-red-400" : "text-gray-500"}`}>
+                  {r.claims.net > 0 ? "+" : ""}
+                  {r.claims.net}
+                </span>
+              )}
             </div>
             {r.claims.evidence[0] && (
               <div className="text-gray-400" title={r.claims.evidence[0].title}>
-                <span className="text-gray-600">{srcShort(r.claims.evidence[0].source)}:</span>{" "}
+                <SrcLink e={r.claims.evidence[0]} />{" "}
                 {r.claims.evidence[0].rationale}
               </div>
             )}
@@ -328,33 +348,23 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             { value: "ros", label: SCOPE_LABEL.ros },
           ]}
         />
+        {/* One control, not two. "board" and "by position" were two views of
+            the same rows differing only in whether the position filter was a
+            dropdown or tabs, and you had to pick a view before you could pick
+            a position. All is just another position. */}
         <Segmented
-          aria-label="View"
-          value={mode}
-          onChange={(v) => setMode(v as Mode)}
-          options={[
-            { value: "board", label: "board" },
-            { value: "bypos", label: "by position", hint: "one section per position, ranked within it" },
-          ]}
+          aria-label="Position"
+          value={posTab}
+          onChange={setPosTab}
+          options={[{ value: "", label: "All" }, ...POS_ORDER.map((p) => ({ value: p, label: p }))]}
         />
-        {/* The position filter is what by-position mode replaces with tabs. */}
-        {mode === "board" ? (
-          <Select
-            aria-label="Position"
-            value={position}
-            onChange={setPosition}
-            options={POSITIONS.map((p) => ({ value: p, label: p || "all positions" }))}
-          />
-        ) : (
-          <Segmented aria-label="Position tab" value={posTab} onChange={setPosTab} options={POS_ORDER.map((p) => ({ value: p, label: p }))} />
-        )}
         <Segmented
           aria-label="Include"
           value={include}
           onChange={setInclude}
           options={[
             { value: "", label: "everyone" },
-            { value: "available", label: "available to add" },
+            { value: "available", label: "available" },
             { value: "mine", label: "my roster" },
           ]}
         />
@@ -389,30 +399,6 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         <div className="p-6 text-sm text-gray-500">Loading…</div>
       ) : (
         <>
-          {/* ── buzz ─────────────────────────────────────────────────── */}
-          {/* Only "most discussed" survives here: the lean-positive and
-              lean-negative lists were the third appearance of the names Today
-              and Moves already carry. No owner column — that is in the board
-              and it truncated every name. */}
-          {data.buzz.most_discussed.length > 0 && (
-            <div className="rounded-lg border border-gray-800 bg-gray-900 px-3 py-2">
-              <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">Most discussed</div>
-              <ul className="flex flex-wrap gap-x-4 gap-y-1">
-                {data.buzz.most_discussed.slice(0, 6).map((r) => (
-                  <li key={r.player_id} className="flex items-baseline gap-1.5 text-xs">
-                    <button onClick={() => onPlayer(r.player_id)} className="text-left text-gray-200 hover:text-indigo-300 hover:underline">
-                      {r.name}
-                    </button>
-                    <span className="text-gray-600">{r.pos}</span>
-                    <span className="whitespace-nowrap tabular-nums text-gray-400">
-                      {r.claims?.n} claims · {r.claims?.n_sources} sources
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           {mode === "board" ? (
             /* ── the board ──────────────────────────────────────────── */
             <Card

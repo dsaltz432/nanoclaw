@@ -85,7 +85,10 @@ export default function RightNow({
 
   if (!data) return null;
 
-  const nothing = data.items.length === 0 && data.contingent.length === 0;
+  // Contingent value is no longer shown here: a handcuff is an option on a
+  // future week, and Right now is about this one. The Stash card on Moves
+  // still surfaces them, which is where a future-week option belongs.
+  const nothing = data.items.length === 0;
 
   return (
     <section className="mb-5 rounded-lg border border-indigo-500/25 bg-indigo-500/[0.04]">
@@ -160,50 +163,6 @@ export default function RightNow({
             </p>
           </div>
         ))}
-
-        {data.contingent.length > 0 && (
-          <div className="border-t border-gray-800 pt-3">
-            <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-              Contingent value — an option on a future week, not this one
-            </h4>
-            <ul className="space-y-2">
-              {data.contingent.map((s, n) => (
-                <li key={n} className="rounded border border-gray-800 px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="text-gray-100">
-                      {s.position} {s.name}
-                    </span>
-                    <span className="text-xs text-gray-600">{s.team}</span>
-                    <Badge tone={s.clears_bar_if_triggered ? "info" : "neutral"}>{s.trigger}</Badge>
-                    {s.availability === "free_agent" ? (
-                      <Badge tone="good">free agent</Badge>
-                    ) : (
-                      <Badge tone="neutral">waivers</Badge>
-                    )}
-                    {s.trending_rank && (
-                      <span className="text-xs" style={{ color: C.warning }}>
-                        #{s.trending_rank} trending — {s.trending_count?.toLocaleString()} adds
-                      </span>
-                    )}
-                    <span className="ml-auto text-xs text-gray-500">
-                      bid ≤ {s.option_bid_pct}% of budget
-                    </span>
-                  </div>
-                  {/* The prose already states all four numbers; a strip
-                      repeating them four pixels above was the same figures
-                      twice. */}
-                  <p className="mt-1 text-xs leading-relaxed text-gray-500">{s.reasoning}</p>
-                  <div className="mt-1 flex flex-wrap gap-x-4 text-[11px] text-gray-600">
-                    {s.trigger_reason && <span>triggered by: {s.trigger_reason}</span>}
-                    {s.projection_predates_note && (
-                      <span style={{ color: C.warning }}>projection predates this report</span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
 
         {data.successors_gone.length > 0 && (
           <p className="border-t border-gray-800 pt-3 text-xs text-gray-500">

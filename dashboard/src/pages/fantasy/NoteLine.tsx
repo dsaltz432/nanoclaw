@@ -1,5 +1,5 @@
 import { Badge } from "./viz";
-import { ago } from "./labels";
+import { ago, srcShort } from "./labels";
 
 /**
  * Context beside a player that Lineup, Moves and the dossier all show: the
@@ -44,10 +44,81 @@ export type Matchup = {
   gametime?: string;
 } | null;
 
-/** Topic -> badge tone, first match wins in this order. */
+/** One extracted claim, as every tab renders it. */
+export type Claim = {
+  action?: string;
+  horizon?: string;
+  rationale: string;
+  source: string;
+  title?: string | null;
+  url?: string | null;
+  /** Week-horizon claim published before this player's last kickoff. */
+  stale?: boolean;
+};
+
+/**
+ * The "CBS:" that prefixes a quoted rationale, linked to the article it came
+ * from. The claim already carries the URL and headline, so the prefix that
+ * was already there can carry the link — no extra row, no extra pixel, and
+ * the analysis stops being a dead-end attribution.
+ */
+export function SrcLink({ e }: { e: Claim }) {
+  const label = srcShort(e.source);
+  // A quote from before the player's last kickoff is about a game that has
+  // been played. It is still worth reading, so it is dated rather than
+  // dropped — every tab that quotes a claim goes through here, so saying it
+  // once says it everywhere.
+  const stale = e.stale ? (
+    <span className="italic text-gray-600" title="published before this player's last game">
+      {" "}
+      (pre-game)
+    </span>
+  ) : null;
+  if (!e.url)
+    return (
+      <span className="text-gray-600">
+        {label}
+        {stale}:
+      </span>
+    );
+  return (
+    <>
+      <a
+        href={e.url}
+        target="_blank"
+        rel="noreferrer"
+        title={e.title || `Open this ${label} article`}
+        className="text-gray-500 underline decoration-gray-700 underline-offset-2 hover:text-indigo-300 hover:decoration-indigo-400"
+      >
+        {label}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+      {stale}:
+    </>
+  );
+}
+
+/**
+ * Topic -> badge tone, first match wins in this order.
+ *
+ * `out` and `injury` are deliberately NOT here. A badge claiming a player is
+ * out is a claim about his availability, and Sleeper publishes that as a
+ * field — rendered as his own badge beside his name. Deriving a second copy
+ * by pattern-matching the headline duplicated an authoritative fact with a
+ * guessed one, and guessed it wrong whenever the injury in the sentence
+ * belonged to somebody else: "Bates should take on an elevated role ... after
+ * Chig Okonkwo was ruled out due to a hamstring injury" is filed under Bates,
+ * who is fine, and it put a red OUT next to him on the start/sit table.
+ *
+ * Checked over five days of wire notes: of 37 headlines whose text reads as
+ * `out`, Sleeper's designation agreed with the correct answer 37 times, and
+ * the one case the text rule got wrong Sleeper got right. It cannot replace
+ * the topics wholesale — 36% of genuine injury notes are about players with
+ * no designation, because they are playing ("Kittle (Achilles) practiced
+ * fully and does not have an injury designation") — so `out` and `injury`
+ * still classify and rank notes. They just do not get to assert a status.
+ */
 const TOPIC_TONE: [string, "critical" | "warning" | "info" | "good"][] = [
-  ["out", "critical"],
-  ["injury", "warning"],
   ["role", "info"],
   ["return", "good"],
 ];
