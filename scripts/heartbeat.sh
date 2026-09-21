@@ -278,6 +278,35 @@ if [ -f "$SNAPSHOT_DIR/restarts.txt" ] && [ -n "$RESTART_CUTOFF" ]; then
 fi
 rm -f "${TMP_JOBS}.restarts"
 touch "$SNAPSHOT_DIR/restarts.txt"
+
+# --- scheduled-task snapshot ------------------------------------------------
+#
+# NanoClaw's own scheduled tasks and their latest run, for the fitness group's
+# nightly status.md (which gets this directory read-only). A projection, not
+# the DB: store/messages.db also holds every chat, so it is never mounted into
+# fitness. Completed one-off runs are dropped. Best-effort — a failure here
+# leaves the previous snapshot in place and never affects the heartbeat.
+#
+# Line format: id|name|schedule_type|schedule_value|status|last_run_at|last_status|duration_ms
+MESSAGES_DB="${PROJECT_ROOT}/store/messages.db"
+if [ -f "$MESSAGES_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  TMP_TASKS=$(mktemp)
+  if sqlite3 -separator '|' "file:${MESSAGES_DB}?mode=ro" "
+      SELECT t.id, replace(COALESCE(t.name, ''), '|', '/'), t.schedule_type, t.schedule_value,
+             t.status, COALESCE(l.run_at, ''), COALESCE(l.status, ''), COALESCE(l.duration_ms, '')
+      FROM scheduled_tasks t
+      LEFT JOIN task_run_logs l ON l.id = (
+        SELECT id FROM task_run_logs WHERE task_id = t.id ORDER BY run_at DESC LIMIT 1)
+      WHERE NOT (t.schedule_type = 'once' AND t.status = 'completed')
+      ORDER BY t.group_folder, t.id
+    " > "$TMP_TASKS" 2>/dev/null; then
+    chmod 644 "$TMP_TASKS"
+    mv "$TMP_TASKS" "$SNAPSHOT_DIR/tasks.txt"
+  else
+    rm -f "$TMP_TASKS"
+  fi
+fi
+
 # timestamp.txt last: it is the freshness signal for the whole snapshot, so it
 # must never be newer than the files it vouches for.
 mv "$TMP_TS" "$SNAPSHOT_DIR/timestamp.txt"

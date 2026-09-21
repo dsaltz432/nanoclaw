@@ -26,7 +26,7 @@ dashboard/src/pages/HealthPage.tsx  # React dashboard with profile tabs
 
 ### Multi-Profile Support
 
-Credentials are stored as a JSON array in `data/sessions/telegram_main/.claude/garmin-credentials.json`. Each profile gets:
+Credentials are stored as a JSON array in `data/sessions/fitness/.claude/garmin-credentials.json`. Each profile gets:
 - Separate token directory: `garmin-tokens-{slug}/`
 - Separate database: `garmin-{slug}.db`
 - Dashboard tab when 2+ profiles exist
@@ -144,15 +144,24 @@ Peak:   190 bpm (during activity)
 
 ## Dashboard
 
-The Health page (`/health`) displays all Garmin data with:
+The Health page (`/health`, `dashboard/src/pages/HealthPage.tsx`) displays:
 - Profile tabs (when 2+ profiles exist)
 - Time range selector (30d / 90d / 6m / 1y)
-- Overview cards: resting HR, HRV, sleep, steps, stress, weight
-- Charts: HR trend, HRV trend, sleep stages, steps, stress
-- Heart rate recovery table (when data available)
-- Weight trend
+- Metric trend charts via `/api/garmin/trend`: resting HR, steps, intensity minutes,
+  HRV, endurance score, respiration, VO₂ max, body battery, sleep duration
+  (normal ranges from `/api/garmin/metric-ranges`)
+- Body battery chart (`/api/garmin/body-battery`)
+- Sleep chart and per-night drill-down (`/api/garmin/sleep`, `/api/garmin/sleep/:date`)
+- CSV export (`/api/garmin/export.csv`)
 
 API routes accept `?profile=<slug>` to query per-profile databases. Defaults to first profile.
+
+**Routes with no frontend caller.** `dashboard/server/routes/garmin.ts` also serves
+`/api/garmin/overview` (overview cards), `/api/garmin/recovery-trend` (heart-rate
+recovery), `/api/garmin/weight`, and `status`, `heart-rate`, `hrv`, `stress`, `steps`,
+`activities`. Nothing in `dashboard/src` calls them — the overview cards, HRR table
+and weight trend this page used to describe are not rendered. Wire them up or delete
+them; don't assume they're live.
 
 ## CLI Reference
 
@@ -173,7 +182,7 @@ python3 scripts/garmin-sync.py --profile daniel-saltz --full   # One profile, fu
 
 | File | Purpose |
 |------|---------|
-| `data/sessions/telegram_main/.claude/garmin-credentials.json` | Credentials array (email, password, slug, token_dir) |
-| `data/sessions/telegram_main/.claude/garmin-tokens-{slug}/` | OAuth tokens per profile |
-| `data/sessions/telegram_main/.claude/garmin-{slug}.db` | SQLite database per profile |
-| `data/sessions/telegram_main/.claude/garmin.db` | Legacy single-profile DB (backward compat) |
+| `data/sessions/fitness/.claude/garmin-credentials.json` | Credentials array (email, password, slug, token_dir) |
+| `data/sessions/fitness/.claude/garmin-tokens-{slug}/` | OAuth tokens per profile |
+| `data/sessions/fitness/.claude/garmin-{slug}.db` | SQLite database per profile |
+| `data/sessions/fitness/.claude/garmin.db` | Legacy single-profile DB (backward compat) |
