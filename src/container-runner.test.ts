@@ -47,6 +47,17 @@ vi.mock('fs', async () => {
   };
 });
 
+// Mock env file: host secrets that are normally passed to every container
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn((keys: string[]) =>
+    Object.fromEntries(
+      keys
+        .filter((k) => k === 'GITHUB_TOKEN' || k === 'SERPER_API_KEY')
+        .map((k) => [k, `test-${k}`]),
+    ),
+  ),
+}));
+
 // Mock mount-security
 vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
@@ -87,6 +98,7 @@ vi.mock('child_process', async () => {
   };
 });
 
+import { spawn } from 'child_process';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
@@ -207,5 +219,37 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner secret env', () => {
+  beforeEach(() => {
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockClear();
+  });
+
+  async function argsFor(group: RegisteredGroup): Promise<string[]> {
+    const done = runContainerAgent(group, testInput, () => {});
+    fakeProc.emit('close', 0);
+    await done;
+    return vi.mocked(spawn).mock.calls[0][1] as string[];
+  }
+
+  it('passes host secrets by default', async () => {
+    const args = await argsFor(testGroup);
+    expect(args).toContain('GITHUB_TOKEN=test-GITHUB_TOKEN');
+    expect(args).toContain('GH_TOKEN=test-GITHUB_TOKEN');
+    expect(args).toContain('SERPER_API_KEY=test-SERPER_API_KEY');
+  });
+
+  it('withholds every host secret when noSecretEnv is set', async () => {
+    const args = await argsFor({
+      ...testGroup,
+      containerConfig: { noSecretEnv: true },
+    });
+    const secret = args.filter((a) =>
+      /^(GITHUB_TOKEN|GH_TOKEN|SERPER_API_KEY|PARALLEL_API_KEY)=/.test(a),
+    );
+    expect(secret).toEqual([]);
   });
 });

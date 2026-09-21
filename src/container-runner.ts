@@ -268,6 +268,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   model: string = CLAUDE_MODEL,
+  noSecretEnv = false,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -316,22 +317,26 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass Parallel AI API key directly to container if available
-  if (process.env.PARALLEL_API_KEY) {
-    args.push('-e', `PARALLEL_API_KEY=${process.env.PARALLEL_API_KEY}`);
-  }
+  // Host secrets passed as env. A group with containerConfig.noSecretEnv gets
+  // none of them (e.g. the medical group must hold no GitHub credentials).
+  if (!noSecretEnv) {
+    // Pass Parallel AI API key directly to container if available
+    if (process.env.PARALLEL_API_KEY) {
+      args.push('-e', `PARALLEL_API_KEY=${process.env.PARALLEL_API_KEY}`);
+    }
 
-  // Pass Serper.dev API key for shopping price lookups
-  const serperSecrets = readEnvFile(['SERPER_API_KEY']);
-  if (serperSecrets.SERPER_API_KEY) {
-    args.push('-e', `SERPER_API_KEY=${serperSecrets.SERPER_API_KEY}`);
-  }
+    // Pass Serper.dev API key for shopping price lookups
+    const serperSecrets = readEnvFile(['SERPER_API_KEY']);
+    if (serperSecrets.SERPER_API_KEY) {
+      args.push('-e', `SERPER_API_KEY=${serperSecrets.SERPER_API_KEY}`);
+    }
 
-  // Pass GitHub token for git push and gh CLI (PR creation)
-  const ghSecrets = readEnvFile(['GITHUB_TOKEN']);
-  if (ghSecrets.GITHUB_TOKEN) {
-    args.push('-e', `GITHUB_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
-    args.push('-e', `GH_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
+    // Pass GitHub token for git push and gh CLI (PR creation)
+    const ghSecrets = readEnvFile(['GITHUB_TOKEN']);
+    if (ghSecrets.GITHUB_TOKEN) {
+      args.push('-e', `GITHUB_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
+      args.push('-e', `GH_TOKEN=${ghSecrets.GITHUB_TOKEN}`);
+    }
   }
 
   // Runtime-specific args for host gateway resolution
@@ -378,6 +383,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     group.containerConfig?.model || CLAUDE_MODEL,
+    group.containerConfig?.noSecretEnv === true,
   );
 
   logger.debug(

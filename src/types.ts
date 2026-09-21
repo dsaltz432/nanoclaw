@@ -31,6 +31,10 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   noGmailMount?: boolean; // Prevent Gmail credentials from being mounted
+  // Withhold every host secret passed as env (GITHUB_TOKEN/GH_TOKEN,
+  // SERPER_API_KEY, PARALLEL_API_KEY). For groups that must hold no GitHub
+  // credentials — e.g. the read-only medical ingest proposer.
+  noSecretEnv?: boolean;
   // Model for this group's agent: an alias ("opus", "sonnet", "haiku") that
   // resolves to the current model of that tier, or an exact id. Overrides the
   // CLAUDE_MODEL default from .env; unset on both means the SDK's default.
