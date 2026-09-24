@@ -23,6 +23,7 @@ import ticketsRouter from "./routes/tickets.js";
 import shoppingRouter from "./routes/shopping.js";
 import scheduledTasksRouter from "./routes/scheduled-tasks.js";
 import fantasyRouter from "./routes/fantasy.js";
+import peopleRouter from "./routes/people.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.DASHBOARD_PORT || "3100", 10);
@@ -71,6 +72,7 @@ app.use(garminRouter);
 app.use(shoppingRouter);
 app.use(scheduledTasksRouter);
 app.use(fantasyRouter);
+app.use(peopleRouter);
 
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {

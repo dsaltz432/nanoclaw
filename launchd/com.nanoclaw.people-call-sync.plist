@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.people-call-sync</string>
+    <!-- Nightly: ingest new phone call-log backups (Drive `Call-Backups`) into the people
+         group's contacts.db. Host-only on purpose — a call log names everyone, so it never
+         goes through an agent container. See scripts/people-call-sync.py.
+
+         Same spawn-time rule as spotify-cleanup: nothing launchd touches at spawn may live
+         under ~/Documents (mid-session load → exit 78). So: inline /bin/bash -c, a venv
+         under ~/.local, and launchd logs under ~/.local/share/nanoclaw/logs. That log is
+         also the "new calls since last ingest" record, and outside the repo on purpose:
+         the main group mounts the repo read-only. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "{{HOME}}/.local/share/nanoclaw/people-call-sync-venv/bin/python" "{{PROJECT_ROOT}}/scripts/people-call-sync.py"</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+    <!-- The phone's scheduled backup runs at 03:30 ET. 04:15 picks it up; 07:00 catches a
+         night the Mac slept through (launchd also runs a missed time on wake). -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>4</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/people-call-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/people-call-sync.error.log</string>
+</dict>
+</plist>

@@ -132,6 +132,16 @@ const JOBS: JobDescriptor[] = [
     logPath: homeLog("ff-daily.log"),
     errorLogPath: homeLog("ff-daily.error.log"),
   },
+  {
+    key: "people-call-sync",
+    label: "People: call-log sync",
+    launchdLabel: "com.nanoclaw.people-call-sync",
+    schedule: "Daily 4:15 AM + 7:00 AM",
+    // The script's own output: one line per backup ingested, plus one per
+    // new call (person, time, length). Untracked numbers are only counted.
+    logPath: homeLog("people-call-sync.log"),
+    errorLogPath: homeLog("people-call-sync.error.log"),
+  },
 ];
 
 function findJob(key: string): JobDescriptor | undefined {

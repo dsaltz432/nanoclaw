@@ -22,12 +22,13 @@ export default function AdminPage() {
     <div className="p-4 sm:p-8">
       <h2 className="mb-6 text-lg font-semibold text-gray-100">Admin</h2>
 
-      <div className="mb-6 flex gap-1 rounded-lg bg-gray-900 p-1 w-fit">
+      {/* One scrollable row on phones rather than wrapping or clipping tabs. */}
+      <div className="mb-6 flex w-fit max-w-full gap-1 overflow-x-auto rounded-lg bg-gray-900 p-1">
         {tabs.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActive(tab.key)}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors sm:px-4 ${
               active === tab.key
                 ? "bg-gray-800 text-gray-100"
                 : "text-gray-400 hover:text-gray-300"

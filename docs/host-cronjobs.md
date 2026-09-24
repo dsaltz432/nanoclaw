@@ -224,6 +224,7 @@ After editing a **template**, you must re-render and reload the installed copy
 | `ff-news` | Interval | every 900s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) |
 | `ff-live` | Interval | every 7200s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
 | `ff-daily` | Calendar | 6:40 AM | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session |
+| `people-call-sync` | Calendar | 4:15 AM + 7:00 AM | [people.md](people.md) — installable mid-session; host-only because the backups name everyone |
 | `ff-claims` | Interval | every 900s | [fantasy-football.md](fantasy-football.md#scheduled-jobs) — installable mid-session; calls headless `claude -p` with no tools |
 
 The dashboard's **Admin → Host Tasks** page lists these jobs from the

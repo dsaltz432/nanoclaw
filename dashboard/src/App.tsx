@@ -12,6 +12,7 @@ import HealthPage from "./pages/HealthPage";
 import TicketsPage from "./pages/TicketsPage";
 import ShoppingPage from "./pages/ShoppingPage";
 import FantasyPage from "./pages/FantasyPage";
+import PeoplePage from "./pages/PeoplePage";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="shopping" element={<ShoppingPage />} />
           <Route path="fantasy" element={<FantasyPage />} />
+          <Route path="people" element={<PeoplePage />} />
         </Route>
       </Routes>
     </BrowserRouter>
