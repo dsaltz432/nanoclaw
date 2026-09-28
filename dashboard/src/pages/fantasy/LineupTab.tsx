@@ -881,9 +881,8 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
   };
   const streams = Object.entries(data.streaming);
   const openStreams = allStreams ? streams : streams.filter(([pos, rows]) => weak(pos, rows));
-  // The toggle names the positions it reveals or hides ("Show QB, DEF"): a
-  // bare count read as a number of players, and each position opens up to
-  // four. No toggle when every position is already a weak spot on show.
+  // The toggle reveals or hides the positions that are not a weak spot
+  // ("Show options"). No toggle when every position is already on show.
   const extra = streams.filter(([pos, rows]) => !weak(pos, rows)).map(([pos]) => pos);
   const streamToggle =
     extra.length > 0 ? (
@@ -892,7 +891,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
         onClick={() => setAllStreams((v) => !v)}
         className="ff-inline ff-hit whitespace-nowrap text-xs text-indigo-400 hover:text-indigo-300"
       >
-        {allStreams ? "Hide" : "Show"} {extra.join(", ")}
+        {allStreams ? "Hide options" : "Show options"}
       </button>
     ) : undefined;
 

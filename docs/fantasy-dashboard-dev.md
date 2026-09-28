@@ -51,7 +51,8 @@ new number, add it to the payload.
    (rename or remove a field the UI reads), restart the service, or the UI
    will get the old shape for up to an hour.
 3. **The warmer** (`warm()` in `routes/fantasy.ts`) re-runs every tab's default
-   view every 10 min, and your own players' dossiers every 30. Its params must
+   view every 10 min, and every 30 the dossier of each player those cached
+   views contain (`warmDossiers`, batched through `ff.cli api dossiers`). Its params must
    match exactly what the tab requests by default (cache keys are sorted, so
    order does not matter, values do). If you change a tab's default request
    (a new default filter, limit or scope), update the warm list, or that tab
@@ -150,5 +151,10 @@ Useful habits:
   45 s, so sweep one league per call. `HoverInfo` opens on an Enter keydown on
   its `span[role=button]`, and the popup is the last child of `body`.
 - Do not click controls that write (mark read, refresh jobs) while testing.
-- After a server restart, wait for the warmer (~20 s, dossiers ~90 s) before
-  timing anything.
+- After a server restart, wait for the warmer before timing anything: the tabs
+  take ~30-60 s, then the dossier sweep (all three leagues) another ~1 min.
+  It ends with one line in `dashboard/logs/stdout.log` ("[fantasy] dossier
+  sweep: redraft 583/583, … in 52.3 s (28 ms/player)"); a sweep that ran slow
+  (a batch over 250 ms a player, or past 4 min) stops itself and says why in
+  `logs/stderr.log`. Tens of ms a player is normal; more means a per-player
+  query in the dossier regressed (profile `ff.cli api dossiers`).

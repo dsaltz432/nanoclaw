@@ -68,12 +68,20 @@ type Drop = {
   injury_status: string | null;
   projected: number | null;
   ros_points?: number | null;
-  /** Out / IR / Doubtful: projects near zero because he is hurt, not because he is weak. */
+  /** Out / IR / Doubtful designation. Context only: the list is ordered on rest-of-season value. */
   hurt?: boolean;
+  /** Why he is spare, from the payload (ROS depth, the best free agent at his position, market in dynasty). */
+  why?: string;
+  ros_rank?: { median: number; best: number; worst: number } | null;
+  ros_rank_delta?: number | null;
   overlay: Overlay;
   drop_talk: number;
   hold_talk: number;
 };
+/** A bench player kept off the drop list because he makes the best rest-of-season lineup. */
+type DropHold = { player_id: string; name: string; why: string };
+/** A spare who would start for a rival: a trade chip, not a drop (see Trades). */
+type DropTrade = DropHold & { rivals: number };
 type Stash = {
   kind: "contingent" | "stash_talk";
   player_id?: string;
@@ -145,6 +153,8 @@ type Data = {
   claim_wednesday: Move[];
   board: Cand[];
   drops: Drop[];
+  drop_holds?: DropHold[];
+  drop_trade?: DropTrade[];
   stash: Stash[];
   crowd: Crowd[];
   market?: Market;
@@ -598,11 +608,6 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
       ) : (
         <Card
           title="Board"
-          info={
-            weekly
-              ? "Available players, closest to your lineup first, projected under this league's scoring."
-              : "Available players by rest-of-season points, with the rest-of-season consensus rank."
-          }
           subtitle={
             (sharedDrop || sharedDisplaces) && (
               <>
@@ -755,17 +760,24 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {data.drops.length === 0 ? (
-          <QuietLine title="Drop candidates">No bench players to spare.</QuietLine>
+          <QuietLine title="Drop candidates">
+            No bench players to spare.
+            {(data.drop_holds ?? []).length > 0 && ` Held on value: ${(data.drop_holds ?? []).map((h) => h.name).join(", ")}.`}
+            {(data.drop_trade ?? []).length > 0 && ` Trade instead: ${(data.drop_trade ?? []).map((t) => t.name).join(", ")} (see Trades).`}
+          </QuietLine>
         ) : (
-          <Card title="Drop candidates" info="Bench players the lineup can spare, weakest first.">
+          <Card title="Drop candidates">
             <Note>
-              Drop talk from the sites is called out; hold or stash talk argues the other way. A player who is Out or
-              Doubtful projects near zero because he is hurt, not because he is weak, so he is listed after the healthy
-              ones.
+              Bench players the roster can spare on rest-of-season value, cheapest first: the ROS points you give up
+              over the best free agent at his position (market value first in dynasty). This week&apos;s projection and a
+              short injury do not put anyone here; a bench player who makes your best rest-of-season lineup is held.
+              A spare who would start for a rival is a trade chip, not a drop: he is under Trade instead. Drop talk
+              from the sites is called out; hold or stash talk argues the other way.
             </Note>
             <ul className="space-y-2">
               {data.drops.map((d) => {
-                const pts = weekly ? d.projected : d.ros_points ?? null;
+                const pts = d.ros_points ?? null;
+                const rk = d.ros_rank ?? d.overlay?.rank ?? null;
                 return (
                   <li key={d.player_id} className="text-sm">
                     <div className="flex items-baseline gap-2">
@@ -774,29 +786,42 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
                           <PlayerName id={d.player_id} name={d.name} pos={d.position} team={d.team} injury={d.injury_status} onPlayer={onPlayer} />
                         </span>
                         <span className="whitespace-nowrap text-xs tabular-nums text-gray-500">
-                          {pts != null ? pts.toFixed(1) : "—"}
-                          {!weekly && pts != null && " ROS"}
+                          {pts != null ? `${pts.toFixed(0)} ROS` : "—"}
                         </span>
-                        {d.hurt && <Badge tone="neutral">hurt, not weak</Badge>}
                         {d.drop_talk > 0 && <Badge tone="critical">drop talk{d.drop_talk > 1 ? ` ×${d.drop_talk}` : ""}</Badge>}
                         {d.hold_talk > 0 && <Badge tone="info">hold/stash talk</Badge>}
                       </div>
                       <span className="shrink-0 text-xs">
-                        <RankText pos={d.position} median={d.overlay?.rank?.median} best={d.overlay?.rank?.best} worst={d.overlay?.rank?.worst} delta={d.overlay?.delta} />
+                        <RankText pos={d.position} median={rk?.median} best={rk?.best} worst={rk?.worst} delta={d.ros_rank ? d.ros_rank_delta : d.overlay?.delta} />
                       </span>
                     </div>
+                    {d.why && <div className="text-xs text-gray-500">{d.why}</div>}
                     <NoteLine note={d.overlay?.note ?? null} />
                   </li>
                 );
               })}
             </ul>
+            {((data.drop_trade ?? []).length > 0 || (data.drop_holds ?? []).length > 0) && (
+              <div className="mt-2 space-y-0.5 text-xs text-gray-500">
+                {(data.drop_trade ?? []).map((t) => (
+                  <div key={`t-${t.player_id}`}>
+                    Trade instead: <PlayerName id={t.player_id} name={t.name} onPlayer={onPlayer} /> — {t.why}
+                  </div>
+                ))}
+                {(data.drop_holds ?? []).map((h) => (
+                  <div key={h.player_id}>
+                    Held: <PlayerName id={h.player_id} name={h.name} onPlayer={onPlayer} /> — {h.why}
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
         )}
 
         {data.stash.length === 0 ? (
           <QuietLine title="Stash">Nothing to stash right now.</QuietLine>
         ) : (
-          <Card title="Stash" info="Handcuffs behind a hurt starter, and free agents the sites say stash.">
+          <Card title="Stash">
             <ul className="space-y-2">
               {stash.map((s, i) => (
                 <li key={`${s.kind}-${s.player_id ?? i}`} className="text-sm">

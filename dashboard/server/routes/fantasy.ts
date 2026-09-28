@@ -77,14 +77,23 @@ function ffAvailable(): boolean {
   return fs.existsSync(path.join(FF_ROOT, "ff", "cli.py"));
 }
 
-function runFf(endpoint: string, params: Record<string, string>): Promise<unknown> {
+/**
+ * `background` runs it under `nice`: the dossier warmer's batches are seconds
+ * of CPU on a two-core machine, and a click's own Python run must not queue
+ * behind them. `timeoutMs` overrides TIMEOUT_MS.
+ */
+function runFf(
+  endpoint: string,
+  params: Record<string, string>,
+  { background = false, timeoutMs = TIMEOUT_MS }: { background?: boolean; timeoutMs?: number } = {},
+): Promise<unknown> {
   const args = ["-m", "ff.cli", "api", endpoint];
   for (const [k, v] of Object.entries(params)) args.push(`${k}=${v}`);
   return new Promise((resolve, reject) => {
     execFile(
-      PYTHON,
-      args,
-      { cwd: FF_ROOT, timeout: TIMEOUT_MS, maxBuffer: MAX_BUFFER },
+      background ? "nice" : PYTHON,
+      background ? ["-n", "10", PYTHON, ...args] : args,
+      { cwd: FF_ROOT, timeout: timeoutMs, maxBuffer: MAX_BUFFER },
       (err, stdout, stderr) => {
         // A non-zero exit still emits a JSON body for known errors, so parse first
         // and only fall back to the process error if there is nothing to read.
@@ -123,6 +132,8 @@ const ALLOWED_PARAMS = new Set([
   "include",
   // Rankings: pin the consensus board to an earlier snapshot date.
   "snapshot",
+  // Rankings: a later week's projections (the week picker).
+  "week",
 ]);
 
 /**
@@ -272,39 +283,137 @@ async function warm() {
     await fetchFresh(ep, params, key, ttl).catch(() => {});
   }
 }
-setTimeout(() => void warm(), 5_000);
+// The dossier sweep reads the tab payloads this fills, so it follows the first run.
+setTimeout(() => void warm().then(warmDossiers).catch(() => {}), 5_000);
 setInterval(() => void warm(), WARM_EVERY_MS).unref();
 
 /**
- * Your own players' dossiers, the names you open most, warmed every 30 min.
- * A phone has no hover to prefetch on (PlayerName warms on hover on desktop),
- * so a tap on one of them otherwise waits ~0.5-1s. The ids come from the
- * warmed Lineup payloads; `serve` keeps each for up to MAX_STALE_MS.
+ * The dossier of every player a tab shows, so a click on any name opens the
+ * popup at once, phone taps included (a phone has no hover to prefetch on).
+ *
+ * A cold dossier is its own Python process: ~0.35-0.5 s on this machine when
+ * it is quiet and 1-3 s while the news, claims and warm jobs are busy. So every
+ * 30 min this collects, per league, every `player_id` in the cached default
+ * views (Lineup first, so your own players go first; then Today, Moves, Trade
+ * intel, Trades, which carries every rostered player, Rankings and Reading),
+ * ~350-700 players a league, and computes them in `dossiers` batches: one
+ * process per DOSSIER_BATCH players, ~30-40 ms a player, so a full sweep is
+ * ~1 min of niced CPU. Each lands under the same key a click asks for, and
+ * `serve` answers from it for up to MAX_STALE_MS (the sweep keeps every entry
+ * under ~35 min old).
  */
 const WARM_DOSSIERS_EVERY_MS = 30 * 60_000;
+const DOSSIER_BATCH = 150;
+/** Cached payloads whose players get their dossiers warmed; Lineup first. */
+const DOSSIER_SOURCES = ["lineup", "today", "moves", "trade-intel", "trades", "consensus", "reading"];
+/** An entry a click or hover refreshed this recently is left alone. */
+const DOSSIER_FRESH_MS = 10 * 60_000;
+/** A dossier not refreshed in this long (no tab shows him, nobody opened him) is dropped. */
+const DOSSIER_EVICT_MS = 6 * 60 * 60_000;
+/**
+ * Guards, so a regression in the Python cannot turn the sweep into minutes of
+ * CPU on this two-core machine (a slow per-player query once made it ~0.55 s a
+ * player and the sweep ran for 8+ min). A full sweep is ~1-2 min: past the
+ * budget no new batch starts; a batch past its timeout is killed; and a batch
+ * averaging more than DOSSIER_SLOW_MS_PER_PLAYER stops the sweep, since
+ * batching has then stopped paying and the hover prefetch covers clicks. Each
+ * sweep logs one line with its size and speed (logs/stdout.log; a stopped one
+ * to logs/stderr.log), so a slowdown shows before it hurts.
+ */
+const DOSSIER_SWEEP_BUDGET_MS = 4 * 60_000;
+const DOSSIER_BATCH_TIMEOUT_MS = 60_000;
+const DOSSIER_SLOW_MS_PER_PLAYER = 250;
 
-async function warmDossiers() {
-  // The dossier is per league (its ranking scopes and trade-value format), so
-  // each league's roster is warmed under that league.
-  const jobs: { league: string; player: string }[] = [];
-  for (const [key, entry] of cache) {
-    if (!key.startsWith("lineup?")) continue;
-    const league = new URLSearchParams(key.slice("lineup?".length)).get("league");
-    if (!league) continue;
-    const v = entry.value as Record<string, { player_id?: string }[] | undefined>;
-    for (const list of [v.starters, v.bench, v.reserve, v.taxi])
-      for (const r of list ?? []) if (r.player_id) jobs.push({ league, player: r.player_id });
-  }
-  for (const params of jobs) {
-    const key = cacheKey("dossier", params);
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < WARM_DOSSIERS_EVERY_MS) continue;
-    await fetchFresh("dossier", params, key, TTL_MS.dossier ?? 60_000).catch(() => {});
+/** Every `player_id` string anywhere in a payload. */
+function collectPlayerIds(v: unknown, out: Set<string>) {
+  if (Array.isArray(v)) {
+    for (const x of v) collectPlayerIds(x, out);
+  } else if (v && typeof v === "object") {
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "player_id" && (typeof x === "string" || typeof x === "number") && x !== "") out.add(String(x));
+      else if (x && typeof x === "object") collectPlayerIds(x, out);
+    }
   }
 }
-// After the first warm() has filled the Lineup payloads.
-setTimeout(() => void warmDossiers(), 90_000);
-setInterval(() => void warmDossiers(), WARM_DOSSIERS_EVERY_MS).unref();
+
+let dossierSweep = false;
+
+async function warmDossiers() {
+  if (dossierSweep || !ffAvailable()) return;
+  dossierSweep = true;
+  try {
+    const now = Date.now();
+    for (const [key, entry] of cache)
+      if (key.startsWith("dossier?") && now - entry.at > DOSSIER_EVICT_MS) cache.delete(key);
+    // The dossier is per league (its ranking scopes, trade-value format and
+    // scoring), so each league's players are warmed under that league.
+    const byLeague = new Map<string, Set<string>>();
+    for (const ep of DOSSIER_SOURCES)
+      for (const [key, entry] of cache) {
+        if (!key.startsWith(`${ep}?`)) continue;
+        const league = new URLSearchParams(key.slice(ep.length + 1)).get("league");
+        if (!league) continue;
+        if (!byLeague.has(league)) byLeague.set(league, new Set());
+        collectPlayerIds(entry.value, byLeague.get(league)!);
+      }
+    const sweepStart = Date.now();
+    const done: string[] = [];
+    let warmed = 0;
+    let stopped = "";
+    sweep: for (const [league, ids] of byLeague) {
+      const todo = [...ids].filter((player) => {
+        const hit = cache.get(cacheKey("dossier", { league, player }));
+        return !hit || Date.now() - hit.at > DOSSIER_FRESH_MS;
+      });
+      let n = 0;
+      for (let i = 0; i < todo.length; i += DOSSIER_BATCH) {
+        if (Date.now() - sweepStart > DOSSIER_SWEEP_BUDGET_MS) {
+          stopped = `over the ${DOSSIER_SWEEP_BUDGET_MS / 60_000} min budget at ${league}`;
+          warmed += n;
+          done.push(`${league} ${n}/${todo.length}`);
+          break sweep;
+        }
+        const batch = todo.slice(i, i + DOSSIER_BATCH);
+        const started = Date.now();
+        const out = (await runFf(
+          "dossiers",
+          { league, players: batch.join(",") },
+          { background: true, timeoutMs: DOSSIER_BATCH_TIMEOUT_MS },
+        ).catch((e: Error) => {
+          stopped = `${league} batch failed: ${e.message.slice(0, 120)}`;
+          return null;
+        })) as { dossiers?: Record<string, { error?: string }> } | null;
+        for (const [player, value] of Object.entries(out?.dossiers ?? {})) {
+          if (!value || value.error) continue;
+          const key = cacheKey("dossier", { league, player });
+          // A click refreshed it while this batch ran: that copy is newer.
+          if ((cache.get(key)?.at ?? 0) > started) continue;
+          cache.set(key, { at: Date.now(), value });
+          n++;
+        }
+        const perPlayer = (Date.now() - started) / batch.length;
+        // A short tail batch is mostly the ~1 s process start: judge full ones.
+        if (!out || (batch.length >= 50 && perPlayer > DOSSIER_SLOW_MS_PER_PLAYER)) {
+          stopped ||= `${league} batch at ${Math.round(perPlayer)} ms/player (limit ${DOSSIER_SLOW_MS_PER_PLAYER})`;
+          warmed += n;
+          done.push(`${league} ${n}/${todo.length}`);
+          break sweep;
+        }
+      }
+      warmed += n;
+      done.push(`${league} ${n}/${todo.length}`);
+    }
+    const secs = (Date.now() - sweepStart) / 1000;
+    const line = `[fantasy] dossier sweep: ${done.join(", ") || "nothing to warm"} in ${secs.toFixed(1)} s${
+      warmed ? ` (${Math.round((secs * 1000) / warmed)} ms/player)` : ""
+    }`;
+    if (stopped) console.warn(`${line}; STOPPED: ${stopped}`);
+    else console.log(line);
+  } finally {
+    dossierSweep = false;
+  }
+}
+setInterval(() => void warmDossiers().catch(() => {}), WARM_DOSSIERS_EVERY_MS).unref();
 
 const router = Router();
 

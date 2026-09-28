@@ -227,33 +227,34 @@ type LeagueRow = Data["leagues"][string];
 
 /**
  * Who has him in the league being viewed, and his number this week there:
- * "Owned by Lazria · proj 16.2". Once his game has kicked off, what he scored.
- * It replaced a row per league: the other two leagues are a picker away.
+ * "Owned by Lazria  wk 3 proj 16.2". Once his game has kicked off, what he
+ * scored. Items of the header's one meta line. It replaced a row per league:
+ * the other two leagues are a picker away.
  */
 function HereLine({ lg, week }: { lg: LeagueRow; week: number }) {
   const sources = Object.entries(lg.proj);
   const main = lg.proj.rotowire ?? sources[0]?.[1];
   return (
-    <p className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-xs text-gray-400">
+    <>
       {lg.status === "mine" ? (
         <Badge tone="good">Yours</Badge>
       ) : lg.status === "free_agent" ? (
         <Badge tone="info">Free agent</Badge>
       ) : (
-        <span>
+        <span className="text-gray-400">
           Owned by <span className="text-gray-200">{lg.owner ?? "a rival"}</span>
         </span>
       )}
       {lg.locked && lg.actual_points != null ? (
-        <span className="tabular-nums" title="his game has kicked off; points so far in this league">
+        <span className="tabular-nums text-gray-400">
           wk {week} played <span className="text-gray-100">{lg.actual_points.toFixed(1)}</span>
         </span>
       ) : main != null ? (
-        <HoverInfo info={sources.map(([s, v]) => `${projLabel(s)} ${v.toFixed(1)}`).join("\n")} className="tabular-nums">
+        <HoverInfo info={sources.map(([s, v]) => `${projLabel(s)} ${v.toFixed(1)}`).join("\n")} className="tabular-nums text-gray-400">
           wk {week} proj <span className="text-gray-100">{main.toFixed(1)}</span>
         </HoverInfo>
       ) : null}
-    </p>
+    </>
   );
 }
 
@@ -378,13 +379,13 @@ function GamesTable({ games, team, pos }: { games: GameRow[]; team: string | nul
       <table className="w-full max-w-lg text-xs tabular-nums">
         <thead>
           <tr className="text-[11px] uppercase tracking-wide text-gray-600">
-            <th className="w-8 py-1 pr-2 text-left font-medium">Wk</th>
-            <th className="py-1 pr-2 text-left font-medium">Opp</th>
-            <th className="py-1 pr-2 text-right font-medium" title="points in this league's scoring">
+            <th className="w-8 py-1 sm:py-0.5 pr-2 text-left font-medium">Wk</th>
+            <th className="py-1 sm:py-0.5 pr-2 text-left font-medium">Opp</th>
+            <th className="py-1 sm:py-0.5 pr-2 text-right font-medium" title="points in this league's scoring">
               Pts
             </th>
             {cols.map((c) => (
-              <th key={c.label} className={`py-1 pl-2 text-right font-medium ${hide(c)}`} title={c.title}>
+              <th key={c.label} className={`py-1 sm:py-0.5 pl-2 text-right font-medium ${hide(c)}`} title={c.title}>
                 {c.label}
               </th>
             ))}
@@ -398,29 +399,29 @@ function GamesTable({ games, team, pos }: { games: GameRow[]; team: string | nul
                 g.played ? "text-gray-300" : "text-gray-400"
               }`}
             >
-              <td className="py-1 pr-2 text-gray-500">{g.week}</td>
+              <td className="py-1 sm:py-0.5 pr-2 text-gray-500">{g.week}</td>
               {g.bye ? (
-                <td colSpan={cols.length + 2} className="py-1">
+                <td colSpan={cols.length + 2} className="py-1 sm:py-0.5">
                   <Badge tone="warning">BYE</Badge>
                 </td>
               ) : g.played ? (
                 <>
-                  <td className="whitespace-nowrap py-1 pr-2">
+                  <td className="whitespace-nowrap py-1 sm:py-0.5 pr-2">
                     <Opponent g={g} pos={pos} />
                   </td>
-                  <td className="py-1 pr-2 text-right text-gray-100">{g.points != null ? g.points.toFixed(1) : "—"}</td>
+                  <td className="py-1 sm:py-0.5 pr-2 text-right text-gray-100">{g.points != null ? g.points.toFixed(1) : "—"}</td>
                   {cols.map((c) => (
-                    <td key={c.label} className={`whitespace-nowrap py-1 pl-2 text-right ${hide(c)}`}>
+                    <td key={c.label} className={`whitespace-nowrap py-1 sm:py-0.5 pl-2 text-right ${hide(c)}`}>
                       {c.cell(g)}
                     </td>
                   ))}
                 </>
               ) : (
                 <>
-                  <td className="whitespace-nowrap py-1 pr-2">
+                  <td className="whitespace-nowrap py-1 sm:py-0.5 pr-2">
                     <Opponent g={g} pos={pos} />
                   </td>
-                  <td colSpan={cols.length + 1} className="py-1 text-right text-gray-500">
+                  <td colSpan={cols.length + 1} className="py-1 sm:py-0.5 text-right text-gray-500">
                     {fmtDate(g.gameday)}
                     {g.total != null && (
                       <span className="text-gray-400" title={`over/under ${g.total}${g.spread != null ? `; ${team ?? ""} ${spreadText(g.spread)}` : ""}`}>
@@ -436,16 +437,19 @@ function GamesTable({ games, team, pos }: { games: GameRow[]; team: string | nul
           ))}
         </tbody>
       </table>
-      <p className="mt-1 text-[11px] text-gray-500">
-        Opponent: <span className="text-green-400">soft</span> → <span className="text-red-400">tough</span> for{" "}
-        {pos === "DEF" ? "a defense (points defenses score against that offense)" : `${posPlural[pos] ?? pos} (fantasy points allowed)`}
-      </p>
     </section>
   );
 }
 
 /** "−7" favoured by seven, "+2.5" the underdog, "PK" a pick'em. */
 const spreadText = (sp: number) => (sp === 0 ? "PK" : sp > 0 ? `−${sp}` : `+${-sp}`);
+
+/**
+ * Dossiers already opened on this page, by league and player: reopening one
+ * draws it at once from here while the request refreshes it behind. The
+ * server warms everyone the tabs show, so a first open is one quick request.
+ */
+const opened = new Map<string, Data>();
 
 export default function PlayerDossier({
   playerId,
@@ -457,19 +461,34 @@ export default function PlayerDossier({
   league: string;
   onClose: () => void;
 }) {
-  const [data, setData] = useState<Data | null>(null);
+  const memoKey = `${league}|${playerId}`;
+  const [data, setData] = useState<Data | null>(() => opened.get(memoKey) ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [allClaims, setAllClaims] = useState(false);
 
   useEffect(() => {
-    setData(null);
+    let live = true;
+    const seen = opened.get(memoKey) ?? null;
+    setData(seen);
     setErr(null);
     setAllClaims(false);
     fetch(`/api/fantasy/dossier?${new URLSearchParams({ league, player: playerId })}`)
       .then((r) => r.json())
-      .then((d) => (d.error ? setErr(d.error) : setData(d)))
-      .catch((e) => setErr(String(e)));
-  }, [playerId, league]);
+      .then((d) => {
+        if (!live) return;
+        if (d.error) {
+          // A copy already on screen beats an error about refreshing it.
+          if (!seen) setErr(d.error);
+          return;
+        }
+        opened.set(memoKey, d);
+        setData(d);
+      })
+      .catch((e) => live && !seen && setErr(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [playerId, league, memoKey]);
   const here = data?.leagues[league];
 
   useEffect(() => {
@@ -493,31 +512,25 @@ export default function PlayerDossier({
         {/* The title row sticks to the top of the sheet, so "close" is in
             reach however far down the claims you have scrolled. Negative
             margins cancel the sheet's padding so the band runs edge to edge. */}
-        <div className="sticky -top-4 z-10 -mx-4 -mt-4 mb-4 flex items-start gap-3 border-b border-gray-800 bg-gray-950 px-4 pb-3 pt-4 sm:-top-5 sm:-mx-5 sm:-mt-5 sm:px-5 sm:pt-5">
-          <div className="min-w-0 flex-1">
+        {/* Name and every fact about him here on one line on a desktop
+            ("Lamar Jackson  QB · BAL · age 29  Owned by Eyal  wk 3 played
+            23.4"), so the games, rankings and trade value chart fit a laptop
+            screen without scrolling; on a phone the facts wrap under the name. */}
+        <div className="sticky -top-4 z-10 -mx-4 -mt-4 mb-4 flex items-start gap-3 border-b border-gray-800 bg-gray-950 px-4 pb-3 pt-4 sm:-top-5 sm:-mx-5 sm:-mt-5 sm:mb-3 sm:px-5 sm:pb-2.5 sm:pt-4">
+          <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
             {data ? (
               <>
                 <h3 className="text-lg font-semibold text-gray-100">{data.player.full_name}</h3>
-                <p className="text-xs text-gray-500">
-                  {data.player.position}
-                  {data.player.team ? ` · ${data.player.team}` : ""}
-                  {data.player.age != null && ` · age ${data.player.age}`}
-                  {data.player.rookie && (
-                    <>
-                      {" "}
-                      <Badge tone="info" title="rookie: 0 years of experience">
-                        rookie
-                      </Badge>
-                    </>
-                  )}
-                  {data.player.injury_status && (
-                    <>
-                      {" "}
-                      · <Badge tone="warning">{data.player.injury_status}</Badge>
-                    </>
-                  )}
+                <p className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-xs text-gray-500">
+                  <span>
+                    {data.player.position}
+                    {data.player.team ? ` · ${data.player.team}` : ""}
+                    {data.player.age != null && ` · age ${data.player.age}`}
+                  </span>
+                  {data.player.rookie && <Badge tone="info">rookie</Badge>}
+                  {data.player.injury_status && <Badge tone="warning">{data.player.injury_status}</Badge>}
+                  {here && <HereLine lg={here} week={data.week} />}
                 </p>
-                {here && <HereLine lg={here} week={data.week} />}
               </>
             ) : (
               <h3 className="text-lg font-semibold text-gray-500">Player</h3>
@@ -532,7 +545,7 @@ export default function PlayerDossier({
         {data && (
           <SectionProvider name="Player dossier">
             {/* One vertical rhythm for every section, instead of a margin each. */}
-            <div className="space-y-5">
+            <div className="space-y-5 sm:space-y-4">
             {/* ── games ──────────────────────────────────────────────── */}
             {/* His last four weeks and next five in one timeline: what he
                 scored in this league and how much he played, then who is next
@@ -555,7 +568,7 @@ export default function PlayerDossier({
                     .map(([s, r]) => (
                       <div
                         key={s}
-                        className="grid grid-cols-[6.5rem_4.5rem_minmax(0,1fr)] items-baseline gap-x-3 py-1.5 text-xs sm:grid-cols-[7.5rem_5rem_minmax(0,1fr)_auto]"
+                        className="grid grid-cols-[6.5rem_4.5rem_minmax(0,1fr)] items-baseline gap-x-3 py-1.5 text-xs sm:grid-cols-[7.5rem_5rem_minmax(0,1fr)_auto] sm:py-1"
                       >
                         <span className="text-gray-400">{cap(SCOPE_LABEL[s])}</span>
                         <span className="whitespace-nowrap tabular-nums">

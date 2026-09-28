@@ -270,7 +270,7 @@ export function Select({
             aria-label={ariaLabel}
             aria-activedescendant={`${id}-opt-${active}`}
             onKeyDown={onListKey}
-            className="ff-listbox fixed z-50 overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-1 shadow-xl shadow-black/40 focus:outline-none"
+            className="ff-listbox fixed z-[1100] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-1 shadow-xl shadow-black/40 focus:outline-none"
             style={{
               top: pos ? (pos.above ? undefined : pos.top) : -9999,
               bottom: pos?.above ? window.innerHeight - pos.top : undefined,

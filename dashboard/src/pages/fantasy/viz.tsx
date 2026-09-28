@@ -798,6 +798,9 @@ function usePopover({
     "aria-expanded": open,
   };
 
+  // Above the player popup and the swap comparison (both z-[1000]): at z-30
+  // every hover inside them opened underneath, showing the help cursor and
+  // no text.
   const panel = (children: ReactNode) =>
     open &&
     createPortal(
@@ -805,7 +808,7 @@ function usePopover({
         ref={panelRef}
         onMouseEnter={narrow || !interactive ? undefined : enter}
         onMouseLeave={narrow || !interactive ? undefined : leave}
-        className={`fixed z-30 whitespace-normal rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left font-normal shadow-xl ${
+        className={`fixed z-[1100] whitespace-normal rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left font-normal shadow-xl ${
           narrow ? "inset-x-2 bottom-2 max-h-[60dvh] overflow-y-auto ff-sheet" : "max-h-[70vh] overflow-y-auto"
         } ${!interactive && !pinned && !narrow ? "pointer-events-none" : ""}`}
         // Unplaced, it is laid out hidden at its real width, so the height

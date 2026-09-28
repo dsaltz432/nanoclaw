@@ -2,7 +2,6 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import TradeIntel, { type Pick as IntelPick, type PriceSide, type Row as IntelRow } from "./TradeIntel";
 import { Select } from "./Select";
 import { ACTION_TONE, signed, cap } from "./labels";
-import { SectionProvider } from "./method";
 import { PlayerName } from "./NoteLine";
 import {
   Badge,
@@ -11,11 +10,13 @@ import {
   Card,
   ErrorBox,
   FoldToggle,
+  HoverInfo,
   Loading,
   MetaLine,
   NewsPeek,
   Note,
   QuietLine,
+  SubHead,
   Td,
   Th,
   useIsNarrow,
@@ -74,30 +75,6 @@ type Evaluation = {
   notes: string[];
 };
 
-type PosDetail = {
-  required: number;
-  have: number;
-  starting?: number;
-  starter_vor: number;
-  surplus_startable: number;
-  surplus_vor: number;
-  short: number;
-  flex_slots: number;
-  depth_vor: number;
-  next_man_up: string | null;
-  top_starter: string | null;
-  top_starter_vor: number;
-  injury_cost: number;
-  covered: number;
-  strength_pct: number;
-  rank: number;
-  of: number;
-  grade: "hole" | "weak" | "average" | "strong";
-  shape: "empty" | "top-heavy" | "balanced" | "deep";
-  market: "buy-starter" | "buy-depth" | "sell" | "hold";
-  reading: string;
-};
-
 type TradesData = {
   mode: string;
   rosters: Roster[];
@@ -115,49 +92,7 @@ type TradesData = {
     }[];
     note: string;
   };
-  insights: {
-    position: string;
-    rostered: number;
-    startable_slots: number;
-    replacement: number;
-    spare: { player_id: string; name: string; ros_points: number | null; vor: number | null; market_value: number | null }[];
-    spare_market: number;
-  }[];
-  needs: {
-    replacement: Record<string, number>;
-    reason?: string;
-    legend?: { grade: string; means: string }[];
-    rosters: {
-      owner_id: string;
-      owner: string;
-      is_me: boolean;
-      team: {
-        lineup_vor: number;
-        bench_vor: number;
-        holes: string[];
-        rank: number;
-        of: number;
-        strongest?: string;
-        weakest?: string;
-      };
-      positions: Record<string, PosDetail>;
-    }[];
-  };
-  suggestions: {
-    suggestions: {
-      counterparty: string;
-      owner_id: string;
-      i_send: string;
-      i_receive: string;
-      my_surplus_vor: number;
-      their_surplus_vor: number;
-      their_trades: number;
-      their_accept_share: number | null;
-      thin_history: boolean;
-    }[];
-    note: string;
-    volume_warning: string;
-  };
+  opportunities: Opportunities;
 };
 
 type Package = {
@@ -404,7 +339,37 @@ export default function TradesTab({
     [add, scrollToBuilder]
   );
 
-  // Choosing a manager from the surplus card or the accept-share table loads
+  // "price this" on a trade-opportunity lead. A two-way lead is a whole
+  // one-for-one, so it replaces the deal (as loading a found package does);
+  // a one-way lead adds its player to his side, as Trade intel's rows do.
+  const priceLead = useCallback(
+    (giveId: string | null, getId: string | null, ownerId: string | null) => {
+      const find = (pid: string) => {
+        for (const r of data?.rosters ?? []) {
+          const p = r.players.find((x) => x.player_id === pid);
+          if (p) return p;
+        }
+        return undefined;
+      };
+      const g = giveId ? find(giveId) : undefined;
+      const t = getId ? find(getId) : undefined;
+      if (g && t) {
+        setGive([g]);
+        setGet([t]);
+      } else if (g) {
+        add("give", g);
+      } else if (t) {
+        add("get", t);
+      }
+      // A give-only lead names the rival first in line; show his roster
+      // unless the deal is already with somebody else.
+      if (ownerId && (t || !get.length)) setPartnerId(ownerId);
+      scrollToBuilder();
+    },
+    [data, add, get, scrollToBuilder]
+  );
+
+  // Choosing a manager from the opportunities card or the accept-share table loads
   // his roster into the right-hand panel, which sits above both.
   const rostersRef = useRef<HTMLDivElement>(null);
   const loadPartner = useCallback((ownerId: string) => {
@@ -489,9 +454,7 @@ export default function TradesTab({
             />
           </div>
 
-          <SurplusFit data={data} onPartner={loadPartner} onPlayer={onPlayer} />
-
-          <NeedsGrid data={data} />
+          <TradeOpportunities data={data} onPartner={loadPartner} onPlayer={onPlayer} onPrice={priceLead} />
 
           <AcceptShare data={data} onPartner={loadPartner} />
         </>
@@ -887,120 +850,321 @@ function AssetSearch({
   );
 }
 
-/* ── positional needs ───────────────────────────────────────────────── */
-
-const GRADE_TONE: Record<string, string> = {
-  hole: C.critical,
-  weak: C.warning,
-  average: C.ink2,
-  strong: C.s3,
-};
-
-const MARKET_LABEL: Record<string, string> = {
-  "buy-starter": "needs a starter",
-  "buy-depth": "needs a backup",
-  sell: "can sell",
-  hold: "settled",
-};
-
-/**
- * Positional strength, every roster.
+/* ── trade opportunities ────────────────────────────────────────────────
  *
- * One number per cell (startable surplus) cannot tell apart the two rosters it
- * most matters to tell apart: a manager with two elite backs and nobody behind
- * them scores the same zero as one with six replacement-level backs. They are
- * opposite counterparties — the first will not sell a back at any price and is
- * shopping for depth; the second has nothing you want.
- *
- * So each cell carries strength (a rank inside this league, because a constant
- * would be wrong in two of the three) and shape (what an injury to their best
- * player would actually cost the lineup), and states the conclusion: what this
- * manager is in the market for at this position. On a phone the 720px grid
- * becomes one row per manager with a coloured chip per position.
+ * Replaces "Positional strength, every roster" and "Your surplus → who needs
+ * it". Both graded rosters on rest-of-season points above replacement, which
+ * says who is strong, not where a specific bench player of yours walks into a
+ * specific rival's lineup. This compares players: your best spare at a
+ * position against the weakest starting slot a player there could take on
+ * their roster (a TE can take a FLEX, a QB the SUPER_FLEX), on this week's
+ * projection and on the average of the last three games — and the reverse,
+ * their spare against your weakest slot. Every number comes from the payload
+ * (`opportunities`, ff/trades.py); this only formats it.
  */
-type NeedsRoster = TradesData["needs"]["rosters"][number];
 
-function NeedsGrid({ data }: { data: TradesData }) {
+type OppMeasure = "week" | "form";
+
+type OppPlayer = {
+  name: string;
+  pos: string | null;
+  team: string | null;
+  week: number | null;
+  form: number | null;
+  games: number;
+  /** Why he has no number this week: "bye", an injury designation, "no projection". */
+  why: string | null;
+  market_value: number | null;
+};
+
+type OppBar = { slot: string; id: string | null; pts: number };
+
+type DirMeasure = { starter: string | null; slot: string; bar: number; gap: number } | null;
+
+type Direction = {
+  spare: string | null;
+  week?: DirMeasure;
+  form?: DirMeasure;
+  signal: "both" | "week" | "form" | null;
+};
+
+type SlotAvg = { avg: number; games: number } | null;
+
+type OppCell = { give: Direction; get: Direction; absent: string[]; slot_avg: SlotAvg };
+
+type PairMeasure = { mine: number; theirs: number; my_sits: string[]; their_sits: string[] };
+
+type Lead =
+  | {
+      kind: "two-way";
+      owner_id: string;
+      owner: string;
+      give: string;
+      get: string;
+      my_gain: number;
+      their_gain: number;
+      score: number;
+      by_measure: Partial<Record<OppMeasure, PairMeasure>>;
+      market_delta: number | null;
+    }
+  | {
+      kind: "give";
+      player: string;
+      position: string;
+      rivals: { owner_id: string; owner: string; signal: Direction["signal"]; score: number }[];
+      signal: Direction["signal"];
+      score: number;
+      owner: string;
+    }
+  | {
+      kind: "get";
+      owner_id: string;
+      owner: string;
+      position: string;
+      player: string;
+      signal: Direction["signal"];
+      score: number;
+    };
+
+type OppRival = { owner_id: string; owner: string; cells: Record<string, OppCell>; two_way: boolean; signals: number };
+
+type Opportunities = {
+  week: number;
+  n: number;
+  min_gap: number;
+  positions: string[];
+  measures: OppMeasure[];
+  max_games: number;
+  me: {
+    owner_id: string;
+    cells: Record<string, { spare: string | null; bars: Partial<Record<OppMeasure, OppBar | null>>; slot_avg: SlotAvg }>;
+  } | null;
+  rivals: OppRival[];
+  leads: Lead[];
+  leads_total: number;
+  players: Record<string, OppPlayer>;
+  volume_warning?: string;
+  reason?: string;
+};
+
+/** Leads shown before "show more". */
+const LEAD_FOLD = 5;
+/** Rivals a "give" lead names inline before "+N more". */
+const LEAD_RIVALS = 3;
+
+/** Green when both measures agree, a dimmer green when only one does. Only gaps in your favour are coloured. */
+const SIGNAL_CLS: Record<string, string> = {
+  both: "text-green-400",
+  week: "text-green-600",
+  form: "text-green-600",
+};
+
+const f1 = (x: number | null | undefined) => (x == null ? "—" : x.toFixed(1));
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+/** "+2.1 / +4.6": the gap this week, then on form; a measure without a number is "—". */
+function gapPair(d: Direction) {
+  return `${d.week ? signed(d.week.gap) : "—"} / ${d.form ? signed(d.form.gap) : "—"}`;
+}
+
+function TradeOpportunities({
+  data,
+  onPartner,
+  onPlayer,
+  onPrice,
+}: {
+  data: TradesData;
+  onPartner: (ownerId: string) => void;
+  onPlayer?: (id: string) => void;
+  /** Put the players in the builder: both for a two-way lead, one side otherwise. */
+  onPrice: (give: string | null, get: string | null, ownerId: string | null) => void;
+}) {
   const narrow = useIsNarrow();
-  const [openRow, setOpenRow] = useState<string | null>(null);
-  const positions = useMemo(() => {
-    const s = new Set<string>();
-    data.needs.rosters.forEach((r) => Object.keys(r.positions).forEach((p) => s.add(p)));
-    return Array.from(s).sort((a, b) => {
-      const ia = POS_ORDER.indexOf(a);
-      const ib = POS_ORDER.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
-    });
-  }, [data]);
+  const [allLeads, setAllLeads] = useState(false);
+  const [allRivals, setAllRivals] = useState(false);
+  const o = data.opportunities;
+  const title = "Trade opportunities";
+  if (!o || o.reason || !o.me) return <QuietLine title={title}>{o?.reason ?? "Nothing to compare yet."}</QuietLine>;
 
-  const title = "Positional strength, every roster";
-  if (data.needs.reason) return <QuietLine title={title}>{data.needs.reason}</QuietLine>;
-
-  const toggle = (id: string) => setOpenRow(openRow === id ? null : id);
-  const graded = (r: NeedsRoster, p: string) => {
-    const d = r.positions[p];
-    return d && d.grade !== undefined ? d : null;
+  const P = o.players;
+  const games = Math.min(o.n, o.max_games);
+  const formLabel = games > 0 ? `last ${plural(games, "game")}` : "no games yet";
+  const name = (id: string | null | undefined) => (id ? P[id]?.name ?? id : "nobody");
+  /** "21.9 this week · 25.4 avg, 3 games" for one player. */
+  const line = (id: string) => {
+    const p = P[id];
+    if (!p) return id;
+    const wk = p.week != null ? `${f1(p.week)} this week` : `${p.why ?? "no projection"} this week`;
+    const fm = p.form != null ? `${f1(p.form)} avg, ${plural(p.games, "game")}` : "no games yet";
+    return `${p.name} (${p.pos ?? "?"}) — ${wk} · ${fm}`;
   };
-  const Owner = ({ r, open }: { r: NeedsRoster; open: boolean }) => (
-    <>
-      <span className="mr-1 text-gray-700">{open ? "▾" : "▸"}</span>
-      {r.owner}
-      {r.is_me && <span className="ml-1 text-xs text-indigo-400">you</span>}
-    </>
-  );
-  // Rank, not raw points: 571 VOR means nothing without the eleven other
-  // numbers it is being compared to.
-  const lineup = (r: NeedsRoster) => (
-    <>
-      {r.team.rank}
-      <span className="text-gray-700">/{r.team.of}</span>
-    </>
-  );
+  const whoAt = (m: DirMeasure, mine: boolean) =>
+    !m ? "" : m.starter ? `${mine ? "your " : ""}${name(m.starter)} at ${slotName(m.slot)}, ${f1(m.bar)}` : `an empty ${slotName(m.slot)} slot`;
+
+  /** The hover for one direction of one cell: the spare, who he would replace on each measure, the gap. */
+  const dirInfo = (d: Direction, dir: "give" | "get", owner: string, cell: OppCell | null, pos: string) => {
+    if (!d.spare) return "";
+    const lines = [`${dir === "give" ? "Your" : `${owner}'s`} spare: ${line(d.spare)}`];
+    const mine = dir === "get";
+    if (d.week) lines.push(`This week he would start over ${whoAt(d.week, mine)} → ${signed(d.week.gap)}`);
+    if (d.form) lines.push(`On form (${formLabel}) over ${whoAt(d.form, mine)} → ${signed(d.form.gap)}`);
+    const sa = mine ? o.me?.cells[pos]?.slot_avg : cell?.slot_avg;
+    if (sa)
+      lines.push(
+        `${mine ? "Your" : "Their"} ${pos} slot has scored ${f1(sa.avg)} a game (last ${plural(sa.games, "week")})`
+      );
+    if (!mine && cell?.absent.length)
+      lines.push(`Missing this week: ${cell.absent.map((a) => `${name(a)} (${P[a]?.why ?? "out"})`).join(", ")}`);
+    return lines.join("\n");
+  };
+
+  const rivalById = new Map(o.rivals.map((r) => [r.owner_id, r]));
+  const active = o.rivals.filter((r) => r.signals > 0 || r.two_way);
+  const quiet = o.rivals.length - active.length;
+  const rivals = allRivals ? o.rivals : active;
+  const leads = allLeads ? o.leads : o.leads.slice(0, LEAD_FOLD);
 
   return (
-    <Card title={title} info="Who is shopping for what; open a row for the reasoning." secondary>
-      {narrow ? (
-        <ul className="divide-y divide-gray-800/60">
-          {data.needs.rosters.map((r) => {
-            const open = openRow === r.owner_id;
-            return (
-              <li key={r.owner_id} className={r.is_me ? "bg-indigo-500/5" : ""}>
-                <button
-                  type="button"
-                  onClick={() => toggle(r.owner_id)}
-                  aria-expanded={open}
-                  className="block w-full px-1 py-2 text-left"
-                >
-                  <span className="flex items-baseline justify-between gap-2 text-sm">
-                    <span className={`min-w-0 ${r.is_me ? "text-gray-100" : "text-gray-300"}`}>
-                      <Owner r={r} open={open} />
+    <Card
+      title={title}
+      subtitle={`week ${o.week} projection · ${formLabel}`}
+      info="Where your bench beats a rival's weakest starter, and where theirs beats yours. Each gap reads this week / on form: the projection, then the average of the last three games, both in this league's scoring."
+    >
+      {/* ── leads: two-way first, then your spares, then theirs ── */}
+      {o.leads.length === 0 ? (
+        <p className="text-xs text-gray-500">
+          No gap of {o.min_gap} point or more either way: nobody&rsquo;s bench beats a starter, yours or theirs.
+        </p>
+      ) : (
+        <ul className="space-y-2.5">
+          {leads.map((l, i) => (
+            <li key={i} className="flex items-start gap-2 text-sm">
+              <div className="min-w-0 flex-1">
+                <LeadBody
+                  l={l}
+                  o={o}
+                  rivalById={rivalById}
+                  dirInfo={dirInfo}
+                  onPlayer={onPlayer}
+                  formLabel={formLabel}
+                />
+              </div>
+              <PriceBtn
+                onClick={() =>
+                  l.kind === "two-way"
+                    ? onPrice(l.give, l.get, l.owner_id)
+                    : l.kind === "give"
+                      ? onPrice(l.player, null, l.rivals[0]?.owner_id ?? null)
+                      : onPrice(null, l.player, l.owner_id)
+                }
+                title={
+                  l.kind === "two-way"
+                    ? "Load this one-for-one into the builder"
+                    : l.kind === "give"
+                      ? "Put him in “You give” in the builder"
+                      : "Put him in “You get” in the builder"
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+      <FoldToggle
+        total={o.leads.length}
+        shown={leads.length}
+        expanded={allLeads}
+        onToggle={() => setAllLeads((v) => !v)}
+      />
+
+      {/* ── your side: grouped by weakest slot, so a FLEX incumbent that is the
+          bar for RB, WR and TE at once is named once, with each spare beside it ── */}
+      <SubHead className="mt-4 mb-1.5">Your side</SubHead>
+      <ul className="space-y-1">
+        {sideGroups(o).map(({ positions, bw, bf, spares, slotAvg }) => {
+          const one = positions.length === 1 ? positions[0] : null;
+          const at = (b: OppBar) => (b.id ? `${name(b.id)} at ${slotName(b.slot)}, ${f1(b.pts)}` : `empty ${slotName(b.slot)} slot`);
+          const barInfo = [
+            bw ? `This week: ${at(bw)}` : "",
+            bf ? `On form (${formLabel}): ${at(bf)}` : "",
+            ...slotAvg.map(([p, sa]) => `Your ${p} slot has scored ${f1(sa.avg)} a game (last ${plural(sa.games, "week")})`),
+          ]
+            .filter(Boolean)
+            .join("\n");
+          // The slot is named unless it is the row's own position ("QB" on the QB line).
+          const slot = bw && bw.slot !== one ? `${slotLabel(bw.slot)} ` : "";
+          return (
+            <li key={positions.join()} className="flex gap-2 text-xs">
+              <span className="w-[4.5rem] shrink-0 whitespace-nowrap font-medium text-gray-400">{positions.join(", ")}</span>
+              <MetaLine className="min-w-0 flex-1 tabular-nums">
+                <span>
+                  <span className="text-gray-600">weakest slot </span>
+                  <HoverInfo info={barInfo}>
+                    {slot}
+                    {bw?.id ? name(bw.id) : bw ? "empty" : "—"} {bw ? f1(bw.pts) : "—"} /{" "}
+                    {/* On form the weakest starter can be somebody else: name him. */}
+                    {bf && bw && bf.id !== bw.id ? `${bf.id ? name(bf.id) : "empty"} ` : ""}
+                    {bf ? f1(bf.pts) : "—"}
+                  </HoverInfo>
+                </span>
+                {spares.length === 0 ? (
+                  <span className="text-gray-600">no spare</span>
+                ) : (
+                  spares.map(([p, id]) => (
+                    <span key={id}>
+                      <span className="text-gray-600">spare {one ? "" : `${p} `}</span>
+                      <span className="text-xs">
+                        <PlayerName id={id} name={name(id)} onPlayer={onPlayer} />
+                      </span>{" "}
+                      <HoverInfo info={line(id)}>
+                        {f1(P[id]?.week)} / {f1(P[id]?.form)}
+                      </HoverInfo>
                     </span>
-                    <span className="shrink-0 text-xs tabular-nums text-gray-500">lineup {lineup(r)}</span>
-                  </span>
-                  <span className="mt-1 flex flex-wrap gap-1">
-                    {positions.map((p) => {
-                      const d = graded(r, p);
-                      return <PosChip key={p} pos={p} d={d} />;
-                    })}
-                  </span>
-                </button>
-                {open && (
-                  <div className="px-1 pb-3">
-                    <NeedsReading r={r} positions={positions} />
-                  </div>
+                  ))
                 )}
-              </li>
-            );
-          })}
+              </MetaLine>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* ── every rival by position ── */}
+      <SubHead className="mt-4 mb-1.5">By position · this week / on form</SubHead>
+      {active.length === 0 && !allRivals ? (
+        <p className="text-xs text-gray-500">No rival has a gap either way.</p>
+      ) : narrow ? (
+        <ul className="divide-y divide-gray-800/60">
+          {rivals.map((r) => (
+            <li key={r.owner_id} className="py-1.5">
+              <RivalName r={r} onPartner={onPartner} />
+              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
+                {o.positions.flatMap((p) => {
+                  const c = r.cells[p];
+                  if (!c) return [];
+                  return (["give", "get"] as const)
+                    .filter((dir) => c[dir].signal)
+                    .map((dir) => (
+                      <span key={p + dir}>
+                        <span className="text-gray-500">
+                          {p} {dir}{" "}
+                        </span>
+                        <HoverInfo info={dirInfo(c[dir], dir, r.owner, c, p)} className={SIGNAL_CLS[c[dir].signal ?? ""]}>
+                          {gapPair(c[dir])}
+                        </HoverInfo>
+                      </span>
+                    ));
+                })}
+                {r.signals === 0 && <span className="text-gray-600">nothing either way</span>}
+              </div>
+            </li>
+          ))}
         </ul>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse">
+          <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-gray-800">
                 <Th>Manager</Th>
-                <Th className="text-right">Lineup</Th>
-                {positions.map((p) => (
+                {o.positions.map((p) => (
                   <Th key={p} className="text-center">
                     {p}
                   </Th>
@@ -1008,132 +1172,263 @@ function NeedsGrid({ data }: { data: TradesData }) {
               </tr>
             </thead>
             <tbody>
-              {data.needs.rosters.map((r) => {
-                const open = openRow === r.owner_id;
-                return (
-                  <Fragment key={r.owner_id}>
-                    <tr
-                      onClick={() => toggle(r.owner_id)}
-                      className={`cursor-pointer border-b border-gray-800/60 hover:bg-gray-800/30 ${
-                        r.is_me ? "bg-indigo-500/5" : ""
-                      }`}
-                    >
-                      <Td className={r.is_me ? "text-gray-100" : ""}>
-                        <Owner r={r} open={open} />
-                      </Td>
-                      <Td className="whitespace-nowrap text-right text-xs tabular-nums text-gray-500">{lineup(r)}</Td>
-                      {positions.map((p) => {
-                        const d = graded(r, p);
-                        return d ? (
-                          <Td key={p} className="px-1 text-center">
-                            <PosCell d={d} />
-                          </Td>
+              {rivals.map((r) => (
+                <tr key={r.owner_id} className="border-b border-gray-800/60">
+                  <Td className="whitespace-nowrap">
+                    <RivalName r={r} onPartner={onPartner} />
+                  </Td>
+                  {o.positions.map((p) => {
+                    const c = r.cells[p];
+                    const dirs = c ? (["give", "get"] as const).filter((dir) => c[dir].signal) : [];
+                    return (
+                      <Td key={p} className="px-1 text-center text-xs tabular-nums">
+                        {dirs.length === 0 ? (
+                          <span className="text-gray-700">—</span>
                         ) : (
-                          <Td key={p} className="text-center text-gray-700">
-                            —
-                          </Td>
-                        );
-                      })}
-                    </tr>
-                    {open && (
-                      <tr className="border-b border-gray-800/60 bg-gray-950/40">
-                        <td colSpan={positions.length + 2} className="px-4 py-3">
-                          <NeedsReading r={r} positions={positions} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
+                          <span className="inline-flex flex-col items-center leading-snug">
+                            {dirs.map((dir) => (
+                              <span key={dir} className="whitespace-nowrap">
+                                <span className="text-gray-500">{dir} </span>
+                                <HoverInfo
+                                  info={dirInfo(c![dir], dir, r.owner, c!, p)}
+                                  className={SIGNAL_CLS[c![dir].signal ?? ""]}
+                                >
+                                  {gapPair(c![dir])}
+                                </HoverInfo>
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </Td>
+                    );
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-600">
-        {(data.needs.legend ?? []).map((l) => (
-          <span key={l.grade} title={l.means}>
-            <span style={{ color: GRADE_TONE[l.grade] }}>■</span> {l.grade}
-          </span>
-        ))}
-        {!narrow && <span>the second line in each cell is what they are shopping for</span>}
-      </div>
+      {quiet > 0 && (
+        <FoldToggle
+          mode="all"
+          total={o.rivals.length}
+          shown={rivals.length}
+          expanded={allRivals}
+          onToggle={() => setAllRivals((v) => !v)}
+        />
+      )}
 
       <Note>
-        Strength is a rank inside this league, not an absolute: top quarter is strong, bottom quarter weak.
-        Shape comes from re-solving each lineup without its best player at that position, so &ldquo;covered&rdquo;
-        is the share of him the bench would actually replace and a flex that absorbs the loss counts.
-        Replacement level used: {Object.entries(data.needs.replacement)
-          .filter(([p]) => p !== "FB" && p !== "K")
-          .map(([p, v]) => `${p} ${Math.round(v)}`)
-          .join(" · ")}
-        .
+        &ldquo;Give&rdquo; is your best spare at a position — a player neither this week&rsquo;s lineup nor the
+        form lineup starts — against the weakest slot a player there could take on their roster; &ldquo;get&rdquo; is
+        the reverse. Flex and superflex slots count, so a tight end can be measured against a FLEX held by a back.
+        Each lineup is re-solved per measure: this week&rsquo;s projection (Sleeper&rsquo;s, in this league&rsquo;s
+        scoring) and the average of each player&rsquo;s last {o.n} completed games, rescored from the box score. A
+        bye or an injury drops a player from this week&rsquo;s lineup only; players ruled out or parked on IR are
+        left out of both. Green is a gap both measures agree on, dim green one measure. A gap has to average{" "}
+        {o.min_gap} point or more to show.
       </Note>
+      <Note>
+        A two-way lead is a one-for-one that raises both starting lineups on the average of the two measures — the
+        only kind both managers have a reason to accept. They are rare by construction: most of a lineup is
+        zero-sum week to week. Kickers and defences are left out. The trade finder in the builder searches
+        rest-of-season, two-for-two.
+      </Note>
+      {o.volume_warning && <Note>{o.volume_warning}</Note>}
     </Card>
   );
 }
 
-/** The expanded reasoning under a manager: team summary, then one line per position. */
-function NeedsReading({ r, positions }: { r: NeedsRoster; positions: string[] }) {
+const SLOT_NAMES: Record<string, string> = { SUPER_FLEX: "superflex", FLEX: "flex", REC_FLEX: "flex", WRRB_FLEX: "flex" };
+const slotName = (s: string) => SLOT_NAMES[s] ?? s;
+const SLOT_LABELS: Record<string, string> = { SUPER_FLEX: "SUPERFLEX", REC_FLEX: "FLEX", WRRB_FLEX: "FLEX" };
+/** The slot as a lineup label ("FLEX Rashod Bateman"). */
+const slotLabel = (s: string) => SLOT_LABELS[s] ?? s;
+
+const barKey = (b: OppBar | null | undefined) => (b ? `${b.slot}:${b.id ?? ""}:${b.pts}` : "-");
+
+/**
+ * "Your side", one line per distinct weakest slot. In a lineup whose FLEX is
+ * its weakest spot, that one incumbent is the bar for RB, WR and TE alike;
+ * a line per position repeated him three times.
+ */
+function sideGroups(o: Opportunities) {
+  const groups: {
+    positions: string[];
+    bw: OppBar | null;
+    bf: OppBar | null;
+    spares: [string, string][];
+    slotAvg: [string, { avg: number; games: number }][];
+  }[] = [];
+  const byKey = new Map<string, (typeof groups)[number]>();
+  for (const p of o.positions) {
+    const c = o.me?.cells[p];
+    if (!c) continue;
+    const key = `${barKey(c.bars.week)}|${barKey(c.bars.form)}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = { positions: [], bw: c.bars.week ?? null, bf: c.bars.form ?? null, spares: [], slotAvg: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.positions.push(p);
+    if (c.spare) g.spares.push([p, c.spare]);
+    if (c.slot_avg) g.slotAvg.push([p, c.slot_avg]);
+  }
+  return groups;
+}
+
+function RivalName({ r, onPartner }: { r: OppRival; onPartner: (ownerId: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onPartner(r.owner_id)}
+      className="ff-inline ff-hit text-left text-sm text-gray-200 underline decoration-gray-700 underline-offset-2 hover:decoration-indigo-400"
+    >
+      {r.owner}
+    </button>
+  );
+}
+
+/** One lead: who, which players, and the gaps with their breakdown on hover. */
+function LeadBody({
+  l,
+  o,
+  rivalById,
+  dirInfo,
+  onPlayer,
+  formLabel,
+}: {
+  l: Lead;
+  o: Opportunities;
+  rivalById: Map<string, OppRival>;
+  dirInfo: (d: Direction, dir: "give" | "get", owner: string, cell: OppCell | null, pos: string) => string;
+  onPlayer?: (id: string) => void;
+  formLabel: string;
+}) {
+  const P = o.players;
+  const who = (id: string) => (
+    <PlayerName id={id} name={P[id]?.name ?? id} pos={P[id]?.pos} onPlayer={onPlayer} />
+  );
+  if (l.kind === "two-way") {
+    const names = (ids: string[]) => ids.map((x) => P[x]?.name ?? x).join(", ") || "nobody";
+    const side = (mine: boolean) =>
+      (["week", "form"] as const)
+        .filter((k) => l.by_measure[k])
+        .map((k) => {
+          const m = l.by_measure[k]!;
+          const gain = mine ? m.mine : m.theirs;
+          const sits = mine ? m.my_sits : m.their_sits;
+          return `${k === "week" ? "This week" : `On form (${formLabel})`}: ${signed(gain)} · out of the lineup: ${names(sits)}`;
+        })
+        .join("\n");
+    /** "+1.5 / +6.6": the lineup change this week, then on form, as every gap on the card reads. */
+    const pair = (mine: boolean) =>
+      (["week", "form"] as const)
+        .map((k) => {
+          const m = l.by_measure[k];
+          return m ? signed(mine ? m.mine : m.theirs) : "—";
+        })
+        .join(" / ");
+    const inOut = (id: string) => {
+      const p = P[id];
+      return p ? `${p.name}: ${f1(p.week)} this week${p.why ? ` (${p.why})` : ""} · ${f1(p.form)} avg, ${plural(p.games, "game")}` : id;
+    };
+    return (
+      <>
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+          <span className="text-gray-300">{l.owner}</span>
+          <span className="text-xs text-gray-500">send</span>
+          <span>{who(l.give)}</span>
+          <span className="text-xs text-gray-500">for</span>
+          <span>{who(l.get)}</span>
+          <span className="text-[11px] text-gray-500">two-way</span>
+        </div>
+        <MetaLine className="tabular-nums">
+          <HoverInfo info={`Your lineup, ${inOut(l.get)} in\n${side(true)}\nRanked on the average: ${signed(l.my_gain)}`}>
+            you {pair(true)}
+          </HoverInfo>
+          <HoverInfo info={`${l.owner}'s lineup, ${inOut(l.give)} in\n${side(false)}\nRanked on the average: ${signed(l.their_gain)}`}>
+            them {pair(false)}
+          </HoverInfo>
+          {l.market_delta != null && (
+            <HoverInfo info={`Market value: ${P[l.get]?.market_value?.toLocaleString() ?? "—"} in, ${P[l.give]?.market_value?.toLocaleString() ?? "—"} out`}>
+              mkt {l.market_delta > 0 ? "+" : ""}
+              {Math.round(l.market_delta).toLocaleString()}
+            </HoverInfo>
+          )}
+        </MetaLine>
+      </>
+    );
+  }
+  if (l.kind === "give") {
+    const shown = l.rivals.slice(0, LEAD_RIVALS);
+    const rest = l.rivals.slice(LEAD_RIVALS);
+    const cellOf = (ownerId: string) => rivalById.get(ownerId)?.cells[l.position] ?? null;
+    const rival = (x: (typeof l.rivals)[number]) => {
+      const c = cellOf(x.owner_id);
+      return (
+        <HoverInfo key={x.owner_id} info={c ? dirInfo(c.give, "give", x.owner, c, l.position) : ""} className={SIGNAL_CLS[x.signal ?? ""]}>
+          <span className="text-gray-400">{x.owner}</span> {c ? gapPair(c.give) : ""}
+        </HoverInfo>
+      );
+    };
+    return (
+      <>
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+          <span className="text-xs text-gray-500">your spare</span>
+          <span>{who(l.player)}</span>
+          <span className="text-xs text-gray-500">would start for {plural(l.rivals.length, "rival")}</span>
+        </div>
+        <MetaLine className="tabular-nums">
+          {shown.map(rival)}
+          {rest.length > 0 && (
+            <HoverInfo
+              info={rest
+                .map((x) => {
+                  const c = cellOf(x.owner_id);
+                  return `${x.owner} ${c ? gapPair(c.give) : ""}`;
+                })
+                .join("\n")}
+            >
+              +{rest.length} more
+            </HoverInfo>
+          )}
+        </MetaLine>
+      </>
+    );
+  }
+  const c = rivalById.get(l.owner_id)?.cells[l.position] ?? null;
   return (
     <>
-      <div className="mb-2 text-xs text-gray-500">
-        Lineup ranks {r.team.rank} of {r.team.of}
-        {r.team.strongest && ` · strongest ${r.team.strongest}`}
-        {r.team.weakest && ` · weakest ${r.team.weakest}`}
-        {r.team.holes.length > 0 && (
-          <span style={{ color: C.critical }}> · cannot fill {r.team.holes.join(", ")}</span>
-        )}
+      <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+        <span className="text-gray-300">{l.owner}</span>
+        <span className="text-xs text-gray-500">has a spare</span>
+        <span>{who(l.player)}</span>
+        <span className="text-xs text-gray-500">who would start for you</span>
       </div>
-      <ul className="space-y-1">
-        {positions
-          .map((p) => ({ p, d: r.positions[p] }))
-          .filter((x): x is { p: string; d: PosDetail } => x.d != null && x.d.grade !== undefined)
-          .map(({ p, d }) => (
-            <li key={p} className="flex gap-2 text-xs leading-relaxed">
-              <span className="w-8 shrink-0 font-medium" style={{ color: GRADE_TONE[d.grade] }}>
-                {p}
-              </span>
-              <span className="text-gray-400">{d.reading}</span>
-            </li>
-          ))}
-      </ul>
+      {c && (
+        <MetaLine className="tabular-nums">
+          <HoverInfo info={dirInfo(c.get, "get", l.owner, c, l.position)} className={SIGNAL_CLS[c.get.signal ?? ""]}>
+            {gapPair(c.get)}
+          </HoverInfo>
+        </MetaLine>
+      )}
     </>
   );
 }
 
-/** One position on the phone list: its name in the grade's colour, the grade and market in words for a reader. */
-function PosChip({ pos, d }: { pos: string; d: PosDetail | null }) {
-  const tone = d ? GRADE_TONE[d.grade] ?? C.ink2 : C.muted;
-  const words = d ? `${d.short > 0 ? `${d.short} empty` : d.grade}, ${MARKET_LABEL[d.market] ?? d.market}` : "no data";
+/** "Price this" beside a lead, as on Trade intel's rows. */
+function PriceBtn({ onClick, title }: { onClick: () => void; title: string }) {
   return (
-    <span
-      className="inline-flex min-w-[2.25rem] justify-center rounded bg-gray-800/60 px-1.5 py-0.5 text-[11px] font-medium"
-      style={{ color: tone }}
-      title={`${pos}: ${words}`}
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={title}
+      className="ff-inline ff-hit shrink-0 whitespace-nowrap rounded border border-gray-700 px-1.5 py-0.5 text-xs text-gray-400 hover:text-gray-200 sm:text-[11px] pointer-coarse:min-w-[2.5rem]"
     >
-      {pos}
-      <span className="sr-only"> {words}</span>
-    </span>
-  );
-}
-
-function PosCell({ d }: { d: PosDetail }) {
-  const tone = GRADE_TONE[d.grade] ?? C.ink2;
-  const tip =
-    `${d.reading}\n\n` +
-    `rank ${d.rank} of ${d.of} · ${d.have} rostered, ${d.starting ?? 0} starting` +
-    (d.flex_slots ? ` (${d.flex_slots} in flex)` : "") +
-    `\nbench covers ${Math.round(d.covered * 100)}% of ${d.top_starter ?? "the top starter"}` +
-    `\nspare startable: ${d.surplus_startable}` +
-    (d.surplus_startable ? ` worth ${Math.round(d.surplus_vor)} VOR` : "");
-  return (
-    <span className="inline-flex flex-col items-center leading-tight" title={tip}>
-      <span className="text-xs font-medium" style={{ color: tone }}>
-        {d.short > 0 ? `${d.short} empty` : d.grade}
-      </span>
-      <span className="text-[10px] text-gray-600">{MARKET_LABEL[d.market] ?? d.market}</span>
-    </span>
+      Price<span className="hidden sm:inline"> this</span>
+    </button>
   );
 }
 
@@ -1230,7 +1525,6 @@ function TradeBuilder({
   return (
     <Card
       title="Trade builder"
-      info="Price a deal, or pin the pieces you want kept and let it search the league for the rest."
       right={
         !empty && (
           <button
@@ -1580,176 +1874,5 @@ function BuilderSide({
         </ul>
       )}
     </div>
-  );
-}
-
-/* ── surplus → who needs it ─────────────────────────────────────────── */
-
-type Insight = TradesData["insights"][number];
-type Spare = Insight["spare"][number];
-
-/**
- * The one card for "what can I move, and to whom": first the positions where
- * you roster more players than any lineup slot can use (the spare players
- * worth something, with VOR and market), then the managers whose gap your
- * surplus fills.
- *
- * Only a spare above replacement (VOR > 0) is surplus. Below it he is worth
- * nothing to a weekly lineup, so a weekly league drops him; in dynasty he
- * still has a market price, so he is listed after them as bench depth, by
- * market alone.
- */
-function SurplusFit({
-  data,
-  onPartner,
-  onPlayer,
-}: {
-  data: TradesData;
-  onPartner: (ownerId: string) => void;
-  onPlayer?: (id: string) => void;
-}) {
-  const title = "Your surplus → who needs it";
-  const dynasty = data.mode === "dynasty";
-  const insights = (data.insights ?? [])
-    .map((i) => ({
-      i,
-      spare: i.spare.filter((sp) => (sp.vor ?? 0) > 0),
-      depth: dynasty ? i.spare.filter((sp) => (sp.vor ?? 0) <= 0) : [],
-    }))
-    .filter((x) => x.spare.length > 0 || x.depth.length > 0);
-  const { suggestions, note, volume_warning } = data.suggestions;
-  const notes = (
-    <>
-      <Note>
-        A position with one starting slot cannot absorb depth — whatever sits behind the starter scores nothing for you
-        all season. It is the cheapest thing on a roster to convert into something startable, which is why it is the
-        clearest trade action available.
-      </Note>
-      <Note>
-        The position list above covers only positions no flex slot can use. At RB, WR and TE the flex absorbs depth, so
-        surplus there — usually a WR — is flex-eligible depth left over once every WR and flex slot is filled, and it
-        shows up only in the manager matches.
-      </Note>
-      <Note>{note}</Note>
-      <Note>{volume_warning}</Note>
-    </>
-  );
-  const none = "No clean positional mismatch right now.";
-
-  if (insights.length === 0 && suggestions.length === 0) {
-    return (
-      <>
-        <QuietLine title={title}>{none}</QuietLine>
-        <SectionProvider name={title}>{notes}</SectionProvider>
-      </>
-    );
-  }
-
-  return (
-    <Card title={title} info="Startable players you cannot start, matched to managers who cannot fill that slot.">
-      {insights.length > 0 && (
-        <ul className="mb-4 space-y-2">
-          {insights.map(({ i, spare, depth }) => (
-            <li key={i.position}>
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                <Badge tone="warning">{i.position}</Badge>
-                {/* Beside the badge, wrapping inside itself, so the badge is never a line of its own. */}
-                <MetaLine className="min-w-0 flex-1 tabular-nums">
-                  <span className="text-sm text-gray-300">
-                    {i.rostered} rostered for {i.startable_slots} starting {i.startable_slots === 1 ? "slot" : "slots"}
-                  </span>
-                  {i.spare_market > 0 && <span>{i.spare_market.toLocaleString()} market on the bench</span>}
-                </MetaLine>
-              </div>
-              {spare.length > 0 && (
-                <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                  {spare.map((sp) => (
-                    <li key={sp.player_id}>
-                      <MetaLine className="tabular-nums">
-                        <SpareName sp={sp} onPlayer={onPlayer} />
-                        <span className="text-gray-400">VOR {signed(sp.vor ?? 0, 0)}</span>
-                        {sp.market_value != null && <span>{sp.market_value.toLocaleString()}</span>}
-                      </MetaLine>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {depth.length > 0 && (
-                <div className="mt-1">
-                  <MetaLine className="tabular-nums">
-                    <span
-                      className="text-gray-600"
-                      title="Below replacement: no lineup value this season, but a market price in dynasty"
-                    >
-                      bench depth
-                    </span>
-                    {depth.map((sp) => (
-                      <span key={sp.player_id}>
-                        <SpareName sp={sp} onPlayer={onPlayer} />
-                        {sp.market_value != null && <span className="ml-1">{sp.market_value.toLocaleString()}</span>}
-                      </span>
-                    ))}
-                  </MetaLine>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {suggestions.length === 0 ? (
-        <p className="text-xs text-gray-500">{none}</p>
-      ) : (
-        <ul className="grid gap-2 md:grid-cols-2">
-          {suggestions.map((s) => (
-            <li key={s.owner_id} className="rounded border border-gray-800 px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <button
-                  type="button"
-                  onClick={() => onPartner(s.owner_id)}
-                  className="ff-inline ff-hit text-gray-100 underline decoration-gray-700 underline-offset-2 hover:decoration-indigo-400"
-                  title="Load this manager's roster above"
-                >
-                  {s.counterparty}
-                </button>
-                <span className="text-gray-500">— send</span>
-                <Badge tone="neutral">{s.i_send}</Badge>
-                <span className="text-gray-500">for</span>
-                <Badge tone="info">{s.i_receive}</Badge>
-                {s.thin_history && (
-                  <Badge
-                    tone="warning"
-                    title={
-                      `${s.their_trades} completed trade${s.their_trades === 1 ? "" : "s"}` +
-                      (s.their_accept_share != null ? `, ${s.their_accept_share.toFixed(0)}% accepted` : "") +
-                      " — too few to read much into"
-                    }
-                  >
-                    thin
-                  </Badge>
-                )}
-              </div>
-              <MetaLine className="mt-1 tabular-nums">
-                <span>
-                  your spare {s.i_send} VOR {s.my_surplus_vor.toFixed(1)}
-                </span>
-                <span>
-                  their spare {s.i_receive} VOR {s.their_surplus_vor.toFixed(1)}
-                </span>
-              </MetaLine>
-            </li>
-          ))}
-        </ul>
-      )}
-      {notes}
-    </Card>
-  );
-}
-
-/** A spare player's name in a meta line: MetaLine separates element children only. */
-function SpareName({ sp, onPlayer }: { sp: Spare; onPlayer?: (id: string) => void }) {
-  return (
-    <span className="text-xs">
-      <PlayerName id={sp.player_id} name={sp.name} onPlayer={onPlayer} />
-    </span>
   );
 }

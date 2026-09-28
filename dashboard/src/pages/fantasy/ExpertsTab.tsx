@@ -43,12 +43,23 @@ type Row = {
   proj: Record<string, number>;
   age: number | null;
   rookie: boolean;
+  /** A later week only: his team has no game that week. */
+  bye?: boolean;
+  /** A later week only: the mean of `proj`, which that board is ordered by. */
+  proj_avg?: number | null;
 };
 
 type Data = {
   league: string;
   /** The week the projections are for. */
   week: number | null;
+  /** The target week, and every week the picker can show (it, then later weeks with projections). */
+  current_week?: number;
+  weeks?: number[];
+  /** A week after the target one: projections for it, ranks only if a site has published them. */
+  ahead?: boolean;
+  /** The week the weekly ranks are for: `week`, or last week's until a site ranks this one. */
+  rank_week?: number | null;
   scope: string;
   snapshot: string | null;
   /** Every snapshot date for the scope, newest first. */
@@ -98,6 +109,11 @@ const INCLUDE_OPTIONS = [
 const SEG_MIN = "[&_button]:min-w-[2.25rem]";
 /** Phones: a little less side padding, for the row scope shares with include. */
 const SEG_TIGHT = "max-sm:[&_button]:px-2";
+/** The scope group copies Segmented's look, because its week segment is a Select. */
+const SCOPE_ON = "bg-gray-800 text-gray-100 ring-1 ring-inset ring-gray-700";
+const SCOPE_OFF = "text-gray-500 hover:text-gray-300";
+const SCOPE_BTN =
+  "min-w-[2.25rem] whitespace-nowrap rounded px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60 max-sm:px-2";
 
 /**
  * The cross-position list the server ordered All by. It names the list in
@@ -157,6 +173,12 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   // Kept outside `data` so the picker survives a refetch instead of
   // collapsing to an empty list on every change.
   const [snapshots, setSnapshots] = useState<string[]>([]);
+  // The weekly scope's week: null is the target week (the default request,
+  // no week param); a later one shows that week's projections.
+  const [week, setWeek] = useState<number | null>(null);
+  // The picker's weeks, kept outside `data` like the snapshot dates.
+  const [weeks, setWeeks] = useState<number[]>([]);
+  const [curWeek, setCurWeek] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   // Phones only: the secondary filters fold behind one "Filters" link.
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -166,8 +188,15 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   // than dynasty ones), so a pinned date is meaningless once the scope moves.
   const setScope = (s: Scope) => {
     setScopeRaw(s);
+    setWeek(null);
     setSnapshot("");
     setSnapshots([]);
+  };
+  // Picking a week also picks the weekly scope, from ROS or dynasty.
+  const pickWeek = (w: number) => {
+    if (scope !== "weekly") setScope("weekly");
+    setWeek(w === curWeek ? null : w);
+    setSnapshot("");
   };
 
   useEffect(() => {
@@ -175,6 +204,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
     if (posTab) q.set("position", posTab);
     if (include) q.set("include", include);
     if (snapshot) q.set("snapshot", snapshot);
+    if (week != null && scope === "weekly") q.set("week", String(week));
     // On a filter change the previous list stays on screen, dimmed, until
     // this one lands; a response to a superseded request is dropped.
     let live = true;
@@ -190,19 +220,26 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         setErr(null);
         setData(d);
         if (Array.isArray(d.snapshots)) setSnapshots(d.snapshots);
+        if (Array.isArray(d.weeks) && d.weeks.length) setWeeks(d.weeks);
+        if (d.current_week != null) setCurWeek(d.current_week);
       })
       .catch((e) => live && setErr(String(e)))
       .finally(() => live && setBusy(false));
     return () => {
       live = false;
     };
-  }, [league, scope, posTab, include, hours, snapshot]);
+  }, [league, scope, posTab, include, hours, snapshot, week]);
 
   const dynasty = scope === "dynasty";
   const all = posTab === "";
   const snapshotOptions = snapshots.map((d, i) => ({ value: d, label: i === 0 ? `${fmtDate(d)} (latest)` : fmtDate(d) }));
   const snapshotValue = snapshot || snapshots[0] || "";
-  const weekLabel = data?.week != null ? `${narrow ? "Wk" : "Week"} ${data.week}` : "This week";
+  const wk = (w: number) => `${narrow ? "Wk" : "Week"} ${w}`;
+  const weekLabel = data?.week != null ? wk(data.week) : "This week";
+  // A later week: pinning a snapshot means nothing there, and its ranks (if
+  // any site has published them) come from that week's own lists.
+  const ahead = !!data?.ahead;
+  const weekOptions = weeks.map((w) => ({ value: String(w), label: wk(w), hint: w === curWeek ? "This week" : undefined }));
 
   // Non-default filters, echoed as chips beside the folded "Filters" link.
   const chips = [
@@ -222,7 +259,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         onChange={(v) => setHours(Number(v))}
         options={HOURS_OPTIONS}
       />
-      {snapshotOptions.length > 0 && (
+      {snapshotOptions.length > 0 && !ahead && (
         <Select
           aria-label="Snapshot date"
           label="Snapshot"
@@ -238,22 +275,40 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   const controls = (
     <div className="mb-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Segmented
-          aria-label="Ranking scope"
-          value={scope}
-          onChange={(v) => setScope(v as Scope)}
-          className={`${SEG_MIN} ${SEG_TIGHT}`}
-          options={[
-            // Dynasty lists only mean something in the dynasty league, where
-            // they are also the default; the other two leagues never see them.
-            ...(league === "dynasty" ? [{ value: "dynasty", label: cap(SCOPE_LABEL.dynasty) }] : []),
-            // The week by number ("Week 3"), short on a phone ("Wk 3") so scope
-            // and Everyone/Available share one row there even with the dynasty
-            // option. Before the first payload the number is not known yet.
-            { value: "weekly", label: weekLabel },
-            { value: "ros", label: "ROS" },
-          ]}
-        />
+        {/* Scope, Segmented-style, but the week segment is a dropdown of the
+            target week and the later weeks that have projections. The week by
+            number ("Week 3"), short on a phone ("Wk 3") so scope and
+            Everyone/Available share one row there even with the dynasty
+            option. Dynasty lists only mean something in the dynasty league,
+            where they are also the default. */}
+        <div role="group" aria-label="Ranking scope" className="inline-flex items-center gap-0.5 rounded-md border border-gray-800 bg-gray-900 p-0.5">
+          {league === "dynasty" && (
+            <button type="button" aria-pressed={dynasty} onClick={() => setScope("dynasty")} className={`${SCOPE_BTN} ${dynasty ? SCOPE_ON : SCOPE_OFF}`}>
+              {cap(SCOPE_LABEL.dynasty)}
+            </button>
+          )}
+          {weekOptions.length > 1 ? (
+            <Select
+              aria-label="Week"
+              size="sm"
+              // Off the weekly scope nothing is selected, so picking the
+              // shown week still switches to it.
+              value={scope === "weekly" ? String(week ?? curWeek ?? "") : ""}
+              onChange={(v) => pickWeek(Number(v))}
+              options={weekOptions}
+              className={`min-w-[2.25rem] rounded! border-0! font-medium ${
+                scope === "weekly" ? `${SCOPE_ON} bg-gray-800! text-gray-100!` : "bg-transparent! text-gray-500! hover:text-gray-300!"
+              }`}
+            />
+          ) : (
+            <button type="button" aria-pressed={scope === "weekly"} onClick={() => setScope("weekly")} className={`${SCOPE_BTN} ${scope === "weekly" ? SCOPE_ON : SCOPE_OFF}`}>
+              {weekLabel}
+            </button>
+          )}
+          <button type="button" aria-pressed={scope === "ros"} onClick={() => setScope("ros")} className={`${SCOPE_BTN} ${scope === "ros" ? SCOPE_ON : SCOPE_OFF}`}>
+            ROS
+          </button>
+        </div>
         <Segmented
           aria-label="Position"
           value={posTab}
@@ -318,15 +373,22 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   const projTitle = `${data.legend.proj ?? "league-correct projection"}: ${projSources.map(projShort).join(" · ")}`;
   // Only the ranking sites that rank someone on this list, in the fixed order.
   const rankSources = RANK_ORDER.filter((s) => data.rows.some((r) => s in r.ranks));
+  // A later week nobody has ranked yet: the server orders it by projected
+  // points, so the rank columns go rather than stand empty.
+  const byProj = ahead && rankSources.length === 0;
+  const numbered = all && !byProj;
   const rows = expanded ? data.rows : data.rows.slice(0, FOLD);
   const posLabel = all ? "" : `${posTab} · `;
 
   const renderRow = (r: Row) => {
-    const num = all ? overallRank(r, list) : null;
+    const num = numbered ? overallRank(r, list) : null;
     const hasProj = projSources.some((s) => s in r.proj);
     // Phone meta line only; desktop gives each source its own sub-column.
     const projLine = hasProj && projSources.map((s) => r.proj[s]?.toFixed(1) ?? "–").join(" · ");
     const rank = r.rank && <RankText pos={r.pos} median={r.rank.median} best={r.rank.best} worst={r.rank.worst} delta={r.delta} />;
+    // Ordered by projection: the phone's right-hand number is the one it is
+    // ordered by (the sources' mean); on a bye there is none.
+    const avg = r.bye ? "bye" : r.proj_avg != null ? r.proj_avg.toFixed(1) : null;
     const quote = r.claims?.evidence[0];
     return (
       <tr
@@ -340,7 +402,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             line of meta, then the quote. The other cells are desktop columns. */}
         <Td data-label="" className="ff-row-head min-w-[11rem] sm:min-w-[18rem]">
           <div className="flex items-baseline gap-1.5">
-            {all && (
+            {numbered && (
               <span className="w-7 shrink-0 text-[11px] font-medium tabular-nums text-gray-500" title={`${list} rank`}>
                 {num ?? ""}
               </span>
@@ -348,7 +410,11 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             <div className="min-w-0 flex-1">
               <PlayerName id={r.player_id} name={r.name} pos={r.pos} team={r.team} injury={r.injury_status} onPlayer={onPlayer} />
             </div>
-            <span className="shrink-0 text-sm sm:hidden">{rank}</span>
+            {byProj ? (
+              <span className="shrink-0 text-xs tabular-nums text-gray-300 sm:hidden">{avg}</span>
+            ) : (
+              <span className="shrink-0 text-sm sm:hidden">{rank}</span>
+            )}
           </div>
           <MetaLine className="mt-0.5 sm:hidden">
             {dynasty && r.age != null && (
@@ -357,7 +423,8 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
                 {r.rookie ? " (R)" : ""}
               </span>
             )}
-            {projLine && (
+            {r.bye && data.week != null && <span>bye wk {data.week}</span>}
+            {projLine && !r.bye && (
               <span className="whitespace-nowrap tabular-nums">
                 {data.week != null ? `wk ${data.week} proj` : "proj"} {projLine}
               </span>
@@ -392,19 +459,27 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             )}
           </Td>
         )}
-        <Td data-label="Rank" empty={!r.rank} className="hidden text-right sm:table-cell">
-          {rank ?? <span className="text-gray-700">—</span>}
-        </Td>
-        <Td data-label="By source" empty={!Object.keys(r.ranks).length} className="hidden text-xs text-gray-300 sm:table-cell">
-          <SubCols keys={rankSources} width={SUB_RANK_W}>
-            {(s) => r.ranks[s] ?? <span className="text-gray-700">–</span>}
-          </SubCols>
-        </Td>
+        {!byProj && (
+          <>
+            <Td data-label="Rank" empty={!r.rank} className="hidden text-right sm:table-cell">
+              {rank ?? <span className="text-gray-700">—</span>}
+            </Td>
+            <Td data-label="By source" empty={!Object.keys(r.ranks).length} className="hidden text-xs text-gray-300 sm:table-cell">
+              <SubCols keys={rankSources} width={SUB_RANK_W}>
+                {(s) => r.ranks[s] ?? <span className="text-gray-700">–</span>}
+              </SubCols>
+            </Td>
+          </>
+        )}
         {showProj && (
-          <Td data-label={projHead} empty={!hasProj} className="hidden text-xs text-gray-400 sm:table-cell">
-            <SubCols keys={projSources} width={SUB_PROJ_W}>
-              {(s) => (r.proj[s] != null ? r.proj[s]!.toFixed(1) : <span className="text-gray-700">–</span>)}
-            </SubCols>
+          <Td data-label={projHead} empty={!hasProj && !r.bye} className="hidden text-xs text-gray-400 sm:table-cell">
+            {r.bye ? (
+              <div className="text-right text-gray-500">bye</div>
+            ) : (
+              <SubCols keys={projSources} width={SUB_PROJ_W}>
+                {(s) => (r.proj[s] != null ? r.proj[s]!.toFixed(1) : <span className="text-gray-700">–</span>)}
+              </SubCols>
+            )}
           </Td>
         )}
         <Td data-label="Sites say" block empty={!r.claims} className="hidden w-full min-w-[11rem] text-xs sm:table-cell">
@@ -434,7 +509,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
           listed · {data.counts.with_claims} with claims ·{" "}
           <span className="border-l-2 border-emerald-500/70 pl-1 text-gray-400">yours</span>
           {/* Desktop shows the date in the snapshot picker beside this line. */}
-          {narrow && <> · snapshot {data.snapshot ? fmtDate(data.snapshot) : "—"}</>}
+          {narrow && !ahead && <> · snapshot {data.snapshot ? fmtDate(data.snapshot) : "—"}</>}
         </>
       }
     >
@@ -447,7 +522,10 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
         kickers and defenses are not on the FLEX list and follow. A single position is ordered by median position rank,
         so tied players share a rank. Proj is this week's league-correct points from each projection source, one
         sub-column each, in the weekly and rest-of-season views. Your own players are marked with a green edge. Dynasty
-        lists carry no projection, since one week's points say little about long-term value.
+        lists carry no projection, since one week's points say little about long-term value. The week picker also offers
+        the next few weeks: their projections (Sleeper and ESPN, refreshed daily, a bye shown as such) and a site's ranks
+        only once it publishes that week's list; until then the list is everyone projected that week, ordered by the
+        mean of the sources, with your own players kept even on a bye.
       </Note>
       {controls}
       {err && <ErrorBox className="mb-3">{err}</ErrorBox>}
@@ -456,29 +534,41 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
           <p className="text-xs text-gray-500">No players match these filters.</p>
         ) : (
           <>
+            {byProj && (
+              <p className="mb-2 text-xs text-gray-500">No site has ranked week {data.week} yet · ordered by projected points</p>
+            )}
+            {!ahead && data.rank_week != null && data.week != null && data.rank_week !== data.week && (
+              <p className="mb-2 text-xs text-gray-500">
+                No site has ranked week {data.week} yet · ranks are week {data.rank_week}'s
+              </p>
+            )}
             <div className="ff-stack-wrap overflow-x-auto">
               <table className="ff-stack w-full">
                 <thead>
                   <tr>
-                    <Th title={all ? `the number is the ${list} rank this list is ordered by` : undefined}>Player</Th>
+                    <Th title={numbered ? `the number is the ${list} rank this list is ordered by` : undefined}>Player</Th>
                     {dynasty && (
                       <Th className="text-right" title="age this season; R = rookie">
                         Age
                       </Th>
                     )}
-                    <Th className="text-right" title="median position rank across sites; hover a rank for the range">
-                      Rank
-                    </Th>
-                    <Th className="text-right" title="each site's position rank">
-                      <div>By source</div>
-                      <SubCols keys={rankSources} width={SUB_RANK_W}>
-                        {(s) => (
-                          <span className="font-normal normal-case tracking-normal text-gray-600" title={srcLabel(s)}>
-                            {srcShort(s)}
-                          </span>
-                        )}
-                      </SubCols>
-                    </Th>
+                    {!byProj && (
+                      <>
+                        <Th className="text-right" title="median position rank across sites; hover a rank for the range">
+                          Rank
+                        </Th>
+                        <Th className="text-right" title="each site's position rank">
+                          <div>By source</div>
+                          <SubCols keys={rankSources} width={SUB_RANK_W}>
+                            {(s) => (
+                              <span className="font-normal normal-case tracking-normal text-gray-600" title={srcLabel(s)}>
+                                {srcShort(s)}
+                              </span>
+                            )}
+                          </SubCols>
+                        </Th>
+                      </>
+                    )}
                     {showProj && (
                       <Th className="whitespace-nowrap text-right" title={projTitle}>
                         <div>{projHead}</div>

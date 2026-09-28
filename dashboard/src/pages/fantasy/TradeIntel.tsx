@@ -361,7 +361,7 @@ export default function TradeIntel({
       {data.buy.length === 0 ? (
         <QuietLine title="Buy targets on rival rosters">No buy talk about rivals' players in the window.</QuietLine>
       ) : (
-        <Card title="Buy targets on rival rosters" info="Players rivals own that the sites say buy.">
+        <Card title="Buy targets on rival rosters">
           <ul className="space-y-2">
             {buyShown.map((r) => (
               <TalkRow key={r.player_id} r={r} action="buy" ctx={ctx} />
