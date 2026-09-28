@@ -1,8 +1,25 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TradeIntel, { type Pick as IntelPick, type PriceSide, type Row as IntelRow } from "./TradeIntel";
 import { Select } from "./Select";
-import { ACTION_TONE } from "./labels";
-import { Badge, Balance, C, Card, NewsPeek, Note, PeekNote, Td, Th } from "./viz";
+import { ACTION_TONE, signed, cap } from "./labels";
+import { SectionProvider } from "./method";
+import { PlayerName } from "./NoteLine";
+import {
+  Badge,
+  Balance,
+  C,
+  Card,
+  ErrorBox,
+  FoldToggle,
+  Loading,
+  MetaLine,
+  NewsPeek,
+  Note,
+  QuietLine,
+  Td,
+  Th,
+  useIsNarrow,
+} from "./viz";
 
 type Asset = {
   player_id: string;
@@ -16,10 +33,8 @@ type Asset = {
 };
 
 type RosterPlayer = Asset & {
-  age: number | null;
   injury_status: string | null;
   league_vor: number | null;
-  market_trend_30d: number | null;
 };
 
 type Roster = {
@@ -32,42 +47,18 @@ type Roster = {
   above_replacement: number;
 };
 
-type EvalEvidence = {
-  action: string;
-  horizon: string;
-  confidence: number | null;
-  rationale: string;
-  source: string;
-  title: string;
-  url: string;
-  author: string;
-  published_at: string | null;
-  flagged: boolean;
-};
-
+/** What the sites said about a priced player: the action mix and the newest claims. */
 type EvalClaims = {
-  n: number;
-  n_sources: number;
-  net: number;
-  weighted_net: number;
   by_action: Record<string, number>;
-  by_horizon: Record<string, number>;
-  evidence: EvalEvidence[];
+  evidence: { source: string; rationale: string }[];
 };
 
 type Priced = RosterPlayer & {
-  replacement: number | null;
-  market_rank: number | null;
-  known: boolean;
   /** What the sites said about him in the claims window; null when nothing. */
   claims: EvalClaims | null;
 };
 
 type Evaluation = {
-  league_key: string;
-  league_name: string;
-  mode: "dynasty" | "redraft";
-  market_format: string;
   give: Priced[];
   get: Priced[];
   totals: {
@@ -81,7 +72,6 @@ type Evaluation = {
   };
   primary: "market" | "vor";
   notes: string[];
-  limitation: string;
 };
 
 type PosDetail = {
@@ -109,11 +99,8 @@ type PosDetail = {
 };
 
 type TradesData = {
-  league: string;
   mode: string;
-  market_format: string;
   rosters: Roster[];
-  news_by_player: Record<string, PeekNote[]>;
   counterparties: {
     counterparties: {
       owner_id: string;
@@ -126,8 +113,6 @@ type TradesData = {
       accept_share: number | null;
       thin: boolean;
     }[];
-    n_trades: number;
-    me: { proposed: number; accepted: number; trades: number };
     note: string;
   };
   insights: {
@@ -137,8 +122,6 @@ type TradesData = {
     replacement: number;
     spare: { player_id: string; name: string; ros_points: number | null; vor: number | null; market_value: number | null }[];
     spare_market: number;
-    headline: string;
-    detail: string;
   }[];
   needs: {
     replacement: Record<string, number>;
@@ -168,7 +151,6 @@ type TradesData = {
       i_receive: string;
       my_surplus_vor: number;
       their_surplus_vor: number;
-      fit_score: number;
       their_trades: number;
       their_accept_share: number | null;
       thin_history: boolean;
@@ -185,15 +167,10 @@ type Package = {
   get: RosterPlayer[];
   my_gain: number;
   their_gain: number;
-  value_out: number;
-  value_in: number;
-  value_delta: number;
-  market_out: number;
-  market_in: number;
   market_delta: number;
   market_pct: number | null;
+  /** Pinned searches only: my lineup gain in market units. */
   market_equivalent: number | null;
-  score: number;
 };
 
 type Generated = {
@@ -203,18 +180,23 @@ type Generated = {
   considered: number;
   objective: string;
   method: string;
-  limitation: string;
   units_note: string;
-  market_note: string;
   pool_note?: string;
   rate_note?: string | null;
-  exchange_rate?: number | null;
   season_note: string | null;
-  value_basis: string;
   reason?: string;
 };
 
-export default function TradesTab({ league, onPlayer }: { league: string; onPlayer?: (id: string) => void }) {
+export default function TradesTab({
+  league,
+  status,
+  onPlayer,
+}: {
+  league: string;
+  /** The league's Sleeper status ("pre_draft", "in_season", ...), when the shell passes it. */
+  status?: string;
+  onPlayer?: (id: string) => void;
+}) {
   const [data, setData] = useState<TradesData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [give, setGive] = useState<Asset[]>([]);
@@ -223,12 +205,14 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [pinMine, setPinMine] = useState<RosterPlayer[]>([]);
   const [pinTheirs, setPinTheirs] = useState<RosterPlayer[]>([]);
-  // Pins live alongside the working deal rather than in a separate panel: the
-  // players you are building around and the players you want held constant in a
-  // search are the same players, and splitting them into two lists made you
-  // enter each one twice.
+  // Pins live alongside the working deal: the players you are building around
+  // and the players you want held constant in a search are the same players.
   const [generated, setGenerated] = useState<Generated | null>(null);
   const [generating, setGenerating] = useState(false);
+  // A rejected deal ("you cannot trade away a player you do not roster") or a
+  // failed search belongs inside the builder, not in place of the whole tab.
+  const [evalErr, setEvalErr] = useState<string | null>(null);
+  const [genErr, setGenErr] = useState<string | null>(null);
 
   useEffect(() => {
     setGive([]);
@@ -254,6 +238,7 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
   useEffect(() => {
     if (!give.length && !get.length) {
       setEvaluation(null);
+      setEvalErr(null);
       return;
     }
     const q = new URLSearchParams({
@@ -263,17 +248,23 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
     });
     fetch(`/api/fantasy/trade-eval?${q}`)
       .then((r) => r.json())
-      .then((d) => (d.error ? setErr(d.error) : setEvaluation(d)))
-      .catch((e) => setErr(String(e)));
+      .then((d) => {
+        if (d.error) {
+          setEvaluation(null);
+          return setEvalErr(d.error);
+        }
+        setEvalErr(null);
+        setEvaluation(d);
+      })
+      .catch((e) => setEvalErr(String(e)));
   }, [league, give, get]);
 
   const mine = data?.rosters.find((r) => r.is_me) ?? null;
   const partner = data?.rosters.find((r) => r.owner_id === partnerId) ?? null;
 
   // The first rival player in "You get" fixes the counterparty for the rest of
-  // that side. Every trade in these leagues is two-team — 98 completed trades
-  // and not one three-way — so a second roster on the receiving side is not a
-  // trade that can be proposed.
+  // that side. Every trade in these leagues is two-team, so a second roster on
+  // the receiving side is not a trade that can be proposed.
   const lockedTo = useMemo(() => {
     for (const a of get) {
       const owner = data?.rosters.find((r) =>
@@ -284,11 +275,19 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
     return null;
   }, [get, data]);
   const lockedToName = data?.rosters.find((r) => r.owner_id === lockedTo)?.owner ?? null;
+  // The intel above renders before the rosters arrive, so a "price this" on a
+  // buy target can land before add() knows whose player he is. Once it does,
+  // the partner panel follows the counterparty the deal is locked to.
+  useEffect(() => {
+    if (lockedTo) setPartnerId(lockedTo);
+  }, [lockedTo]);
   const mode = data?.mode ?? (league === "dynasty" ? "dynasty" : "redraft");
+  // Before the draft every roster is empty; after it, a missing roster is a
+  // manager who is not in this season (a stale pick, a chopped team).
+  const preDraft = status === "pre_draft" || (!!data && data.rosters.every((r) => r.players.length === 0));
 
   // Adding one of their players to "You get" tells us who you are dealing with,
-  // so the roster panel follows. Building a deal against the wrong roster was
-  // the easiest mistake to make in the previous version.
+  // so the roster panel follows.
   const ownerOfPlayer = useCallback(
     (pid: string) => data?.rosters.find((r) => r.players.some((p) => p.player_id === pid)),
     [data]
@@ -342,6 +341,7 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
     (opts?: { counterparty?: string | null }) => {
       setGenerating(true);
       setGenerated(null);
+      setGenErr(null);
       const params = new URLSearchParams({ league, limit: "12" });
       if (pinMine.length) params.set("pin_mine", pinMine.map((p) => p.player_id).join(","));
       if (pinTheirs.length) params.set("pin_theirs", pinTheirs.map((p) => p.player_id).join(","));
@@ -349,8 +349,8 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
       if (cp) params.set("counterparty", cp);
       fetch(`/api/fantasy/trade-generate?${params}`)
         .then((r) => r.json())
-        .then((d) => (d.error ? setErr(d.error) : setGenerated(d)))
-        .catch((e) => setErr(String(e)))
+        .then((d) => (d.error ? setGenErr(d.error) : setGenerated(d)))
+        .catch((e) => setGenErr(String(e)))
         .finally(() => setGenerating(false));
     },
     [league, pinMine, pinTheirs]
@@ -404,181 +404,184 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
     [add, scrollToBuilder]
   );
 
-  if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
-  if (!data) return <div className="p-6 text-sm text-gray-500">Loading trade data…</div>;
+  // Choosing a manager from the surplus card or the accept-share table loads
+  // his roster into the right-hand panel, which sits above both.
+  const rostersRef = useRef<HTMLDivElement>(null);
+  const loadPartner = useCallback((ownerId: string) => {
+    setPartnerId(ownerId);
+    rostersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   return (
     <div className="space-y-4">
-      {/* Phase 5: the decision first. Sell talk on my roster, buy targets on
-          rivals', and for dynasty the ECR-vs-market value gaps. The builder
-          and counterparty history follow, unchanged. */}
+      {/* The decision first: sell talk on your roster, buy targets on rivals',
+          and for dynasty the ECR-vs-market value gaps and your picks. It
+          fetches on its own, so it does not wait for the rosters below. */}
       <TradeIntel league={league} onPlayer={onPlayer} onPrice={priceRow} onPricePick={pricePick} />
-      {/* A DYNASTY MODE / REDRAFT MODE banner used to sit here, restating which
-          mode you were in and why it weights market value differently. The
-          league selector directly above already says which league this is, and
-          the mode follows from it — so the banner spent the top of the tab
-          telling you something you had just chosen. Which value table backs the
-          numbers, and why the two modes weight differently, is on the
-          Methodology page under FantasyCalc. */}
-      <div ref={builderRef} className="scroll-mt-4">
-        <TradeBuilder
-          league={league}
-          give={give}
-          get={get}
-          setGive={setGive}
-          setGet={setGet}
-          evaluation={evaluation}
-          lockedTo={lockedTo}
-          lockedToName={lockedToName}
-          pinMine={pinMine}
-          pinTheirs={pinTheirs}
-          onTogglePin={togglePin}
-          onGenerate={runGenerate}
-          generating={generating}
-          generated={generated}
-          onLoad={loadPackage}
-          partnerName={data.rosters.find((r) => r.owner_id === partnerId)?.owner ?? null}
-          partnerId={partnerId}
-        />
-      </div>
-
-      {/* ── the two rosters, side by side, click to build the deal ─── */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <RosterPanel
-          title="My roster"
-          roster={mine}
-          mode={mode}
-          actionLabel="give"
-          selected={give.map((g) => g.player_id)}
-          onPick={(p) => add("give", p)}
-          pinned={pinMine.map((p) => p.player_id)}
-          onPin={(p) => togglePin("mine", p)}
-          news={data.news_by_player}
-        />
-        <RosterPanel
-          title="Their roster"
-          roster={partner}
-          mode={mode}
-          actionLabel="get"
-          selected={get.map((g) => g.player_id)}
-          onPick={(p) => add("get", p)}
-          pinned={pinTheirs.map((p) => p.player_id)}
-          onPin={(p) => togglePin("theirs", p)}
-          news={data.news_by_player}
-          picker={
-            <Select
-              aria-label="Trade partner"
-              size="sm"
-              value={partnerId ?? ""}
-              onChange={setPartnerId}
-              options={data.rosters.filter((r) => !r.is_me).map((r) => ({ value: r.owner_id, label: r.owner }))}
+      {err ? (
+        <ErrorBox>{err}</ErrorBox>
+      ) : !data ? (
+        <Card title="Trade builder">
+          <Loading label="Loading trade builder…" rows={5} />
+        </Card>
+      ) : (
+        <>
+          <div ref={builderRef} className="scroll-mt-4">
+            <TradeBuilder
+              league={league}
+              give={give}
+              get={get}
+              setGive={setGive}
+              setGet={setGet}
+              evaluation={evaluation}
+              evalErr={evalErr}
+              lockedTo={lockedTo}
+              lockedToName={lockedToName}
+              pinMine={pinMine}
+              pinTheirs={pinTheirs}
+              onTogglePin={togglePin}
+              onGenerate={runGenerate}
+              generating={generating}
+              generated={generated}
+              genErr={genErr}
+              onLoad={loadPackage}
+              onPlayer={onPlayer}
+              partnerName={partner?.owner ?? null}
+              partnerId={partnerId}
             />
-          }
-        />
-      </div>
+          </div>
 
-      <RosterInsights data={data} />
+          {/* ── the two rosters, click to build the deal. Side by side from
+              lg, where each panel drops a value column and truncates names. ── */}
+          <div ref={rostersRef} className="grid scroll-mt-4 gap-4 lg:grid-cols-2">
+            <RosterPanel
+              title="Your roster"
+              roster={mine}
+              mode={mode}
+              preDraft={preDraft}
+              actionLabel="give"
+              selected={give.map((g) => g.player_id)}
+              onPick={(p) => add("give", p)}
+              pinned={pinMine.map((p) => p.player_id)}
+              onPin={(p) => togglePin("mine", p)}
+              onPlayer={onPlayer}
+            />
+            <RosterPanel
+              title="Their roster"
+              roster={partner}
+              mode={mode}
+              preDraft={preDraft}
+              actionLabel="get"
+              selected={get.map((g) => g.player_id)}
+              onPick={(p) => add("get", p)}
+              pinned={pinTheirs.map((p) => p.player_id)}
+              onPin={(p) => togglePin("theirs", p)}
+              onPlayer={onPlayer}
+              picker={
+                <Select
+                  aria-label="Trade partner"
+                  size="sm"
+                  value={partnerId ?? ""}
+                  onChange={setPartnerId}
+                  options={data.rosters.filter((r) => !r.is_me).map((r) => ({ value: r.owner_id, label: r.owner }))}
+                />
+              }
+            />
+          </div>
 
-      <NeedsGrid data={data} />
+          <SurplusFit data={data} onPartner={loadPartner} onPlayer={onPlayer} />
 
-      <Card
-        title="Positional fit"
-        subtitle="Startable surplus you cannot start, against a gap somebody else cannot fill"
-      >
-        {data.suggestions.suggestions.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No clean positional mismatch right now. That is a normal result, not a bug —{" "}
-            {data.suggestions.volume_warning}
-          </p>
-        ) : (
-          <ul className="grid gap-2 md:grid-cols-2">
-            {data.suggestions.suggestions.map((s, i) => (
-              <li key={i} className="rounded border border-gray-800 px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <button
-                    onClick={() => setPartnerId(s.owner_id)}
-                    className="text-gray-100 underline decoration-gray-700 underline-offset-2 hover:decoration-indigo-400"
-                    title="Load this manager's roster above"
-                  >
-                    {s.counterparty}
-                  </button>
-                  <span className="text-gray-500">— send</span>
-                  <Badge tone="neutral">{s.i_send}</Badge>
-                  <span className="text-gray-500">for</span>
-                  <Badge tone="info">{s.i_receive}</Badge>
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  fit {s.fit_score} · your spare {s.i_send} VOR {s.my_surplus_vor} · their spare {s.i_receive}{" "}
-                  VOR {s.their_surplus_vor} · {s.their_trades} completed trades
-                  {s.their_accept_share != null && `, ${s.their_accept_share.toFixed(0)}% accepted`}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        <Note>{data.suggestions.note}</Note>
-        <Note>{data.suggestions.volume_warning}</Note>
-      </Card>
+          <NeedsGrid data={data} />
 
-      {/* ── background, not deal-making: keep it last ──────────────── */}
-      <Card
-        title="Who actually accepts"
-        subtitle="Background on how each manager behaves — useful before you open a conversation, not while you are pricing one"
-        secondary
-      >
-        <div className="overflow-x-auto ff-stack-wrap">
-          <table className="ff-stack w-full min-w-[520px] border-collapse">
-            <thead>
-              <tr className="border-b border-gray-800">
-                <Th>Manager</Th>
-                <Th className="text-right">Trades</Th>
-                <Th className="text-right">Proposed</Th>
-                <Th className="text-right">Accepted</Th>
-                <Th className="text-right">Accept share</Th>
-                <Th>&nbsp;</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.counterparties.counterparties.map((c) => (
-                <tr key={c.owner_id} className="border-b border-gray-800/60">
-                  <Td data-label="" className="ff-row-head">
-                    {c.owner}
-                    {c.person && c.handle && (
-                      <span className="ml-1.5 text-xs text-gray-600">{c.handle}</span>
-                    )}
-                  </Td>
-                  <Td data-label="Trades" className="text-right tabular-nums text-gray-500">{c.trades}</Td>
-                  <Td data-label="Proposed" className="text-right tabular-nums text-gray-500">{c.proposed}</Td>
-                  <Td data-label="Accepted" className="text-right tabular-nums text-gray-500">{c.accepted}</Td>
-                  <Td data-label="Accept share" className="whitespace-nowrap text-right tabular-nums">
-                    <span style={{ color: (c.accept_share ?? 0) >= 70 ? C.s3 : C.ink2 }}>
-                      {c.accept_share != null ? `${c.accept_share.toFixed(0)}%` : "—"}
-                    </span>
-                    {c.thin && (
-                      <>
-                        {" "}
-                        <Badge tone="warning" title="Fewer than 8 completed trades — anecdote, not a model">
-                          thin
-                        </Badge>
-                      </>
-                    )}
-                  </Td>
-                  <Td data-label="">
-                    <button
-                      onClick={() => setPartnerId(c.owner_id)}
-                      className="text-xs text-indigo-400 hover:text-indigo-300"
-                    >
-                      load roster
-                    </button>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <Note>{data.counterparties.note}</Note>
-      </Card>
+          <AcceptShare data={data} onPartner={loadPartner} />
+        </>
+      )}
     </div>
+  );
+}
+
+/* ── counterparty history ───────────────────────────────────────────── */
+
+/** Background, not deal-making: how often each manager's trades go through. */
+function AcceptShare({ data, onPartner }: { data: TradesData; onPartner: (ownerId: string) => void }) {
+  if (!data.counterparties.counterparties.length)
+    return <QuietLine title="Who actually accepts">No completed trades in this league yet.</QuietLine>;
+  return (
+    <Card title="Who actually accepts" info="How often each manager's trades go through, before you open a conversation." secondary>
+      {/* One row per manager. On a phone the numbers move under the name as a
+          meta line and only the name and "load" stay in columns. */}
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="border-b border-gray-800">
+            <Th>Manager</Th>
+            <Th className="hidden text-right sm:table-cell">Trades</Th>
+            <Th className="hidden text-right sm:table-cell">Accept share</Th>
+            <Th>
+              <span className="sr-only">Load roster</span>
+            </Th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.counterparties.counterparties.map((c) => {
+            const share = <AcceptPct c={c} />;
+            const tradesTitle = `${c.proposed} proposed · ${c.accepted} accepted`;
+            return (
+              <tr key={c.owner_id} className="border-b border-gray-800/60">
+                <Td>
+                  <span className="text-gray-200" title={c.handle && c.handle !== c.owner ? `Sleeper: ${c.handle}` : undefined}>
+                    {c.owner}
+                  </span>
+                  {c.person && c.handle && (
+                    <span className="ml-1.5 hidden text-xs text-gray-600 sm:inline">{c.handle}</span>
+                  )}
+                  <MetaLine className="tabular-nums sm:hidden">
+                    <span title={tradesTitle}>
+                      {c.trades} {c.trades === 1 ? "trade" : "trades"}
+                    </span>
+                    {(c.accept_share != null || c.thin) && <span>{share}</span>}
+                  </MetaLine>
+                </Td>
+                <Td className="hidden text-right tabular-nums text-gray-500 sm:table-cell" title={tradesTitle}>
+                  {c.trades}
+                </Td>
+                <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">{share}</Td>
+                <Td className="text-right align-top sm:align-middle">
+                  <button
+                    type="button"
+                    onClick={() => onPartner(c.owner_id)}
+                    className="ff-inline ff-hit whitespace-nowrap text-xs text-indigo-400 hover:text-indigo-300"
+                  >
+                    Load<span className="hidden sm:inline"> roster</span>
+                  </button>
+                </Td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <Note>{data.counterparties.note}</Note>
+    </Card>
+  );
+}
+
+type Counterparty = TradesData["counterparties"]["counterparties"][number];
+
+/** "100%" (green from 70%) and the thin-history badge; '—' when there is no share to show. */
+function AcceptPct({ c }: { c: Counterparty }) {
+  return (
+    <>
+      <span style={{ color: (c.accept_share ?? 0) >= 70 ? C.s3 : C.ink2 }}>
+        {c.accept_share != null ? `${c.accept_share.toFixed(0)}%` : "—"}
+      </span>
+      {c.thin && (
+        <>
+          {" "}
+          <Badge tone="warning" title="Fewer than 8 completed trades — anecdote, not a model">
+            thin
+          </Badge>
+        </>
+      )}
+    </>
   );
 }
 
@@ -586,31 +589,40 @@ export default function TradesTab({ league, onPlayer }: { league: string; onPlay
 
 const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
 
+/** Roster rows shown before "show all". */
+const ROSTER_FOLD = 12;
+
+/** A row action (give / get / pin): the same small outlined button, wide enough for a thumb. */
+const ROW_BTN = "min-w-[2.5rem] rounded px-1.5 py-0.5 text-center text-[11px] ring-1 ring-inset";
+
 function RosterPanel({
   title,
   roster,
   mode,
+  preDraft,
   actionLabel,
   selected,
   onPick,
   pinned = [],
   onPin,
-  news,
   picker,
+  onPlayer,
 }: {
   title: string;
   roster: Roster | null;
   mode: string;
+  preDraft: boolean;
   actionLabel: "give" | "get";
   selected: string[];
   onPick: (p: RosterPlayer) => void;
   pinned?: string[];
   onPin?: (p: RosterPlayer) => void;
-  news?: Record<string, PeekNote[]>;
   picker?: React.ReactNode;
+  onPlayer?: (id: string) => void;
 }) {
   const [pos, setPos] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [all, setAll] = useState(false);
 
   const players = useMemo(() => {
     if (!roster) return [];
@@ -620,6 +632,8 @@ function RosterPanel({
     );
   }, [roster, pos, q]);
 
+  const shown = all ? players : players.slice(0, ROSTER_FOLD);
+
   const available = useMemo(() => {
     if (!roster) return [];
     return POS_ORDER.filter((p) => roster.players.some((x) => x.position === p));
@@ -627,37 +641,62 @@ function RosterPanel({
 
   if (!roster) {
     return (
-      <Card title={title} right={picker}>
-        <p className="text-sm text-gray-500">No roster available — the league has not drafted yet.</p>
+      <Card title={title} right={picker} rightStacks>
+        <p className="text-xs text-gray-500">
+          {preDraft
+            ? "No roster yet — the league has not drafted."
+            : "No roster for this manager in the current season."}
+        </p>
       </Card>
     );
   }
+
+  const dynasty = mode === "dynasty";
+  // Three value columns do not fit a half-width panel (lg to xl) or a phone:
+  // the primary one always shows, the other two from sm, and the one that
+  // matters least in this format (VOR in dynasty, Market in a weekly league)
+  // steps aside while the panels sit side by side below xl.
+  const SECONDARY = "hidden sm:table-cell";
+  const SPARE = "hidden sm:table-cell lg:hidden xl:table-cell";
+  // Market values run to "10,234"; ROS is three digits, VOR up to "-213".
+  const MARKET = { label: "Market", w: "w-[4rem]", value: fmtMarket };
+  const ROS = { label: "ROS", w: "w-[3rem]", value: fmtRos };
+  const VOR = { label: "VOR", w: "w-[3.25rem]", value: fmtVor };
+  const cols = [
+    { ...(dynasty ? MARKET : ROS), cls: "", tone: "text-gray-300" },
+    { ...(dynasty ? ROS : VOR), cls: SECONDARY, tone: "text-gray-500" },
+    { ...(dynasty ? VOR : MARKET), cls: SPARE, tone: "text-gray-500" },
+  ];
 
   return (
     <Card
       title={title}
       subtitle={
-        <>
-          {roster.owner} · {roster.players.length} players · market{" "}
-          <span className="tabular-nums">{roster.total_market.toLocaleString()}</span> ·{" "}
-          <span className="tabular-nums">{roster.above_replacement}</span> above replacement, worth{" "}
-          <span className="tabular-nums">{roster.startable_vor.toFixed(0)}</span> VOR
-        </>
+        <span
+          className="tabular-nums"
+          title={`${roster.above_replacement} above replacement, worth ${roster.startable_vor.toFixed(0)} VOR`}
+        >
+          {roster.players.length} players · market {roster.total_market.toLocaleString()}
+        </span>
       }
       right={picker}
+      rightStacks
     >
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="filter…"
+          placeholder="Filter…"
+          aria-label={`Filter ${title.toLowerCase()} by name`}
           className="w-28 rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-100 placeholder:text-gray-600"
         />
         {available.map((p) => (
           <button
             key={p}
+            type="button"
             onClick={() => setPos(pos === p ? null : p)}
-            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset transition-colors ${
+            aria-pressed={pos === p}
+            className={`min-w-[2.25rem] rounded px-1.5 py-0.5 text-center text-[11px] font-medium ring-1 ring-inset transition-colors ${
               pos === p
                 ? "bg-indigo-500/15 text-indigo-300 ring-indigo-500/40"
                 : "bg-gray-800 text-gray-400 ring-gray-700 hover:text-gray-200"
@@ -668,96 +707,100 @@ function RosterPanel({
         ))}
       </div>
 
-      <div className="max-h-[26rem] overflow-y-auto">
-        <table className="w-full border-collapse">
-          <thead className="sticky top-0 bg-gray-900">
-            <tr className="border-b border-gray-800">
-              <Th>Pos</Th>
-              <Th>Player</Th>
-              <Th className="text-right">{mode === "dynasty" ? "Market" : "ROS"}</Th>
-              <Th className="hidden text-right sm:table-cell">
-                {mode === "dynasty" ? "ROS" : "Market"}
+      {/* table-fixed: the value and action columns keep their widths and the
+          player column takes what is left, so a long name truncates instead of
+          pushing the panel wider than its half of the page. */}
+      <table className="w-full table-fixed border-collapse">
+        <thead>
+          <tr className="border-b border-gray-800">
+            <Th>Player</Th>
+            {cols.map((c) => (
+              <Th key={c.label} className={`${c.w} text-right ${c.cls}`}>
+                {c.label}
               </Th>
-              {/* VOR is a desktop detail: with it the roster panel ran 8px past a phone. */}
-              <Th className="hidden text-right sm:table-cell">VOR</Th>
-              <Th>&nbsp;</Th>
-              <Th>&nbsp;</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {players.map((p) => {
-              const chosen = selected.includes(p.player_id);
-              const isPinned = pinned.includes(p.player_id);
-              return (
-                <tr
-                  key={p.player_id}
-                  className={`border-b border-gray-800/60 ${
-                    isPinned ? "bg-amber-500/5" : chosen ? "bg-indigo-500/5" : "hover:bg-gray-800/40"
-                  }`}
-                >
-                  <Td className="text-xs text-gray-500">{p.position}</Td>
-                  <Td>
-                    <span className={chosen ? "text-indigo-300" : "text-gray-200"}>{p.name}</span>
-                    <NewsPeek notes={news?.[p.player_id]} name={p.name} />{" "}
-                    <span className="text-xs text-gray-600">{p.team}</span>
-                    {p.injury_status && (
-                      <>
-                        {" "}
-                        <Badge tone="warning">{p.injury_status}</Badge>
-                      </>
-                    )}
+            ))}
+            <Th className={`pr-0 ${onPin ? "w-[6.25rem]" : "w-[3.25rem]"}`}>
+              <span className="sr-only">Actions</span>
+            </Th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((p) => {
+            const chosen = selected.includes(p.player_id);
+            const isPinned = pinned.includes(p.player_id);
+            const meta = [p.position, p.team].filter(Boolean).join(" · ");
+            return (
+              <tr
+                key={p.player_id}
+                className={`border-b border-gray-800/60 ${
+                  isPinned ? "bg-amber-500/5" : chosen ? "bg-indigo-500/5" : "hover:bg-gray-800/40"
+                }`}
+              >
+                <Td>
+                  {/* The name truncates; position, team, designation and the
+                      news peek travel as one unit, onto the next line when
+                      the name needs the room. */}
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+                    <span className="min-w-0 max-w-full truncate [&>button]:max-w-full [&>button]:truncate" title={p.name}>
+                      <PlayerName id={p.player_id} name={p.name} onPlayer={onPlayer} news={false} />
+                    </span>
+                    <span className="inline-flex shrink-0 items-baseline gap-1 whitespace-nowrap text-xs text-gray-500">
+                      {meta && <span>{meta}</span>}
+                      {p.injury_status && <Badge tone="warning">{p.injury_status}</Badge>}
+                      <NewsPeek id={p.player_id} name={p.name} />
+                    </span>
+                  </div>
+                </Td>
+                {cols.map((c) => (
+                  <Td key={c.label} className={`text-right tabular-nums ${c.tone} ${c.cls}`}>
+                    {c.value(p)}
                   </Td>
-                  <Td className="text-right tabular-nums text-gray-300">
-                    {mode === "dynasty"
-                      ? p.market_value?.toLocaleString() ?? "—"
-                      : p.ros_points?.toFixed(0) ?? "—"}
-                  </Td>
-                  <Td className="hidden text-right tabular-nums text-gray-500 sm:table-cell">
-                    {mode === "dynasty"
-                      ? p.ros_points?.toFixed(0) ?? "—"
-                      : p.market_value?.toLocaleString() ?? "—"}
-                  </Td>
-                  <Td className="hidden text-right tabular-nums text-gray-500 sm:table-cell">
-                    {p.league_vor != null ? p.league_vor.toFixed(0) : "—"}
-                  </Td>
-                  <Td>
+                ))}
+                <Td className="pl-1 pr-0">
+                  <div className="flex justify-end gap-1">
                     <button
+                      type="button"
                       onClick={() => onPick(p)}
                       disabled={chosen}
-                      className={`rounded px-1.5 py-0.5 text-[11px] ring-1 ring-inset ${
+                      className={`${ROW_BTN} ${
                         chosen
                           ? "cursor-default text-indigo-400 ring-indigo-500/30"
                           : "text-gray-400 ring-gray-700 hover:text-gray-100 hover:ring-gray-500"
                       }`}
                     >
-                      {chosen ? "added" : actionLabel}
+                      {chosen ? "Added" : cap(actionLabel)}
                     </button>
-                  </Td>
-                  <Td>
                     {onPin && (
                       <button
+                        type="button"
                         onClick={() => onPin(p)}
+                        aria-pressed={isPinned}
                         title="Pin — every generated package will contain this player"
-                        className={`rounded px-1.5 py-0.5 text-[11px] ring-1 ring-inset ${
+                        className={`${ROW_BTN} ${
                           isPinned
                             ? "bg-amber-500/10 text-amber-300 ring-amber-500/40"
                             : "text-gray-500 ring-gray-800 hover:text-gray-200 hover:ring-gray-600"
                         }`}
                       >
-                        {isPinned ? "pinned" : "pin"}
+                        {isPinned ? "Pinned" : "Pin"}
                       </button>
                     )}
-                  </Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {players.length === 0 && <p className="py-3 text-sm text-gray-600">Nothing matches that filter.</p>}
-      </div>
+                  </div>
+                </Td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {players.length === 0 && <p className="py-3 text-xs text-gray-500">Nothing matches that filter.</p>}
+      <FoldToggle total={players.length} shown={shown.length} expanded={all} onToggle={() => setAll((v) => !v)} mode="all" />
     </Card>
   );
 }
+
+const fmtMarket = (p: RosterPlayer) => p.market_value?.toLocaleString() ?? "—";
+const fmtRos = (p: RosterPlayer) => p.ros_points?.toFixed(0) ?? "—";
+const fmtVor = (p: RosterPlayer) => (p.league_vor != null ? p.league_vor.toFixed(0) : "—");
 
 function AssetSearch({
   league,
@@ -801,7 +844,7 @@ function AssetSearch({
     <div className="relative">
       <input
         value={q}
-        placeholder={placeholder ?? "search players or picks…"}
+        placeholder={placeholder ?? "Search players or picks…"}
         onChange={(e) => {
           setQ(e.target.value);
           setOpen(true);
@@ -863,137 +906,149 @@ const MARKET_LABEL: Record<string, string> = {
 /**
  * Positional strength, every roster.
  *
- * The panel this replaces printed one number per cell — startable surplus — and
- * that number could not tell apart the two rosters it most matters to tell
- * apart. A manager with two elite backs and nobody behind them scored the same
- * zero as a manager with six replacement-level ones. They are opposite
- * counterparties: the first will not sell a back at any price and is shopping
- * for depth; the second has nothing you want.
+ * One number per cell (startable surplus) cannot tell apart the two rosters it
+ * most matters to tell apart: a manager with two elite backs and nobody behind
+ * them scores the same zero as one with six replacement-level backs. They are
+ * opposite counterparties — the first will not sell a back at any price and is
+ * shopping for depth; the second has nothing you want.
  *
- * So each cell now carries strength (a rank inside this league, because a
- * constant would be wrong in two of the three) and shape (what an injury to
- * their best player would actually cost the lineup), and states the conclusion:
- * what this manager is in the market for at this position.
+ * So each cell carries strength (a rank inside this league, because a constant
+ * would be wrong in two of the three) and shape (what an injury to their best
+ * player would actually cost the lineup), and states the conclusion: what this
+ * manager is in the market for at this position. On a phone the 720px grid
+ * becomes one row per manager with a coloured chip per position.
  */
+type NeedsRoster = TradesData["needs"]["rosters"][number];
+
 function NeedsGrid({ data }: { data: TradesData }) {
+  const narrow = useIsNarrow();
   const [openRow, setOpenRow] = useState<string | null>(null);
   const positions = useMemo(() => {
     const s = new Set<string>();
     data.needs.rosters.forEach((r) => Object.keys(r.positions).forEach((p) => s.add(p)));
-    const order = ["QB", "RB", "WR", "TE", "K", "DEF"];
     return Array.from(s).sort((a, b) => {
-      const ia = order.indexOf(a);
-      const ib = order.indexOf(b);
+      const ia = POS_ORDER.indexOf(a);
+      const ib = POS_ORDER.indexOf(b);
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
     });
   }, [data]);
 
-  if (data.needs.reason) {
-    return (
-      <Card title="Positional strength, every roster"
-        secondary
-      >
-        <p className="text-sm text-gray-500">{data.needs.reason}</p>
-      </Card>
-    );
-  }
+  const title = "Positional strength, every roster";
+  if (data.needs.reason) return <QuietLine title={title}>{data.needs.reason}</QuietLine>;
+
+  const toggle = (id: string) => setOpenRow(openRow === id ? null : id);
+  const graded = (r: NeedsRoster, p: string) => {
+    const d = r.positions[p];
+    return d && d.grade !== undefined ? d : null;
+  };
+  const Owner = ({ r, open }: { r: NeedsRoster; open: boolean }) => (
+    <>
+      <span className="mr-1 text-gray-700">{open ? "▾" : "▸"}</span>
+      {r.owner}
+      {r.is_me && <span className="ml-1 text-xs text-indigo-400">you</span>}
+    </>
+  );
+  // Rank, not raw points: 571 VOR means nothing without the eleven other
+  // numbers it is being compared to.
+  const lineup = (r: NeedsRoster) => (
+    <>
+      {r.team.rank}
+      <span className="text-gray-700">/{r.team.of}</span>
+    </>
+  );
 
   return (
-    <Card
-      title="Positional strength, every roster"
-      subtitle="Who is shopping for what — click a row for the reasoning"
-        secondary
-      >
-      <div className="overflow-x-auto ff-stack-wrap">
-        <table className="w-full min-w-[720px] border-collapse">
-          <thead>
-            <tr className="border-b border-gray-800">
-              <Th>Manager</Th>
-              <Th className="text-right">Lineup</Th>
-              {positions.map((p) => (
-                <Th key={p} className="text-center">
-                  {p}
-                </Th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.needs.rosters.map((r) => {
-              const open = openRow === r.owner_id;
-              return (
-                <Fragment key={r.owner_id}>
-                  <tr
-                    onClick={() => setOpenRow(open ? null : r.owner_id)}
-                    className={`cursor-pointer border-b border-gray-800/60 hover:bg-gray-800/30 ${
-                      r.is_me ? "bg-indigo-500/5" : ""
-                    }`}
-                  >
-                    <Td className={r.is_me ? "text-gray-100" : ""}>
-                      <span className="mr-1 text-gray-700">{open ? "▾" : "▸"}</span>
-                      {r.owner}
-                      {r.is_me && <span className="ml-1 text-xs text-indigo-400">you</span>}
-                    </Td>
-                    <Td className="whitespace-nowrap text-right text-xs tabular-nums text-gray-500">
-                      {/* Rank, not raw points: 571 VOR means nothing without
-                          the eleven other numbers it is being compared to. */}
-                      {r.team.rank}
-                      <span className="text-gray-700">/{r.team.of}</span>
-                    </Td>
+    <Card title={title} info="Who is shopping for what; open a row for the reasoning." secondary>
+      {narrow ? (
+        <ul className="divide-y divide-gray-800/60">
+          {data.needs.rosters.map((r) => {
+            const open = openRow === r.owner_id;
+            return (
+              <li key={r.owner_id} className={r.is_me ? "bg-indigo-500/5" : ""}>
+                <button
+                  type="button"
+                  onClick={() => toggle(r.owner_id)}
+                  aria-expanded={open}
+                  className="block w-full px-1 py-2 text-left"
+                >
+                  <span className="flex items-baseline justify-between gap-2 text-sm">
+                    <span className={`min-w-0 ${r.is_me ? "text-gray-100" : "text-gray-300"}`}>
+                      <Owner r={r} open={open} />
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-gray-500">lineup {lineup(r)}</span>
+                  </span>
+                  <span className="mt-1 flex flex-wrap gap-1">
                     {positions.map((p) => {
-                      const d = r.positions[p];
-                      if (!d || d.grade === undefined)
-                        return (
+                      const d = graded(r, p);
+                      return <PosChip key={p} pos={p} d={d} />;
+                    })}
+                  </span>
+                </button>
+                {open && (
+                  <div className="px-1 pb-3">
+                    <NeedsReading r={r} positions={positions} />
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] border-collapse">
+            <thead>
+              <tr className="border-b border-gray-800">
+                <Th>Manager</Th>
+                <Th className="text-right">Lineup</Th>
+                {positions.map((p) => (
+                  <Th key={p} className="text-center">
+                    {p}
+                  </Th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.needs.rosters.map((r) => {
+                const open = openRow === r.owner_id;
+                return (
+                  <Fragment key={r.owner_id}>
+                    <tr
+                      onClick={() => toggle(r.owner_id)}
+                      className={`cursor-pointer border-b border-gray-800/60 hover:bg-gray-800/30 ${
+                        r.is_me ? "bg-indigo-500/5" : ""
+                      }`}
+                    >
+                      <Td className={r.is_me ? "text-gray-100" : ""}>
+                        <Owner r={r} open={open} />
+                      </Td>
+                      <Td className="whitespace-nowrap text-right text-xs tabular-nums text-gray-500">{lineup(r)}</Td>
+                      {positions.map((p) => {
+                        const d = graded(r, p);
+                        return d ? (
+                          <Td key={p} className="px-1 text-center">
+                            <PosCell d={d} />
+                          </Td>
+                        ) : (
                           <Td key={p} className="text-center text-gray-700">
                             —
                           </Td>
                         );
-                      return (
-                        <Td key={p} className="px-1 text-center">
-                          <PosCell d={d} />
-                        </Td>
-                      );
-                    })}
-                  </tr>
-                  {open && (
-                    <tr className="border-b border-gray-800/60 bg-gray-950/40">
-                      <td colSpan={positions.length + 2} className="px-4 py-3">
-                        <div className="mb-2 text-xs text-gray-500">
-                          Lineup ranks {r.team.rank} of {r.team.of}
-                          {r.team.strongest && ` · strongest ${r.team.strongest}`}
-                          {r.team.weakest && ` · weakest ${r.team.weakest}`}
-                          {r.team.holes.length > 0 && (
-                            <span style={{ color: C.critical }}>
-                              {" "}
-                              · cannot fill {r.team.holes.join(", ")}
-                            </span>
-                          )}
-                        </div>
-                        <ul className="space-y-1">
-                          {positions
-                            .map((p) => ({ p, d: r.positions[p] }))
-                            .filter((x): x is { p: string; d: PosDetail } =>
-                              x.d != null && x.d.grade !== undefined)
-                            .map(({ p, d }) => (
-                              <li key={p} className="flex gap-2 text-xs leading-relaxed">
-                                <span
-                                  className="w-8 shrink-0 font-medium"
-                                  style={{ color: GRADE_TONE[d.grade] }}
-                                >
-                                  {p}
-                                </span>
-                                <span className="text-gray-400">{d.reading}</span>
-                              </li>
-                            ))}
-                        </ul>
-                      </td>
+                      })}
                     </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    {open && (
+                      <tr className="border-b border-gray-800/60 bg-gray-950/40">
+                        <td colSpan={positions.length + 2} className="px-4 py-3">
+                          <NeedsReading r={r} positions={positions} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-600">
         {(data.needs.legend ?? []).map((l) => (
@@ -1001,7 +1056,7 @@ function NeedsGrid({ data }: { data: TradesData }) {
             <span style={{ color: GRADE_TONE[l.grade] }}>■</span> {l.grade}
           </span>
         ))}
-        <span>· the second line is what they are shopping for</span>
+        {!narrow && <span>the second line in each cell is what they are shopping for</span>}
       </div>
 
       <Note>
@@ -1015,6 +1070,51 @@ function NeedsGrid({ data }: { data: TradesData }) {
         .
       </Note>
     </Card>
+  );
+}
+
+/** The expanded reasoning under a manager: team summary, then one line per position. */
+function NeedsReading({ r, positions }: { r: NeedsRoster; positions: string[] }) {
+  return (
+    <>
+      <div className="mb-2 text-xs text-gray-500">
+        Lineup ranks {r.team.rank} of {r.team.of}
+        {r.team.strongest && ` · strongest ${r.team.strongest}`}
+        {r.team.weakest && ` · weakest ${r.team.weakest}`}
+        {r.team.holes.length > 0 && (
+          <span style={{ color: C.critical }}> · cannot fill {r.team.holes.join(", ")}</span>
+        )}
+      </div>
+      <ul className="space-y-1">
+        {positions
+          .map((p) => ({ p, d: r.positions[p] }))
+          .filter((x): x is { p: string; d: PosDetail } => x.d != null && x.d.grade !== undefined)
+          .map(({ p, d }) => (
+            <li key={p} className="flex gap-2 text-xs leading-relaxed">
+              <span className="w-8 shrink-0 font-medium" style={{ color: GRADE_TONE[d.grade] }}>
+                {p}
+              </span>
+              <span className="text-gray-400">{d.reading}</span>
+            </li>
+          ))}
+      </ul>
+    </>
+  );
+}
+
+/** One position on the phone list: its name in the grade's colour, the grade and market in words for a reader. */
+function PosChip({ pos, d }: { pos: string; d: PosDetail | null }) {
+  const tone = d ? GRADE_TONE[d.grade] ?? C.ink2 : C.muted;
+  const words = d ? `${d.short > 0 ? `${d.short} empty` : d.grade}, ${MARKET_LABEL[d.market] ?? d.market}` : "no data";
+  return (
+    <span
+      className="inline-flex min-w-[2.25rem] justify-center rounded bg-gray-800/60 px-1.5 py-0.5 text-[11px] font-medium"
+      style={{ color: tone }}
+      title={`${pos}: ${words}`}
+    >
+      {pos}
+      <span className="sr-only"> {words}</span>
+    </span>
   );
 }
 
@@ -1039,13 +1139,27 @@ function PosCell({ d }: { d: PosDetail }) {
 
 /* ── trade builder ──────────────────────────────────────────────────────
  *
- * One panel, not two. The players you are building a deal around and the
- * players you want held constant while searching are the same players — the
- * earlier split into a "calculator" and a separate "find trades" card meant
- * entering each name twice and reading two valuations that were about the same
- * deal. Here a chip in either column carries both actions: it is priced, and it
- * can be pinned so every generated package keeps it.
+ * The players you are building a deal around and the players you want held
+ * constant while searching are the same players, so one panel does both: a
+ * chip in either column is priced, and it can be pinned so every generated
+ * package keeps it.
  */
+
+/** "A + B" with each name opening the dossier (picks have none). */
+function AssetNames({ assets, onPlayer }: { assets: Asset[]; onPlayer?: (id: string) => void }) {
+  return (
+    <span>
+      {assets.map((a, i) => (
+        <Fragment key={a.player_id}>
+          {i > 0 && <span className="text-gray-500"> + </span>}
+          <PlayerName id={a.player_id} name={a.name} onPlayer={isPickId(a) ? undefined : onPlayer} />
+        </Fragment>
+      ))}
+    </span>
+  );
+}
+
+const isPickId = (a: Asset) => a.is_pick || /^(DP|FP)_/.test(a.player_id);
 
 function TradeBuilder({
   league,
@@ -1060,7 +1174,10 @@ function TradeBuilder({
   onGenerate,
   generating,
   generated,
+  genErr,
+  evalErr,
   onLoad,
+  onPlayer,
   partnerName,
   partnerId,
   lockedTo,
@@ -1078,7 +1195,10 @@ function TradeBuilder({
   onGenerate: (opts?: { counterparty?: string | null }) => void;
   generating: boolean;
   generated: Generated | null;
+  genErr: string | null;
+  evalErr: string | null;
   onLoad: (p: Package) => void;
+  onPlayer?: (id: string) => void;
   partnerName: string | null;
   partnerId: string | null;
   /** Once one of their players is in the deal, the rest of that side must come
@@ -1110,17 +1230,18 @@ function TradeBuilder({
   return (
     <Card
       title="Trade builder"
-      subtitle="Price a deal, or pin the pieces you want kept and let it search the league for the rest."
+      info="Price a deal, or pin the pieces you want kept and let it search the league for the rest."
       right={
         !empty && (
           <button
+            type="button"
             onClick={() => {
               setGive([]);
               setGet([]);
             }}
             className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-400 hover:text-gray-200"
           >
-            clear deal
+            Clear deal
           </button>
         )
       }
@@ -1129,7 +1250,7 @@ function TradeBuilder({
         <BuilderSide
           title="You give"
           side="mine"
-          placeholder="search your roster or a pick…"
+          placeholder="Search your roster or a pick…"
           league={league}
           items={give}
           onAdd={(a) => setGive([...give.filter((x) => x.player_id !== a.player_id), a])}
@@ -1138,13 +1259,14 @@ function TradeBuilder({
           pinnedIds={pinnedIds}
           priced={evaluation?.give}
           accent={C.critical}
+          onPlayer={onPlayer}
         />
         <BuilderSide
           title="You get"
           side="theirs"
           counterparty={lockedTo}
           placeholder={
-            lockedTo ? `search ${lockedToName}'s roster…` : "search a rival's roster or a pick…"
+            lockedTo ? `Search ${lockedToName}'s roster…` : "Search a rival's roster or a pick…"
           }
           league={league}
           items={get}
@@ -1154,10 +1276,12 @@ function TradeBuilder({
           pinnedIds={pinnedIds}
           priced={evaluation?.get}
           accent={C.s1}
+          onPlayer={onPlayer}
         />
       </div>
 
       {/* ── valuation ─────────────────────────────────────────────── */}
+      {evalErr && !empty && <ErrorBox className="mt-4">{evalErr}</ErrorBox>}
       {evaluation && t && (
         <div className="mt-4 rounded-lg border border-gray-800 bg-gray-950/60 p-4">
           <div className="flex flex-wrap items-center gap-4">
@@ -1170,8 +1294,7 @@ function TradeBuilder({
                   className="text-2xl font-semibold tabular-nums"
                   style={{ color: delta >= 0 ? C.s1 : C.critical }}
                 >
-                  {delta >= 0 ? "+" : ""}
-                  {primary === "market" ? t.market_delta.toLocaleString() : t.vor_delta.toFixed(1)}
+                  {primary === "market" ? `${delta > 0 ? "+" : ""}${t.market_delta.toLocaleString()}` : signed(t.vor_delta)}
                 </span>
                 {verdict && <Badge tone={verdict.tone}>{verdict.text}</Badge>}
               </div>
@@ -1197,15 +1320,13 @@ function TradeBuilder({
 
           {primary === "market" && t.market_pct != null && (
             <p className="mt-3 text-xs text-gray-500">
-              You receive {t.market_pct >= 0 ? "+" : ""}
-              {t.market_pct.toFixed(0)}% of what you send, by market value.
+              You receive {signed(t.market_pct, 0)}% of what you send, by market value.
             </p>
           )}
 
           {evaluation.notes.map((n, i) => (
             <Note key={i}>{n}</Note>
           ))}
-          <Note>{evaluation.limitation}</Note>
         </div>
       )}
 
@@ -1213,18 +1334,20 @@ function TradeBuilder({
       <div className="mt-4 border-t border-gray-800 pt-4">
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             onClick={() => onGenerate()}
             disabled={generating}
             className="rounded bg-indigo-500/15 px-3 py-1.5 text-xs font-medium text-indigo-300 ring-1 ring-inset ring-indigo-500/40 hover:bg-indigo-500/25 disabled:opacity-50"
           >
             {generating
-              ? "searching…"
+              ? "Searching…"
               : anyPinned
-              ? `find trades around ${pinnedIds.length} pinned`
-              : "find trades across the league"}
+              ? `Find trades around ${pinnedIds.length} pinned`
+              : "Find trades across the league"}
           </button>
           {partnerId && (
             <button
+              type="button"
               onClick={() => onGenerate({ counterparty: partnerId })}
               disabled={generating}
               className="rounded px-2 py-1.5 text-xs text-gray-400 ring-1 ring-inset ring-gray-700 hover:text-gray-100 disabled:opacity-50"
@@ -1239,12 +1362,13 @@ function TradeBuilder({
           </span>
         </div>
 
+        {genErr && <ErrorBox className="mt-3">{genErr}</ErrorBox>}
         {generated && (
           <div className="mt-3">
             {generated.reason ? (
               <p className="text-sm text-amber-300/80">{generated.reason}</p>
             ) : generated.packages.length === 0 ? (
-              <p className="text-sm text-gray-500">
+              <p className="text-xs text-gray-500">
                 Nothing viable across {generated.searched} team
                 {generated.searched === 1 ? "" : "s"}. With nothing pinned that means no package improves
                 both lineups — the normal answer in a league where everyone drafted sensibly.
@@ -1263,41 +1387,34 @@ function TradeBuilder({
                   {generated.packages.map((p, i) => (
                     <li key={i} className="rounded border border-gray-800 px-3 py-2 hover:bg-gray-800/30">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                        <span className="min-w-[9rem] text-gray-100">{p.counterparty}</span>
+                        <span className="min-w-[9rem] font-medium text-gray-300">{p.counterparty}</span>
                         <span className="text-xs text-gray-500">send</span>
-                        <span className="text-gray-300">{p.give.map((a) => a.name).join(" + ")}</span>
+                        <AssetNames assets={p.give} onPlayer={onPlayer} />
                         <span className="text-xs text-gray-500">for</span>
-                        <span className="text-indigo-300">{p.get.map((a) => a.name).join(" + ")}</span>
+                        <AssetNames assets={p.get} onPlayer={onPlayer} />
                         <button
+                          type="button"
                           onClick={() => onLoad(p)}
-                          className="ml-auto rounded px-2 py-0.5 text-[11px] text-gray-400 ring-1 ring-inset ring-gray-700 hover:text-gray-100 hover:ring-gray-500"
+                          className="ml-auto min-w-[2.5rem] rounded px-2 py-0.5 text-[11px] text-gray-400 ring-1 ring-inset ring-gray-700 hover:text-gray-100 hover:ring-gray-500"
                         >
-                          load above
+                          Load above
                         </button>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-x-4 text-xs tabular-nums">
-                        <span style={{ color: p.my_gain >= 0 ? C.s3 : C.critical }}>
-                          my lineup {p.my_gain >= 0 ? "+" : ""}
-                          {p.my_gain}
-                        </span>
-                        <span className="text-gray-500">their lineup +{p.their_gain}</span>
-                        {p.market_equivalent != null && (
-                          <span
-                            className="text-gray-600"
-                            title="Your lineup change converted to market units at the rate implied by your own roster"
-                          >
-                            ≈ {p.market_equivalent >= 0 ? "+" : ""}
-                            {p.market_equivalent.toLocaleString()} in value
-                          </span>
-                        )}
-                        <span style={{ color: p.market_delta >= 0 ? C.s1 : C.warning }}>
-                          market {p.market_delta >= 0 ? "+" : ""}
+                        <span style={{ color: p.my_gain >= 0 ? C.s3 : C.critical }}>my lineup {signed(p.my_gain)}</span>
+                        <span className="text-gray-500">their lineup {signed(p.their_gain)}</span>
+                        <span
+                          style={{ color: p.market_delta >= 0 ? C.s1 : C.warning }}
+                          title={
+                            p.market_equivalent != null
+                              ? `Your lineup change is worth ≈ ${p.market_equivalent > 0 ? "+" : ""}${p.market_equivalent.toLocaleString()} in market units, at the rate implied by your own roster`
+                              : undefined
+                          }
+                        >
+                          market {p.market_delta > 0 ? "+" : ""}
                           {p.market_delta.toLocaleString()}
                           {p.market_pct != null && (
-                            <span className="ml-1 text-gray-600">
-                              ({p.market_pct >= 0 ? "+" : ""}
-                              {p.market_pct}%)
-                            </span>
+                            <span className="ml-1 text-gray-600">({signed(p.market_pct, 0)}%)</span>
                           )}
                         </span>
                       </div>
@@ -1309,7 +1426,6 @@ function TradeBuilder({
                 <Note>{generated.units_note}</Note>
                 {generated.pool_note && <Note>{generated.pool_note}</Note>}
                 {generated.season_note && <Note>{generated.season_note}</Note>}
-                <Note>{generated.limitation}</Note>
               </>
             )}
           </div>
@@ -1341,6 +1457,7 @@ function BuilderSide({
   side,
   counterparty,
   placeholder,
+  onPlayer,
 }: {
   title: string;
   league: string;
@@ -1354,6 +1471,7 @@ function BuilderSide({
   side: "mine" | "theirs";
   counterparty?: string | null;
   placeholder?: string;
+  onPlayer?: (id: string) => void;
 }) {
   const byId = useMemo(() => {
     const m = new Map<string, Priced>();
@@ -1379,7 +1497,7 @@ function BuilderSide({
         placeholder={placeholder}
       />
       {items.length === 0 ? (
-        <p className="mt-3 text-xs text-gray-600">nothing yet</p>
+        <p className="mt-3 text-xs text-gray-500">nothing yet</p>
       ) : (
         <ul className="mt-3 space-y-1.5">
           {items.map((a) => {
@@ -1395,7 +1513,10 @@ function BuilderSide({
                 }`}
               >
                 <span className="w-9 shrink-0 text-xs text-gray-500">{a.position}</span>
-                <span className="min-w-0 truncate text-sm text-gray-200">{a.name}</span>
+                {/* The name opens the dossier; pin and × stay separate targets. */}
+                <span className="min-w-0 truncate text-sm">
+                  <PlayerName id={a.player_id} name={a.name} onPlayer={isPickId(a) ? undefined : onPlayer} />
+                </span>
                 <span className="flex-1" />
                 <span className="shrink-0 text-right text-xs tabular-nums text-gray-400">
                   {p?.market_value != null ? p.market_value.toLocaleString() : "—"}
@@ -1434,19 +1555,21 @@ function BuilderSide({
                   </span>
                 )}
                 <button
+                  type="button"
                   onClick={() => onTogglePin(a)}
                   title="Pin — every generated package will contain this player"
-                  className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ring-1 ring-inset ${
+                  className={`shrink-0 ${ROW_BTN} ${
                     isPinned
                       ? "bg-amber-500/10 text-amber-300 ring-amber-500/40"
                       : "text-gray-500 ring-gray-800 hover:text-gray-200 hover:ring-gray-600"
                   }`}
                 >
-                  {isPinned ? "pinned" : "pin"}
+                  {isPinned ? "Pinned" : "Pin"}
                 </button>
                 <button
+                  type="button"
                   onClick={() => onRemove(a.player_id)}
-                  className="shrink-0 px-1 text-gray-600 hover:text-red-400"
+                  className="shrink-0 px-1 text-gray-600 hover:text-red-400 pointer-coarse:min-w-[2.5rem]"
                   aria-label={`remove ${a.name}`}
                 >
                   ×
@@ -1460,49 +1583,173 @@ function BuilderSide({
   );
 }
 
-/* ── roster insights ────────────────────────────────────────────────── */
+/* ── surplus → who needs it ─────────────────────────────────────────── */
 
-function RosterInsights({ data }: { data: TradesData }) {
-  if (!data.insights?.length) return null;
-  return (
-    <Card
-      title="What your roster is telling you"
-      subtitle="The findings the surplus grid contains but does not say out loud"
-    >
-      <ul className="space-y-3">
-        {data.insights.map((i) => (
-          <li key={i.position} className="rounded border border-gray-800 px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="warning">{i.position} surplus</Badge>
-              <span className="text-sm text-gray-100">{i.headline}</span>
-              {i.spare_market > 0 && (
-                <span className="ml-auto text-xs tabular-nums text-gray-500">
-                  {i.spare_market.toLocaleString()} of market value on the bench
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-gray-500">{i.detail}</p>
-            <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-              {i.spare.map((sp) => (
-                <li key={sp.player_id} className="tabular-nums">
-                  <span className="text-gray-300">{sp.name}</span>{" "}
-                  <span style={{ color: (sp.vor ?? 0) < 0 ? C.critical : C.ink2 }}>
-                    VOR {sp.vor != null ? (sp.vor >= 0 ? "+" : "") + sp.vor.toFixed(0) : "—"}
-                  </span>
-                  {sp.market_value != null && (
-                    <span className="ml-1 text-gray-600">· {sp.market_value.toLocaleString()}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
+type Insight = TradesData["insights"][number];
+type Spare = Insight["spare"][number];
+
+/**
+ * The one card for "what can I move, and to whom": first the positions where
+ * you roster more players than any lineup slot can use (the spare players
+ * worth something, with VOR and market), then the managers whose gap your
+ * surplus fills.
+ *
+ * Only a spare above replacement (VOR > 0) is surplus. Below it he is worth
+ * nothing to a weekly lineup, so a weekly league drops him; in dynasty he
+ * still has a market price, so he is listed after them as bench depth, by
+ * market alone.
+ */
+function SurplusFit({
+  data,
+  onPartner,
+  onPlayer,
+}: {
+  data: TradesData;
+  onPartner: (ownerId: string) => void;
+  onPlayer?: (id: string) => void;
+}) {
+  const title = "Your surplus → who needs it";
+  const dynasty = data.mode === "dynasty";
+  const insights = (data.insights ?? [])
+    .map((i) => ({
+      i,
+      spare: i.spare.filter((sp) => (sp.vor ?? 0) > 0),
+      depth: dynasty ? i.spare.filter((sp) => (sp.vor ?? 0) <= 0) : [],
+    }))
+    .filter((x) => x.spare.length > 0 || x.depth.length > 0);
+  const { suggestions, note, volume_warning } = data.suggestions;
+  const notes = (
+    <>
       <Note>
-        A position with one starting slot cannot absorb depth — whatever sits behind the starter scores
-        nothing for you all season. It is the cheapest thing on a roster to convert into something startable,
-        which is why it is the clearest trade action available.
+        A position with one starting slot cannot absorb depth — whatever sits behind the starter scores nothing for you
+        all season. It is the cheapest thing on a roster to convert into something startable, which is why it is the
+        clearest trade action available.
       </Note>
+      <Note>
+        The position list above covers only positions no flex slot can use. At RB, WR and TE the flex absorbs depth, so
+        surplus there — usually a WR — is flex-eligible depth left over once every WR and flex slot is filled, and it
+        shows up only in the manager matches.
+      </Note>
+      <Note>{note}</Note>
+      <Note>{volume_warning}</Note>
+    </>
+  );
+  const none = "No clean positional mismatch right now.";
+
+  if (insights.length === 0 && suggestions.length === 0) {
+    return (
+      <>
+        <QuietLine title={title}>{none}</QuietLine>
+        <SectionProvider name={title}>{notes}</SectionProvider>
+      </>
+    );
+  }
+
+  return (
+    <Card title={title} info="Startable players you cannot start, matched to managers who cannot fill that slot.">
+      {insights.length > 0 && (
+        <ul className="mb-4 space-y-2">
+          {insights.map(({ i, spare, depth }) => (
+            <li key={i.position}>
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <Badge tone="warning">{i.position}</Badge>
+                {/* Beside the badge, wrapping inside itself, so the badge is never a line of its own. */}
+                <MetaLine className="min-w-0 flex-1 tabular-nums">
+                  <span className="text-sm text-gray-300">
+                    {i.rostered} rostered for {i.startable_slots} starting {i.startable_slots === 1 ? "slot" : "slots"}
+                  </span>
+                  {i.spare_market > 0 && <span>{i.spare_market.toLocaleString()} market on the bench</span>}
+                </MetaLine>
+              </div>
+              {spare.length > 0 && (
+                <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                  {spare.map((sp) => (
+                    <li key={sp.player_id}>
+                      <MetaLine className="tabular-nums">
+                        <SpareName sp={sp} onPlayer={onPlayer} />
+                        <span className="text-gray-400">VOR {signed(sp.vor ?? 0, 0)}</span>
+                        {sp.market_value != null && <span>{sp.market_value.toLocaleString()}</span>}
+                      </MetaLine>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {depth.length > 0 && (
+                <div className="mt-1">
+                  <MetaLine className="tabular-nums">
+                    <span
+                      className="text-gray-600"
+                      title="Below replacement: no lineup value this season, but a market price in dynasty"
+                    >
+                      bench depth
+                    </span>
+                    {depth.map((sp) => (
+                      <span key={sp.player_id}>
+                        <SpareName sp={sp} onPlayer={onPlayer} />
+                        {sp.market_value != null && <span className="ml-1">{sp.market_value.toLocaleString()}</span>}
+                      </span>
+                    ))}
+                  </MetaLine>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {suggestions.length === 0 ? (
+        <p className="text-xs text-gray-500">{none}</p>
+      ) : (
+        <ul className="grid gap-2 md:grid-cols-2">
+          {suggestions.map((s) => (
+            <li key={s.owner_id} className="rounded border border-gray-800 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => onPartner(s.owner_id)}
+                  className="ff-inline ff-hit text-gray-100 underline decoration-gray-700 underline-offset-2 hover:decoration-indigo-400"
+                  title="Load this manager's roster above"
+                >
+                  {s.counterparty}
+                </button>
+                <span className="text-gray-500">— send</span>
+                <Badge tone="neutral">{s.i_send}</Badge>
+                <span className="text-gray-500">for</span>
+                <Badge tone="info">{s.i_receive}</Badge>
+                {s.thin_history && (
+                  <Badge
+                    tone="warning"
+                    title={
+                      `${s.their_trades} completed trade${s.their_trades === 1 ? "" : "s"}` +
+                      (s.their_accept_share != null ? `, ${s.their_accept_share.toFixed(0)}% accepted` : "") +
+                      " — too few to read much into"
+                    }
+                  >
+                    thin
+                  </Badge>
+                )}
+              </div>
+              <MetaLine className="mt-1 tabular-nums">
+                <span>
+                  your spare {s.i_send} VOR {s.my_surplus_vor.toFixed(1)}
+                </span>
+                <span>
+                  their spare {s.i_receive} VOR {s.their_surplus_vor.toFixed(1)}
+                </span>
+              </MetaLine>
+            </li>
+          ))}
+        </ul>
+      )}
+      {notes}
     </Card>
+  );
+}
+
+/** A spare player's name in a meta line: MetaLine separates element children only. */
+function SpareName({ sp, onPlayer }: { sp: Spare; onPlayer?: (id: string) => void }) {
+  return (
+    <span className="text-xs">
+      <PlayerName id={sp.player_id} name={sp.name} onPlayer={onPlayer} />
+    </span>
   );
 }

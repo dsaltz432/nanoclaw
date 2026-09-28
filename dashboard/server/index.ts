@@ -1,6 +1,7 @@
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -77,7 +78,36 @@ app.use(peopleRouter);
 // In production, serve the built frontend
 if (process.env.NODE_ENV === "production") {
   const distPath = path.resolve(__dirname, "../dist");
-  app.use(express.static(distPath));
+  // Hashed build assets never change under a name: cache them for a year and
+  // send the .br / .gz the build wrote beside each one (vite.config.ts).
+  const ASSET_CACHE = "public, max-age=31536000, immutable";
+  const ASSET_TYPES: Record<string, string> = {
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+  };
+  app.use("/assets", (req, res, next) => {
+    const type = ASSET_TYPES[path.extname(req.path)];
+    const accepts = String(req.headers["accept-encoding"] ?? "");
+    if (!type || req.path.includes("..")) return next();
+    for (const [enc, ext] of [
+      ["br", ".br"],
+      ["gzip", ".gz"],
+    ] as const) {
+      const file = path.join(distPath, "assets", req.path + ext);
+      if (accepts.includes(enc) && fs.existsSync(file)) {
+        res.set({ "Content-Type": type, "Content-Encoding": enc, "Cache-Control": ASSET_CACHE, Vary: "Accept-Encoding" });
+        return res.sendFile(file);
+      }
+    }
+    next();
+  });
+  app.use(
+    express.static(distPath, {
+      setHeaders: (res, file) => {
+        if (file.includes(`${path.sep}assets${path.sep}`)) res.setHeader("Cache-Control", ASSET_CACHE);
+      },
+    }),
+  );
   app.get("{*splat}", (_req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
   });

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Badge, Card, ErrorBox, FoldToggle, HoverInfo, Loading, MetaLine, Note, SubHead, Td, Th } from "./viz";
 import { Select } from "./Select";
-import { ago, srcShort } from "./labels";
+import { PlayerName } from "./NoteLine";
+import { ago, fmtDate, fmtDateTime, parseTime, srcShort } from "./labels";
 
 /**
  * Admin — did the content layer actually run, and what did it write.
@@ -28,14 +29,14 @@ type Run = {
   error: string | null;
 };
 
+type State = "ok" | "late" | "failing" | "never" | "off";
+
 type Job = {
   label: string;
   every_min: number;
   via: string;
   last: Run | null;
-  minutes_ago: number | null;
-  state: "ok" | "late" | "failing" | "never" | "off";
-  enabled?: boolean;
+  state: State;
   window: { runs: number; fails: number };
 };
 
@@ -46,9 +47,6 @@ type Source = {
   articles: {
     total: number;
     fetched_window: number;
-    published_window: number;
-    newest_published: string | null;
-    newest_fetched: string | null;
     gated: number;
     suspicious: number;
     player_news: number;
@@ -57,17 +55,14 @@ type Source = {
   rankings: { newest_snapshot: string | null; rows: number; resolved: number; lists: number };
 };
 
-type Extraction = {
-  status: "done" | "failed" | "pending" | "skipped";
-  claims_n: number;
-  summary: string;
-  attempts: number;
-  error: string;
-  elapsed_ms: number | null;
-};
-
 type Article = {
-  extraction: Extraction;
+  extraction: {
+    status: "done" | "failed" | "pending" | "skipped";
+    claims_n: number;
+    summary: string;
+    attempts: number;
+    error: string;
+  };
   article_id: string;
   source: string;
   kind: "article" | "player_news";
@@ -77,7 +72,6 @@ type Article = {
   published_at: string | null;
   fetched_at: string;
   body_chars: number;
-  category: string;
   player_id: string | null;
   player_name: string;
   player_team: string | null;
@@ -90,9 +84,10 @@ type Core = {
   source: string;
   label: string;
   last: Run | null;
-  minutes_ago: number | null;
-  state: Job["state"];
+  state: State;
   window: { runs: number; fails: number };
+  /** Not sent yet; the core feeds run inside ff-news.sh, every 15 min. */
+  every_min?: number;
 };
 
 type Tally = { resolved: number; unresolved: number; ambiguous: number };
@@ -114,50 +109,50 @@ type Resolver = {
   };
 };
 
-type GatedSource = { source: string; gated: number; gated_window: number; total: number };
-
 type Data = {
   hours: number;
   generated_at: string;
-  totals: {
-    articles: number;
-    fetched_window: number;
-    gated: number;
-    flagged: number;
-    rankings_rows: number;
-    notes_window: number;
-  };
+  totals: { articles: number; fetched_window: number; notes_window: number };
   sources: Source[];
   core: Core[];
   claims: Core & {
-    label: string;
     every_min: number;
     via: string;
-    model: string;
     stats: {
-      by_status: Record<string, { articles: number; claims: number; cost_usd: number; avg_ms: number | null }>;
+      by_status: Record<string, { articles: number; claims: number; avg_ms: number | null }>;
       pending: number;
       claims: number;
-      claims_resolved: number;
     };
   };
   articles: Article[];
-  filters: { source: string | null; kind: string | null; limit: number };
   runs: Run[];
-  last_run: {
-    articles: { at?: string; resolver?: Record<string, number> } | null;
-    rankings: { at?: string; season?: number; week?: number; resolver?: Record<string, number> } | null;
-  };
-  commands: { articles: string; rankings: string };
-  /** Optional only so a cached payload from before these fields existed still renders. */
-  resolver?: Resolver;
-  gated_by_source?: GatedSource[];
+  commands: { articles: string };
+  resolver: Resolver;
   _stale?: boolean;
-  _error?: string;
   error?: string;
 };
 
-const STATE_TONE: Record<Job["state"], "good" | "warning" | "critical" | "neutral"> = {
+/** One line of the Sources table: a site's job, a core feed, or claims extraction. */
+type JobRow = {
+  key: string;
+  /** Who, for the problem list ("FantasyPros — rankings"). */
+  name: string;
+  site: string;
+  siteClass: string;
+  /** A site's second job: a ditto in the desktop column, a dimmed name on a phone. */
+  repeat: boolean;
+  /** The job on a phone's line 1 ("rankings"); the Job column carries it on a desktop. */
+  jobName: string | null;
+  job: string;
+  state: State;
+  every_min: number;
+  via?: string;
+  last: Run | null;
+  window: { runs: number; fails: number };
+  stored: ReactNode | null;
+};
+
+const STATE_TONE: Record<State, "good" | "warning" | "critical" | "neutral"> = {
   ok: "good",
   late: "warning",
   failing: "critical",
@@ -165,19 +160,27 @@ const STATE_TONE: Record<Job["state"], "good" | "warning" | "critical" | "neutra
   off: "neutral",
 };
 
+const CORE_EVERY_MIN = 15;
+const PAGE = 15;
+const RUN_PAGE = 20;
+/** Above this many articles waiting, the extraction backlog reads amber. */
+const BACKLOG_WARN = 20;
+
 function cadence(min: number): string {
   return min >= 1440 ? "daily" : min >= 60 ? `every ${Math.round(min / 60)}h` : `every ${min} min`;
 }
 
-export default function AdminTab() {
+/** A health problem the page shell knows about and Admin cannot compute: a data-audit check or a failing feed. */
+export type FeedProblem = { label: string; state: string; detail: string };
+
+export default function AdminTab({ onPlayer, feedProblems }: { onPlayer?: (id: string) => void; feedProblems: FeedProblem[] }) {
   const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [source, setSource] = useState<string>("");
   const [kind, setKind] = useState<string>("");
-  const [showRuns, setShowRuns] = useState(false);
   const [busy, setBusy] = useState(false);
-  const PAGE = 30;
-  const [shown, setShown] = useState(PAGE);
+  const [allArticles, setAllArticles] = useState(false);
+  const [allRuns, setAllRuns] = useState(false);
 
   const load = useCallback(
     (refresh = false) => {
@@ -196,325 +199,309 @@ export default function AdminTab() {
   );
 
   useEffect(() => {
-    setShown(PAGE);
+    setAllArticles(false);
     load();
   }, [load]);
 
-  if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
-  if (!data) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  if (!data) return err ? <ErrorBox>{err}</ErrorBox> : <Loading rows={6} />;
 
-  const problems = data.sources.flatMap((s) =>
-    (["articles", "rankings"] as const)
-      .filter((j) => s.jobs[j].state === "failing" || s.jobs[j].state === "late")
-      .map((j) => ({ label: s.label, job: s.jobs[j] }))
-  );
-  const coreProblems = [...data.core, data.claims].filter(
-    (c) => c.state === "failing" || c.state === "late"
-  );
+  const claimsStats = data.claims.stats;
+  const failedArticles = claimsStats.by_status.failed?.articles ?? 0;
+  const avgMs = claimsStats.by_status.done?.avg_ms;
+  const rows: JobRow[] = [
+    ...data.sources.flatMap((s) =>
+      (["articles", "rankings"] as const).map((j, i): JobRow => {
+        const job = s.jobs[j];
+        return {
+          key: `${s.source}-${j}`,
+          name: `${s.label} — ${job.label}`,
+          site: s.label,
+          siteClass: "font-medium text-gray-200",
+          repeat: i > 0,
+          jobName: job.label,
+          job: `${job.label} · ${cadence(job.every_min)}`,
+          state: job.state,
+          every_min: job.every_min,
+          via: job.via,
+          last: job.last,
+          window: job.window,
+          stored:
+            j === "articles" ? (
+              <>
+                {s.articles.total} stored · {s.articles.fetched_window} new
+                {s.articles.player_news > 0 && (
+                  <> · {s.articles.resolved}/{s.articles.player_news} players resolved</>
+                )}
+                {s.articles.gated > 0 && <> · {s.articles.gated} gated</>}
+                {s.articles.suspicious > 0 && (
+                  <span className="text-amber-300"> · {s.articles.suspicious} flagged</span>
+                )}
+              </>
+            ) : s.rankings.newest_snapshot ? (
+              <>
+                {s.rankings.lists} lists · {s.rankings.rows} rows · {s.rankings.resolved} resolved · snapshot{" "}
+                {fmtDate(s.rankings.newest_snapshot) || s.rankings.newest_snapshot}
+              </>
+            ) : null,
+        };
+      })
+    ),
+    ...data.core.map(
+      (c): JobRow => ({
+        key: c.source,
+        name: c.label,
+        site: c.label,
+        siteClass: "font-medium text-gray-400",
+        repeat: false,
+        jobName: null,
+        job: cadence(c.every_min ?? CORE_EVERY_MIN),
+        state: c.state,
+        every_min: c.every_min ?? CORE_EVERY_MIN,
+        last: c.last,
+        window: c.window,
+        stored: null,
+      })
+    ),
+    {
+      key: "claims",
+      name: "Claims extraction",
+      site: "Claims extraction",
+      siteClass: "font-medium text-gray-200",
+      repeat: false,
+      jobName: null,
+      job: cadence(data.claims.every_min),
+      state: data.claims.state,
+      every_min: data.claims.every_min,
+      via: data.claims.via,
+      last: data.claims.last,
+      window: data.claims.window,
+      stored: (
+        <>
+          {claimsStats.claims} claims from {claimsStats.by_status.done?.articles ?? 0} articles ·{" "}
+          <span className={claimsStats.pending > BACKLOG_WARN ? "text-amber-300" : ""}>
+            {claimsStats.pending} pending
+          </span>
+          {failedArticles > 0 && <span className="text-red-400"> · {failedArticles} failed</span>}
+          {avgMs != null && <> · {(avgMs / 1000).toFixed(0)}s avg</>}
+        </>
+      ),
+    },
+  ];
+  // "never" counts, as it does in the shell's content_health, so this count
+  // and the header badge's agree; "off" is a choice, not a problem.
+  const problems = rows.filter((r) => r.state === "failing" || r.state === "late" || r.state === "never");
+  const nProblems = feedProblems.length + problems.length;
+  const jobErrors = rows.some((r) => r.last?.error);
+  const runErrors = data.runs.some((r) => r.error);
+
   const resolver = data.resolver;
   // Worst offenders first: the one row you came to check should not hide
   // between five clean ones.
-  const rankingTables = [...(resolver?.rankings ?? [])].sort(
+  const rankingTables = [...resolver.rankings].sort(
     (a, b) => b.unresolved - a.unresolved || a.source.localeCompare(b.source)
   );
-  const gated = [...(data.gated_by_source ?? [])].sort(
-    (a, b) => b.gated_window - a.gated_window || b.gated - a.gated || a.source.localeCompare(b.source)
-  );
+  const articles = allArticles ? data.articles : data.articles.slice(0, PAGE);
+  const runs = allRuns ? data.runs : data.runs.slice(0, RUN_PAGE);
 
   return (
     <div className="space-y-4">
       {/* ── headline: is anything wrong ─────────────────────────────── */}
-      {problems.length + coreProblems.length > 0 ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
-          <div className="mb-1 flex flex-wrap items-center gap-2">
-            <Badge tone="warning">{problems.length + coreProblems.length} needing attention</Badge>
-            {data._stale && <Badge tone="neutral">cached</Badge>}
-          </div>
-          <ul className="space-y-0.5 text-xs text-amber-100/90">
-            {problems.map((p, i) => (
-              <li key={i}>
-                {p.label} — {p.job.label}: <span className="font-medium">{p.job.state}</span>
-                {p.job.last?.error && <span className="text-amber-300/80"> · {p.job.last.error}</span>}
-                {p.job.state === "late" && (
-                  <span className="text-amber-300/80">
-                    {" "}
-                    · last ran {fmtAgo(p.job.minutes_ago)}, expected {cadence(p.job.every_min)} via{" "}
-                    {p.job.via}
-                  </span>
-                )}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          {nProblems > 0 ? (
+            <Badge tone="warning">{nProblems} needing attention</Badge>
+          ) : (
+            <Badge tone="good">all healthy</Badge>
+          )}
+          <span title={data.generated_at}>as of {fmtDateTime(data.generated_at) || data.generated_at}</span>
+          {data._stale && <Badge tone="neutral">cached</Badge>}
+          {/* The volume in the window and the names the resolver gave up on:
+              all the Sources table does not already say. Three tiles for three
+              numbers were ~100px; this is part of a line. */}
+          <MetaLine className="text-xs">
+            <HoverInfo info={`${data.totals.articles} stored`}>
+              <span className="tabular-nums text-gray-300">{data.totals.fetched_window}</span> articles
+            </HoverInfo>
+            <HoverInfo info="Rotowire via ESPN">
+              <span className="tabular-nums text-gray-300">{data.totals.notes_window}</span> wire notes
+            </HoverInfo>
+            <HoverInfo info={`of ${resolver.claims.n} claims in the last ${resolver.claims.hours}h`}>
+              <span className={`tabular-nums ${resolver.claims.unresolved > 0 ? "text-amber-300" : "text-gray-300"}`}>
+                {resolver.claims.unresolved}
+              </span>{" "}
+              unresolved names
+            </HoverInfo>
+            <span>last {data.hours}h</span>
+          </MetaLine>
+          <button
+            type="button"
+            onClick={() => load(true)}
+            disabled={busy}
+            className="ff-inline ff-hit ml-auto text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+          >
+            {busy ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {nProblems > 0 && (
+          <ul className="space-y-0.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-100/90">
+            {/* The shell's audit checks and core-feed failures first: Admin
+                cannot compute those, and they are what the header badge led with. */}
+            {feedProblems.map((p, i) => (
+              <li key={`feed-${p.label}-${i}`}>
+                {p.label}: <span className="font-medium">{p.state}</span>
+                {p.detail && <span className="text-amber-300/80"> · {p.detail}</span>}
               </li>
             ))}
-            {coreProblems.map((c) => (
-              <li key={c.source}>
-                {c.label}: <span className="font-medium">{c.state}</span>
-                {c.last?.error && <span className="text-amber-300/80"> · {c.last.error}</span>}
+            {problems.map((p) => (
+              <li key={p.key}>
+                {p.name}: <span className="font-medium">{p.state}</span>
+                {p.last?.error && <span className="text-amber-300/80"> · {p.last.error}</span>}
+                {p.state === "never" && (
+                  <span className="text-amber-300/80">
+                    {" "}
+                    · has never run, expected {cadence(p.every_min)}
+                    {p.via && <> via {p.via}</>}
+                  </span>
+                )}
+                {p.state === "late" && (
+                  <span className="text-amber-300/80">
+                    {" "}
+                    · last ran {p.last ? (ago(p.last.started_at) ?? p.last.started_at) : "never"}, expected{" "}
+                    {cadence(p.every_min)}
+                    {p.via && <> via {p.via}</>}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-          <Badge tone="good">all jobs healthy</Badge>
-          <span>as of {fmt(data.generated_at)}</span>
-          {data._stale && <Badge tone="neutral">cached</Badge>}
-          <button
-            onClick={() => load(true)}
-            disabled={busy}
-            className="ml-auto rounded-md border border-gray-800 px-2 py-1 text-gray-400 hover:border-gray-700 hover:text-gray-200 disabled:opacity-50"
-          >
-            {busy ? "refreshing…" : "refresh"}
-          </button>
-        </div>
-      )}
-
-      {/* Seven tiles. The first six fill a 2/3 grid on phone and tablet; the
-          seventh (unresolved names) spans the full row below them so it never
-          sits as an orphan, and rejoins the grid at lg where four fit across.
-          The "Content" tile moved here from Today — an ingest statistic, not a
-          decision input — so "Claims extracted" now reports the backlog. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        <StatTile
-          label={`Articles fetched, ${data.hours}h`}
-          value={data.totals.fetched_window}
-          hint={`${data.totals.articles} stored in total`}
-        />
-        <StatTile
-          label={`Wire notes, ${data.hours}h`}
-          value={data.totals.notes_window}
-          hint="Rotowire via ESPN, the existing feed"
-        />
-        <StatTile label="Rankings rows" value={data.totals.rankings_rows} hint="all snapshots" />
-        <StatTile
-          label="Content"
-          value={data.claims.stats.claims}
-          hint={`claims from ${data.claims.stats.by_status.done?.articles ?? 0} articles · ${data.sources.length} sites`}
-        />
-        <StatTile
-          label="Extraction backlog"
-          value={data.claims.stats.pending}
-          hint={`articles waiting · ${data.claims.stats.claims_resolved} claims resolved`}
-          tone={data.claims.stats.pending > 20 ? "warning" : "default"}
-        />
-        <StatTile
-          label="Flagged"
-          value={`${data.totals.flagged} / ${data.totals.gated}`}
-          hint="reads as instruction / paywalled"
-          tone={data.totals.flagged > 0 ? "warning" : "default"}
-        />
-        {resolver && (
-          <div className="col-span-2 flex flex-col sm:col-span-3 lg:col-span-1 [&>div]:flex-1">
-            <StatTile
-              label={`Unresolved (claims, ${resolver.claims.hours}h)`}
-              value={resolver.claims.unresolved}
-              hint={`of ${resolver.claims.n} claims · names with no Sleeper id`}
-              tone={resolver.claims.unresolved > 0 ? "warning" : "default"}
-            />
-          </div>
         )}
+        {err && <ErrorBox>{err}</ErrorBox>}
       </div>
 
-      {/* ── per-source job health ───────────────────────────────────── */}
-      <Card
-        title="Sources"
-        subtitle={
-          <>
-            One row per site and job. <span className="text-gray-400">Articles</span> run every 15
-            min inside <code className="text-gray-400">ff-news.sh</code>;{" "}
-            <span className="text-gray-400">rankings</span> every 2h or daily inside{" "}
-            <code className="text-gray-400">ff-refresh.sh</code> depending on how fast the list moves.{" "}
-            <span className="text-gray-500">off</span> means the adapter exists but is not in the default
-            sources. A job is{" "}
-            <span className="text-amber-300">late</span> when its last run is older than 2.5×
-            its interval, and <span className="text-red-400">failing</span> when that run raised.
-          </>
-        }
-      >
-        <div className="ff-stack-wrap overflow-x-auto">
-          <table className="ff-stack w-full">
-            <thead>
-              <tr>
-                <Th>Site</Th>
-                <Th>Job</Th>
-                <Th>State</Th>
-                <Th>Last run</Th>
-                <Th className="text-right">Rows</Th>
-                <Th className="text-right" title="runs / failures in the window">
-                  {data.hours}h
-                </Th>
-                <Th>Stored</Th>
-                <Th>Error</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sources.map((s) =>
-                (["articles", "rankings"] as const).map((j, i) => {
-                  const job = s.jobs[j];
-                  return (
-                    <tr key={`${s.source}-${j}`} className="border-t border-gray-800/60">
-                      {/* Stacked, every card needs the site name; the ditto
-                          mark only reads in a column. */}
-                      <Td data-label="" className={`ff-row-head ${i === 0 ? "font-medium text-gray-200" : "text-gray-700"}`}>
-                        <span className={i === 0 ? "" : "sm:hidden"}>{s.label}</span>
-                        {i > 0 && <span className="hidden sm:inline">〃</span>}
-                      </Td>
-                      {/* One child per cell: stacked cells are flex rows and
-                          loose children spread across them. */}
-                      <Td data-label="Job" className="text-xs text-gray-400">
-                        <span>
-                          {job.label}
-                          <span className="text-gray-600"> · {cadence(job.every_min)}</span>
-                        </span>
-                      </Td>
-                      <Td data-label="State">
-                        <Badge
-                          tone={STATE_TONE[job.state]}
-                          title={job.state === "off" ? "not in the default sources; see CONTENT-PLAN.md source review" : ""}
-                        >
-                          {job.state}
-                        </Badge>
-                      </Td>
-                      <Td data-label="Last run" className="whitespace-nowrap text-xs text-gray-500" title={job.last?.started_at ?? ""}>
-                        {job.last ? fmtAgo(job.minutes_ago) : "—"}
-                      </Td>
-                      <Td data-label="Rows" className="text-right tabular-nums">{job.last?.rows ?? "—"}</Td>
-                      <Td data-label={`${data.hours}h`} className="text-right text-xs tabular-nums text-gray-500">
-                        <span>
-                          {job.window.runs}
-                          {job.window.fails > 0 && (
-                            <span className="text-red-400"> / {job.window.fails}</span>
-                          )}
-                        </span>
-                      </Td>
-                      <Td data-label="Stored" className="text-xs text-gray-500">
-                        <span>
-                        {j === "articles" ? (
-                          <>
-                            {s.articles.total} stored · {s.articles.fetched_window} new
-                            {s.articles.player_news > 0 && (
-                              <> · {s.articles.resolved}/{s.articles.player_news} players resolved</>
-                            )}
-                            {s.articles.gated > 0 && <> · {s.articles.gated} gated</>}
-                            {s.articles.suspicious > 0 && (
-                              <span className="text-amber-300"> · {s.articles.suspicious} flagged</span>
-                            )}
-                          </>
-                        ) : s.rankings.newest_snapshot ? (
-                          <>
-                            {s.rankings.lists} lists · {s.rankings.rows} rows · {s.rankings.resolved} resolved ·
-                            snapshot {s.rankings.newest_snapshot}
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                        </span>
-                      </Td>
-                      {/* An empty error cell is dropped on a phone so the
-                          card does not end with "ERROR" and nothing. */}
-                      {job.last?.error ? (
-                        <Td data-label="Error" className="max-w-[18rem] truncate text-xs text-red-400/90" title={job.last.error}>
-                          {job.last.error}
-                        </Td>
-                      ) : (
-                        <Td data-label="Error" className="hidden sm:table-cell">{null}</Td>
-                      )}
-                    </tr>
-                  );
-                })
-              )}
-              {data.core.map((c) => (
-                <tr key={c.source} className="border-t border-gray-800/60">
-                  <Td data-label="" className="ff-row-head font-medium text-gray-400">{c.label}</Td>
-                  <Td data-label="Job" className="text-xs text-gray-500">existing feed · every 15 min</Td>
-                  <Td data-label="State">
-                    <Badge tone={STATE_TONE[c.state]}>{c.state}</Badge>
-                  </Td>
-                  <Td data-label="Last run" className="whitespace-nowrap text-xs text-gray-500" title={c.last?.started_at ?? ""}>
-                    {c.last ? fmtAgo(c.minutes_ago) : "—"}
-                  </Td>
-                  <Td data-label="Rows" className="text-right tabular-nums">{c.last?.rows ?? "—"}</Td>
-                  <Td data-label={`${data.hours}h`} className="text-right text-xs tabular-nums text-gray-500">
-                    <span>
-                      {c.window.runs}
-                      {c.window.fails > 0 && <span className="text-red-400"> / {c.window.fails}</span>}
-                    </span>
-                  </Td>
-                  <Td data-label="Stored" className="text-xs text-gray-600">—</Td>
-                  {c.last?.error ? (
-                    <Td data-label="Error" className="max-w-[18rem] truncate text-xs text-red-400/90" title={c.last.error}>
-                      {c.last.error}
-                    </Td>
-                  ) : (
-                    <Td data-label="Error" className="hidden sm:table-cell">{null}</Td>
-                  )}
-                </tr>
-              ))}
-              <tr className="border-t border-gray-800/60">
-                <Td data-label="" className="ff-row-head font-medium text-gray-200">Claims extraction</Td>
-                <Td data-label="Job" className="text-xs text-gray-400">
-                  <span>layer 2 · every {data.claims.every_min} min · {data.claims.model}</span>
-                </Td>
-                <Td data-label="State">
-                  <Badge tone={STATE_TONE[data.claims.state]}>{data.claims.state}</Badge>
-                </Td>
-                <Td data-label="Last run" className="whitespace-nowrap text-xs text-gray-500" title={data.claims.last?.started_at ?? ""}>
-                  {data.claims.last ? fmtAgo(data.claims.minutes_ago) : "—"}
-                </Td>
-                <Td data-label="Rows" className="text-right tabular-nums">{data.claims.last?.rows ?? "—"}</Td>
-                <Td data-label={`${data.hours}h`} className="text-right text-xs tabular-nums text-gray-500">
-                  <span>
-                    {data.claims.window.runs}
-                    {data.claims.window.fails > 0 && (
-                      <span className="text-red-400"> / {data.claims.window.fails}</span>
-                    )}
-                  </span>
-                </Td>
-                <Td data-label="Stored" className="text-xs text-gray-500">
-                  <span>
-                  {data.claims.stats.claims} claims from {data.claims.stats.by_status.done?.articles ?? 0} articles
-                  {" · "}
-                  {data.claims.stats.pending} pending
-                  {(data.claims.stats.by_status.failed?.articles ?? 0) > 0 && (
-                    <span className="text-red-400"> · {data.claims.stats.by_status.failed?.articles} failed</span>
-                  )}
-                  {data.claims.stats.by_status.done?.avg_ms != null && (
-                    <> · {(data.claims.stats.by_status.done.avg_ms / 1000).toFixed(0)}s avg</>
-                  )}
-                  </span>
-                </Td>
-                {data.claims.last?.error ? (
-                  <Td data-label="Error" className="max-w-[18rem] truncate text-xs text-red-400/90" title={data.claims.last.error}>
-                    {data.claims.last.error}
-                  </Td>
-                ) : (
-                  <Td data-label="Error" className="hidden sm:table-cell">{null}</Td>
-                )}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        {!resolver && data.last_run.articles?.resolver && (
-          <p className="mt-3 text-[11px] text-gray-600">
-            Last article run resolved {data.last_run.articles.resolver.resolved} player names,{" "}
-            {data.last_run.articles.resolver.unresolved} unknown, {data.last_run.articles.resolver.ambiguous}{" "}
-            ambiguous. Unknown is expected for IDP players; ambiguous means two Sleeper players share the
-            name and no team or position broke the tie.
-          </p>
-        )}
-      </Card>
+      <div aria-busy={busy} className={`space-y-4 transition-opacity ${busy ? "opacity-60" : ""}`}>
 
-      {/* ── resolver: names that did not map to a Sleeper id ────────── */}
-      {resolver && (
+        {/* ── per-source job health ───────────────────────────────────── */}
+        <Card title="Sources" info="Each site's jobs, the core feeds and claims extraction: state, last run, what is stored.">
+          <Note>
+            {`One row per site and job. Articles run every 15 min inside ff-news.sh; rankings every 2h or daily inside ff-refresh.sh, depending on how fast the list moves. "off" means the adapter exists but is not in the default sources. A job is late when its last run is older than 2.5x its interval, and failing when that run raised. The ${data.hours}h column is runs / failures in the window. Run the article job by hand with ${data.commands.articles}.`}
+          </Note>
+          <div className="ff-stack-wrap overflow-x-auto">
+            <table className="ff-stack w-full">
+              <thead>
+                <tr>
+                  <Th>Site</Th>
+                  <Th className="hidden sm:table-cell">Job</Th>
+                  <Th className="hidden sm:table-cell">State</Th>
+                  <Th className="hidden sm:table-cell">Last run</Th>
+                  <Th className="hidden text-right sm:table-cell">Rows</Th>
+                  <Th className="hidden text-right sm:table-cell" title="runs / failures in the window">
+                    {data.hours}h
+                  </Th>
+                  <Th className="hidden sm:table-cell">Stored</Th>
+                  {jobErrors && <Th className="hidden sm:table-cell">Error</Th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.key} className="border-t border-gray-800/60">
+                    {/* The row head. On a phone it is the whole card: site and job
+                        with the state on the right, then last run · rows · runs,
+                        then what is stored and any error, each clamped. */}
+                    <Td data-label="" className="ff-row-head">
+                      <div className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1">
+                          <span className={`hidden sm:inline ${r.repeat ? "text-gray-700" : r.siteClass}`}>
+                            {r.repeat ? "〃" : r.site}
+                          </span>
+                          <span className={`sm:hidden ${r.repeat ? "font-normal text-gray-500" : r.siteClass}`}>
+                            {r.site}
+                          </span>
+                          {r.jobName && <span className="text-xs font-normal text-gray-400 sm:hidden"> {r.jobName}</span>}
+                        </span>
+                        <span className="shrink-0 sm:hidden">
+                          <StateBadge state={r.state} />
+                        </span>
+                      </div>
+                      <div className="sm:hidden">
+                        <MetaLine className="mt-0.5">
+                          <span title={r.last ? fmtDateTime(r.last.started_at) : ""}>
+                            {r.last ? `ran ${ago(r.last.started_at) ?? fmtDateTime(r.last.started_at)}` : "never ran"}
+                          </span>
+                          {/* Left out at 0, as in the run log: "0 rows" says nothing "ran 6 min ago" does not. */}
+                          {!!r.last?.rows && (
+                            <span className="tabular-nums">
+                              {r.last.rows} {r.last.rows === 1 ? "row" : "rows"}
+                            </span>
+                          )}
+                          <span className="tabular-nums">
+                            {r.window.runs} runs/{data.hours}h
+                            {r.window.fails > 0 && <span className="text-red-400">, {r.window.fails} failed</span>}
+                          </span>
+                        </MetaLine>
+                        {r.stored && (
+                          <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-gray-500">{r.stored}</div>
+                        )}
+                        {r.last?.error && (
+                          <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-red-400/90" title={r.last.error}>
+                            {r.last.error}
+                          </div>
+                        )}
+                      </div>
+                    </Td>
+                    <Td data-label="Job" className="hidden text-xs text-gray-400 sm:table-cell">
+                      {r.job}
+                    </Td>
+                    <Td data-label="State" className="hidden sm:table-cell">
+                      <StateBadge state={r.state} />
+                    </Td>
+                    <Td
+                      data-label="Last run"
+                      className="hidden whitespace-nowrap text-xs text-gray-500 sm:table-cell"
+                      title={r.last ? fmtDateTime(r.last.started_at) : ""}
+                    >
+                      {r.last ? (ago(r.last.started_at) ?? fmtDateTime(r.last.started_at)) : "—"}
+                    </Td>
+                    <Td data-label="Rows" className="hidden text-right tabular-nums sm:table-cell">
+                      {r.last?.rows ?? "—"}
+                    </Td>
+                    <Td
+                      data-label={`${data.hours}h`}
+                      className="hidden text-right text-xs tabular-nums text-gray-500 sm:table-cell"
+                    >
+                      <span>
+                        {r.window.runs}
+                        {r.window.fails > 0 && <span className="text-red-400"> / {r.window.fails}</span>}
+                      </span>
+                    </Td>
+                    <Td data-label="Stored" className="hidden text-xs text-gray-500 sm:table-cell">
+                      {r.stored ? <span>{r.stored}</span> : "—"}
+                    </Td>
+                    {jobErrors && (
+                      <Td
+                        data-label="Error"
+                        className="hidden text-xs text-red-400/90 sm:table-cell"
+                        title={r.last?.error ?? ""}
+                      >
+                        <span className="block max-w-[14rem] truncate">{r.last?.error}</span>
+                      </Td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* ── resolver: names that did not map to a Sleeper id ────────── */}
         <Card
           title="Resolver"
-          subtitle={
-            <>
-              Player names the resolver could not map to a Sleeper id, per run and per table.{" "}
-              <span className="text-gray-400">Unresolved</span> is expected for IDP and college players;{" "}
-              <span className="text-gray-400">ambiguous</span> means two Sleeper players share the name and no
-              team or position broke the tie. Names are shown exactly as the site printed them.
-            </>
-          }
+          secondary
+          info="Player names the resolver could not map to a Sleeper id, per run and per table."
         >
+          <Note>
+            Unresolved is expected for IDP and college players; ambiguous means two Sleeper players share the name and
+            no team or position broke the tie. Names are shown exactly as the site printed them.
+          </Note>
           {/* 1. the two most recent runs, side by side */}
           <div className="grid gap-3 sm:grid-cols-2">
             <LastRun label="Last article run" run={resolver.last_runs.articles} />
@@ -522,7 +509,7 @@ export default function AdminTab() {
           </div>
 
           {/* 2. what is sitting unresolved in the stored tables right now */}
-          <h4 className="mb-1.5 mt-4 text-xs font-medium text-gray-300">Unresolved in the tables</h4>
+          <SubHead className="mb-1.5 mt-4">Unresolved in the tables</SubHead>
           <div className="ff-stack-wrap overflow-x-auto">
             <table className="ff-stack w-full">
               <thead>
@@ -539,14 +526,12 @@ export default function AdminTab() {
                 {rankingTables.map((r) => (
                   <tr key={`${r.source}-${r.snapshot}`} className="border-t border-gray-800/60 align-top">
                     <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">
-                      <span>
-                        {srcShort(r.source)} <span className="text-gray-600">rankings</span>
-                      </span>
+                      {srcShort(r.source)} <span className="text-gray-600">rankings</span>
                     </Td>
-                    <Td data-label="Snapshot" className="whitespace-nowrap text-xs text-gray-500">
-                      {r.snapshot}
+                    <Td data-label="Snapshot" className="whitespace-nowrap text-xs text-gray-500" title={r.snapshot}>
+                      {fmtDate(r.snapshot) || r.snapshot}
                     </Td>
-                    <Td data-label="Unresolved" className="whitespace-nowrap text-right text-xs tabular-nums">
+                    <Td data-label="Unresolved" className="text-right text-xs tabular-nums">
                       <span>
                         <span className={r.unresolved > 0 ? "text-amber-300" : "text-gray-400"}>{r.unresolved}</span>
                         <span className="text-gray-600"> / {r.rows}</span>
@@ -557,6 +542,13 @@ export default function AdminTab() {
                     </Td>
                   </tr>
                 ))}
+                {rankingTables.length === 0 && (
+                  <tr className="border-t border-gray-800/60">
+                    <Td data-label="" className="text-xs text-gray-500" colSpan={4}>
+                      No rankings snapshots stored yet.
+                    </Td>
+                  </tr>
+                )}
                 <tr className="border-t border-gray-800/60 align-top">
                   <Td data-label="" className="ff-row-head text-xs text-gray-300">
                     <span className="block">
@@ -572,10 +564,10 @@ export default function AdminTab() {
                       )}
                     </span>
                   </Td>
-                  <Td data-label="Snapshot" className="whitespace-nowrap text-xs text-gray-600">
+                  <Td data-label="Snapshot" empty className="text-xs text-gray-600">
                     —
                   </Td>
-                  <Td data-label="Unresolved" className="whitespace-nowrap text-right text-xs tabular-nums">
+                  <Td data-label="Unresolved" className="text-right text-xs tabular-nums">
                     <span>
                       <span className={resolver.claims.unresolved > 0 ? "text-amber-300" : "text-gray-400"}>
                         {resolver.claims.unresolved}
@@ -587,287 +579,320 @@ export default function AdminTab() {
                     <NamesCell unresolved={resolver.claims.unresolved} top={resolver.claims.top} />
                   </Td>
                 </tr>
-                {rankingTables.length === 0 && (
-                  <tr className="border-t border-gray-800/60">
-                    <Td data-label="" className="text-xs text-gray-500" colSpan={4}>
-                      No rankings snapshots stored yet.
-                    </Td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* 3. paywall teasers, which the resolver never sees */}
-          <h4 className="mt-4 text-xs font-medium text-gray-300">Paywalled teasers per source</h4>
-          <p className="mb-1.5 text-[11px] text-gray-600">
-            Stored with gated=1; never fetched harder and never extracted from.
-          </p>
-          <div className="ff-stack-wrap overflow-x-auto">
-            <table className="ff-stack w-full">
-              <thead>
-                <tr>
-                  <Th>Source</Th>
-                  <Th className="text-right" title="gated / stored, all time">
-                    Gated
-                  </Th>
-                  <Th className="text-right" title="gated articles fetched in the window">
-                    {data.hours}h
-                  </Th>
-                  <Th>{null}</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {gated.map((g) => (
-                  <tr key={g.source} className="border-t border-gray-800/60">
-                    <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">
-                      {srcShort(g.source)}
-                    </Td>
-                    <Td data-label="Gated" className="whitespace-nowrap text-right text-xs tabular-nums">
-                      <span>
-                        <span className={g.gated > 0 ? "text-gray-300" : "text-gray-400"}>{g.gated}</span>
-                        <span className="text-gray-600"> / {g.total}</span>
-                      </span>
-                    </Td>
-                    <Td
-                      data-label={`${data.hours}h`}
-                      className={`whitespace-nowrap text-right text-xs tabular-nums ${g.gated_window > 0 ? "text-amber-300" : "text-gray-500"}`}
-                    >
-                      {g.gated_window}
-                    </Td>
-                    {g.gated_window > 0 ? (
-                      <Td data-label="">
-                        <Badge tone="warning" title={`${g.gated_window} paywalled article${g.gated_window === 1 ? "" : "s"} landed in the last ${data.hours}h`}>
-                          gated in window
-                        </Badge>
-                      </Td>
-                    ) : (
-                      <Td data-label="" className="hidden sm:table-cell">{null}</Td>
-                    )}
-                  </tr>
-                ))}
-                {gated.length === 0 && (
-                  <tr className="border-t border-gray-800/60">
-                    <Td data-label="" className="text-xs text-gray-500" colSpan={4}>
-                      Nothing stored yet.
-                    </Td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
         </Card>
-      )}
 
-      {/* ── every article as it landed ──────────────────────────────── */}
-      <Card
-        title="Articles"
-        subtitle="Newest fetched first. Titles open the source. Player news shows who it resolved to."
-        right={
-          <div className="flex items-center gap-2">
-            <Select
-              aria-label="Site"
-              size="sm"
-              value={source}
-              onChange={setSource}
-              options={[{ value: "", label: "all sites" }, ...data.sources.map((s) => ({ value: s.source, label: s.label }))]}
-            />
-            <Select
-              aria-label="Kind"
-              size="sm"
-              value={kind}
-              onChange={setKind}
-              options={[
-                { value: "", label: "articles + player news" },
-                { value: "article", label: "articles only" },
-                { value: "player_news", label: "player news only" },
-              ]}
-            />
-          </div>
-        }
-      >
-        <div className="ff-stack-wrap overflow-x-auto">
-          <table className="ff-stack w-full">
-            <thead>
-              <tr>
-                <Th>Fetched</Th>
-                <Th>Published</Th>
-                <Th>Site</Th>
-                <Th>Title</Th>
-                <Th>By</Th>
-                <Th>Player</Th>
-                <Th title="claims extracted by the model; hover for its one-line summary">Claims</Th>
-                <Th className="text-right">Chars</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.articles.slice(0, shown).map((a) => (
-                <tr key={a.article_id} className="border-t border-gray-800/60 align-top">
-                  <Td data-label="Fetched" className="whitespace-nowrap text-xs text-gray-500" title={a.fetched_at}>
-                    {fmtShort(a.fetched_at)}
-                  </Td>
-                  <Td data-label="Published" className="whitespace-nowrap text-xs text-gray-500" title={a.published_at ?? ""}>
-                    {a.published_at ? fmtShort(a.published_at) : "—"}
-                  </Td>
-                  <Td data-label="Site" className="whitespace-nowrap text-xs text-gray-400">
-                    <span>
-                      {labelFor(data, a.source)}
-                      {a.kind === "player_news" && (
-                        <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-600">news</span>
-                      )}
-                    </span>
-                  </Td>
-                  <Td data-label="" className="ff-row-head max-w-[28rem]">
-                    <a
-                      href={a.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-gray-200 hover:text-indigo-300 hover:underline"
-                    >
-                      {a.title || a.url}
-                    </a>
-                    <span className="ml-1.5 inline-flex gap-1 align-middle">
-                      {a.gated && <Badge tone="neutral" title="body looked paywalled or truncated">gated</Badge>}
-                      {a.flagged && (
-                        <Badge tone="warning" title="text reads as an instruction; stored, never obeyed">
-                          flagged
-                        </Badge>
-                      )}
-                    </span>
-                    {a.category && <div className="text-[11px] font-normal text-gray-600">{a.category}</div>}
-                  </Td>
-                  <Td data-label="By" className="text-xs text-gray-500">{a.author || "—"}</Td>
-                  <Td data-label="Player" className="whitespace-nowrap text-xs">
-                    {a.kind === "player_news" && a.player_name ? (
-                      a.player_id ? (
-                        <span className="text-gray-300">
-                          {a.player_name}
-                          <span className="text-gray-600">
-                            {" "}
-                            {a.player_position}
-                            {a.player_team ? ` · ${a.player_team}` : ""}
+        {/* ── every article as it landed ──────────────────────────────── */}
+        <Card
+          title="Articles"
+          secondary
+          info="Newest fetched first; titles open the source."
+          rightStacks
+          right={
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                aria-label="Site"
+                size="sm"
+                value={source}
+                onChange={setSource}
+                options={[{ value: "", label: "All sites" }, ...data.sources.map((s) => ({ value: s.source, label: s.label }))]}
+              />
+              <Select
+                aria-label="Kind"
+                size="sm"
+                value={kind}
+                onChange={setKind}
+                options={[
+                  { value: "", label: "Articles + player news" },
+                  { value: "article", label: "Articles only" },
+                  { value: "player_news", label: "Player news only" },
+                ]}
+              />
+            </div>
+          }
+        >
+          {data.articles.length === 0 ? (
+            <p className="text-xs text-gray-500">Nothing stored yet for this filter.</p>
+          ) : (
+            <>
+              <div className="ff-stack-wrap overflow-x-auto">
+                <table className="ff-stack w-full">
+                  <thead>
+                    <tr>
+                      <Th>When</Th>
+                      <Th>Site</Th>
+                      <Th>Title</Th>
+                      <Th title="claims extracted by the model; hover for its one-line summary">Claims</Th>
+                      <Th className="text-right">Chars</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {articles.map((a) => {
+                      const when = a.published_at ?? a.fetched_at;
+                      const whenTitle = [
+                        a.published_at && `published ${fmtDateTime(a.published_at)} (${ago(a.published_at) ?? ""})`,
+                        `fetched ${fmtDateTime(a.fetched_at)}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
+                      const site = (
+                        <>
+                          {labelFor(data, a.source)}
+                          {a.kind === "player_news" && (
+                            <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-600">news</span>
+                          )}
+                        </>
+                      );
+                      // Shown at every width; a phone's line also leads with
+                      // site · when · claims, whose own columns it drops.
+                      const player = playerMeta(a, onPlayer);
+                      const meta = [
+                        a.author && <span key="by">{a.author}</span>,
+                        player && <span key="player">{player}</span>,
+                        (a.gated || a.flagged) && (
+                          <span key="flags" className="inline-flex gap-1 self-center">
+                            {a.gated && <Badge tone="neutral" title="body looked paywalled or truncated">gated</Badge>}
+                            {a.flagged && (
+                              <Badge tone="warning" title="text reads as an instruction; stored, never obeyed">
+                                flagged
+                              </Badge>
+                            )}
                           </span>
-                        </span>
-                      ) : (
-                        <span className="text-gray-500" title="not a Sleeper fantasy-position player, or ambiguous">
-                          {a.player_name}{" "}
-                          <Badge tone="neutral">unresolved</Badge>
-                        </span>
-                      )
-                    ) : (
-                      <span
-                        className="text-gray-700"
-                        title={a.kind === "player_news" ? "this site's news items carry no player field" : ""}
-                      >
-                        —
-                      </span>
-                    )}
-                  </Td>
-                  <Td data-label="Claims" className="whitespace-nowrap text-xs" title={a.extraction.summary || a.extraction.error || ""}>
-                    {a.extraction.status === "done" ? (
-                      <span className={a.extraction.claims_n > 0 ? "text-gray-300" : "text-gray-600"}>
-                        {a.extraction.claims_n}
-                      </span>
-                    ) : a.extraction.status === "failed" ? (
-                      <Badge tone="critical" title={a.extraction.error}>
-                        failed ×{a.extraction.attempts}
-                      </Badge>
-                    ) : a.extraction.status === "pending" ? (
-                      <span className="text-gray-600">pending</span>
-                    ) : (
-                      <span className="text-gray-700" title="gated or too short to extract from">—</span>
-                    )}
-                  </Td>
-                  <Td data-label="Chars" className="text-right text-xs tabular-nums text-gray-500">{a.body_chars}</Td>
-                </tr>
-              ))}
-              {data.articles.length === 0 && (
-                <tr>
-                  <Td data-label="" className="text-gray-500" colSpan={8}>
-                    Nothing stored yet for this filter.
-                  </Td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <FoldToggle total={data.articles.length} shown={Math.min(shown, data.articles.length)} onToggle={() => setShown((n) => n + PAGE)} mode="more" />
-        <p className="mt-2 text-[11px] text-gray-600">
-          Showing {Math.min(shown, data.articles.length)} of the {data.articles.length} most recent. Run by hand with{" "}
-          <code className="rounded bg-gray-900 px-1 py-0.5 text-gray-400">{data.commands.articles}</code>.
-        </p>
-      </Card>
+                        ),
+                      ];
+                      return (
+                        <tr key={a.article_id} className="border-t border-gray-800/60 align-top">
+                          <Td
+                            data-label="When"
+                            className="hidden whitespace-nowrap text-xs text-gray-500 sm:table-cell"
+                            title={whenTitle}
+                          >
+                            {fmtDateTime(when)}
+                          </Td>
+                          <Td data-label="Site" className="hidden whitespace-nowrap text-xs text-gray-400 sm:table-cell">
+                            <span>{site}</span>
+                          </Td>
+                          {/* The row head: title, then one meta line. On a phone the
+                              meta line also carries site · when · claims, whose own
+                              columns are dropped there. */}
+                          <Td data-label="" className="ff-row-head">
+                            <div className="sm:max-w-[28rem]">
+                              <a
+                                href={a.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="line-clamp-2 text-gray-200 hover:text-indigo-300 hover:underline"
+                                title={a.title || a.url}
+                              >
+                                {a.title || a.url}
+                              </a>
+                              <MetaLine className="mt-0.5 sm:hidden">
+                                <span>{site}</span>
+                                <span title={whenTitle}>{fmtDateTime(when)}</span>
+                                {claimsText(a) && <span>{claimsText(a)}</span>}
+                                {meta}
+                              </MetaLine>
+                              <MetaLine className="mt-0.5 max-sm:hidden">{meta}</MetaLine>
+                            </div>
+                          </Td>
+                          <Td
+                            data-label="Claims"
+                            className="hidden whitespace-nowrap text-xs sm:table-cell"
+                            title={a.extraction.summary || a.extraction.error || ""}
+                          >
+                            <ClaimsCell a={a} />
+                          </Td>
+                          <Td data-label="Chars" className="hidden text-right text-xs tabular-nums text-gray-500 sm:table-cell">
+                            {a.body_chars}
+                          </Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <FoldToggle
+                total={data.articles.length}
+                shown={articles.length}
+                expanded={allArticles}
+                onToggle={() => setAllArticles((v) => !v)}
+                mode="all"
+              />
+            </>
+          )}
+        </Card>
 
-      {/* ── raw run log ─────────────────────────────────────────────── */}
-      <Card
-        title="Run log"
-        subtitle="Every content ingest_runs row, newest first, plus the wire-note feed it sits beside."
-        right={
-          <button
-            onClick={() => setShowRuns((v) => !v)}
-            className="rounded-md border border-gray-800 px-2 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-          >
-            {showRuns ? "hide" : `show ${data.runs.length}`}
-          </button>
-        }
-      >
-        {showRuns ? (
+        {/* ── raw run log ─────────────────────────────────────────────── */}
+        <Card
+          title="Run log"
+          collapsible
+          info={`The last ${data.runs.length} content and wire-feed runs, newest first.`}
+        >
           <div className="ff-stack-wrap overflow-x-auto">
             <table className="ff-stack w-full">
               <thead>
                 <tr>
-                  <Th>Started</Th>
+                  <Th className="hidden sm:table-cell">Started</Th>
                   <Th>Source</Th>
-                  <Th>Detail</Th>
-                  <Th>Result</Th>
-                  <Th className="text-right">Rows</Th>
-                  <Th className="text-right">Took</Th>
-                  <Th>Error</Th>
+                  <Th className="hidden sm:table-cell">Detail</Th>
+                  <Th className="hidden sm:table-cell">Result</Th>
+                  <Th className="hidden text-right sm:table-cell">Rows</Th>
+                  <Th className="hidden text-right sm:table-cell">Took</Th>
+                  {runErrors && <Th className="hidden sm:table-cell">Error</Th>}
                 </tr>
               </thead>
               <tbody>
-                {data.runs.map((r, i) => (
+                {runs.map((r, i) => (
                   <tr key={r.id ?? i} className="border-t border-gray-800/60">
-                    <Td data-label="Started" className="whitespace-nowrap text-xs text-gray-500" title={r.started_at}>
-                      {fmtShort(r.started_at)}
+                    <Td
+                      data-label="Started"
+                      className="hidden whitespace-nowrap text-xs text-gray-500 sm:table-cell"
+                      title={r.started_at}
+                    >
+                      {fmtDateTime(r.started_at)}
                     </Td>
-                    <Td data-label="" className="ff-row-head whitespace-nowrap text-xs text-gray-300">{r.source}</Td>
+                    {/* The row head. On a phone: source with the result on the right,
+                        then started · rows · took, then the detail and error, clamped. */}
+                    <Td data-label="" className="ff-row-head text-xs text-gray-300">
+                      <div className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 break-words sm:whitespace-nowrap">{r.source}</span>
+                        <span className="shrink-0 sm:hidden">
+                          <RunBadge ok={r.ok} />
+                        </span>
+                      </div>
+                      <div className="sm:hidden">
+                        <MetaLine className="mt-0.5">
+                          <span>{fmtDateTime(r.started_at)}</span>
+                          {r.rows ? <span className="tabular-nums">{r.rows} {r.rows === 1 ? "row" : "rows"}</span> : null}
+                          {r.finished_at && <span className="tabular-nums">took {took(r.started_at, r.finished_at)}</span>}
+                        </MetaLine>
+                        {r.detail && (
+                          <div className="mt-0.5 line-clamp-2 break-words text-[11px] font-normal text-gray-500" title={r.detail}>
+                            {r.detail}
+                          </div>
+                        )}
+                        {r.error && (
+                          <div className="mt-0.5 line-clamp-2 break-words text-[11px] font-normal text-red-400/90" title={r.error}>
+                            {r.error}
+                          </div>
+                        )}
+                      </div>
+                    </Td>
                     {/* Content runs write "resolved 120 · unresolved 3 · ambiguous 1 · Name FA RB×1";
                         the names can run long, so clip and keep the full line on hover. */}
-                    <Td data-label="Detail" className="max-w-[24rem] truncate text-xs text-gray-500" title={r.detail ?? ""}>
-                      {r.detail || ""}
+                    <Td data-label="Detail" className="hidden text-xs text-gray-500 sm:table-cell" title={r.detail ?? ""}>
+                      <span className={`block ${runErrors ? "max-w-[12rem]" : "max-w-[16rem]"} truncate`}>
+                        {r.detail || "—"}
+                      </span>
                     </Td>
-                    <Td data-label="Result">
-                      <Badge tone={r.ok === 1 ? "good" : r.ok === 0 ? "critical" : "neutral"}>
-                        {r.ok === 1 ? "ok" : r.ok === 0 ? "fail" : "running"}
-                      </Badge>
+                    <Td data-label="Result" className="hidden sm:table-cell">
+                      <RunBadge ok={r.ok} />
                     </Td>
-                    <Td data-label="Rows" className="text-right text-xs tabular-nums">{r.rows}</Td>
-                    <Td data-label="Took" className="text-right text-xs tabular-nums text-gray-500">
+                    <Td
+                      data-label="Rows"
+                      empty={!r.rows}
+                      className={`hidden text-right text-xs tabular-nums sm:table-cell ${r.rows ? "" : "text-gray-600"}`}
+                    >
+                      {r.rows ?? "—"}
+                    </Td>
+                    <Td data-label="Took" className="hidden text-right text-xs tabular-nums text-gray-500 sm:table-cell">
                       {took(r.started_at, r.finished_at)}
                     </Td>
-                    {r.error ? (
-                      <Td data-label="Error" className="max-w-[24rem] truncate text-xs text-red-400/90" title={r.error}>
-                        {r.error}
+                    {runErrors && (
+                      <Td data-label="Error" className="hidden text-xs text-red-400/90 sm:table-cell" title={r.error ?? ""}>
+                        <span className="block max-w-[12rem] truncate">{r.error}</span>
                       </Td>
-                    ) : (
-                      <Td data-label="Error" className="hidden sm:table-cell">{null}</Td>
                     )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : (
-          <p className="text-xs text-gray-600">Collapsed. The sources table above already shows each job's last run.</p>
-        )}
-      </Card>
+          <FoldToggle
+            total={data.runs.length}
+            shown={runs.length}
+            expanded={allRuns}
+            onToggle={() => setAllRuns((v) => !v)}
+            mode="all"
+          />
+        </Card>
+      </div>
     </div>
   );
 }
 
 function labelFor(data: Data, source: string): string {
   return data.sources.find((s) => s.source === source)?.label ?? source;
+}
+
+function StateBadge({ state }: { state: State }) {
+  return (
+    <Badge
+      tone={STATE_TONE[state]}
+      title={state === "off" ? "not in the default sources; see CONTENT-PLAN.md source review" : ""}
+    >
+      {state}
+    </Badge>
+  );
+}
+
+function RunBadge({ ok }: { ok: number | null }) {
+  return (
+    <Badge tone={ok === 1 ? "good" : ok === 0 ? "critical" : "neutral"}>
+      {ok === 1 ? "ok" : ok === 0 ? "fail" : "running"}
+    </Badge>
+  );
+}
+
+/** The Claims column: count once extracted, otherwise why not. */
+function ClaimsCell({ a }: { a: Article }) {
+  const x = a.extraction;
+  if (x.status === "done")
+    return <span className={x.claims_n > 0 ? "text-gray-300" : "text-gray-600"}>{x.claims_n}</span>;
+  if (x.status === "failed")
+    return (
+      <Badge tone="critical" title={x.error}>
+        failed ×{x.attempts}
+      </Badge>
+    );
+  if (x.status === "pending") return <span className="text-gray-600">pending</span>;
+  return (
+    <span className="text-gray-700" title="gated or too short to extract from">
+      —
+    </span>
+  );
+}
+
+/** The same fact for a phone's meta line, in words; nothing when extraction was skipped. */
+function claimsText(a: Article): ReactNode {
+  const x = a.extraction;
+  if (x.status === "done") return `${x.claims_n} claim${x.claims_n === 1 ? "" : "s"}`;
+  if (x.status === "failed") return <span className="text-red-400">extraction failed ×{x.attempts}</span>;
+  if (x.status === "pending") return "claims pending";
+  return null;
+}
+
+/** Who a player-news item resolved to, or the name it could not place. */
+function playerMeta(a: Article, onPlayer?: (id: string) => void): ReactNode {
+  if (a.kind !== "player_news" || !a.player_name) return null;
+  if (a.player_id)
+    return (
+      <PlayerName
+        id={a.player_id}
+        name={a.player_name}
+        pos={a.player_position}
+        team={a.player_team}
+        onPlayer={onPlayer}
+        news={false}
+      />
+    );
+  return (
+    <span title="not a Sleeper fantasy-position player, or ambiguous">
+      {a.player_name} <Badge tone="neutral">unresolved</Badge>
+    </span>
+  );
 }
 
 /** One resolver run: when, the totals, and per site what it could not map. */
@@ -879,7 +904,7 @@ function LastRun({ label, run }: { label: string; run: Resolver["last_runs"]["ar
     <div className="min-w-0 rounded-md border border-gray-800/60 px-3 py-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
         <span className="text-xs font-medium text-gray-300">{label}</span>
-        <span className="text-xs text-gray-500" title={run.at ?? ""}>
+        <span className="text-xs text-gray-500" title={run.at ? fmtDateTime(run.at) : ""}>
           {run.at ? (ago(run.at) ?? run.at) : "never"}
         </span>
       </div>
@@ -889,11 +914,11 @@ function LastRun({ label, run }: { label: string; run: Resolver["last_runs"]["ar
             resolved {run.totals.resolved} · unresolved {run.totals.unresolved} · ambiguous {run.totals.ambiguous}
           </>
         ) : (
-          <span className="text-gray-600">no totals recorded</span>
+          <span className="text-gray-500">no totals recorded</span>
         )}
       </div>
       {sources.length === 0 ? (
-        <p className="mt-1.5 text-[11px] text-gray-600">per-source breakdown appears after the next run</p>
+        <p className="mt-1.5 text-xs text-gray-500">per-source breakdown appears after the next run</p>
       ) : (
         <ul className="mt-1.5 space-y-1 text-xs">
           {sources.map(([src, t]) =>
@@ -932,7 +957,7 @@ function TopNames({ top }: { top: TopName[] }) {
 /** Table cell: green "clean" when nothing is unresolved, otherwise the chips. One wrapper, for the stacked layout. */
 function NamesCell({ unresolved, top }: { unresolved: number; top: TopName[] }) {
   if (unresolved === 0) return <Badge tone="good">clean</Badge>;
-  if (top.length === 0) return <span className="text-xs text-gray-600">names not recorded</span>;
+  if (top.length === 0) return <span className="text-xs text-gray-500">names not recorded</span>;
   return (
     <span className="flex min-w-0 flex-wrap gap-1">
       <TopNames top={top} />
@@ -940,38 +965,10 @@ function NamesCell({ unresolved, top }: { unresolved: number; top: TopName[] }) 
   );
 }
 
-function fmt(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? iso : new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-function fmtShort(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const d = new Date(t);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  return sameDay
-    ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function fmtAgo(minutes: number | null | undefined): string {
-  if (minutes == null) return "—";
-  if (minutes < 1) return "just now";
-  if (minutes < 90) return `${Math.round(minutes)} min ago`;
-  const h = minutes / 60;
-  if (h < 36) return `${h.toFixed(h < 10 ? 1 : 0)}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
-
 function took(start: string, end: string | null): string {
   if (!end) return "…";
-  const s = Date.parse(start);
-  const e = Date.parse(end);
+  const s = parseTime(start);
+  const e = parseTime(end);
   if (Number.isNaN(s) || Number.isNaN(e)) return "—";
   const sec = (e - s) / 1000;
   return sec < 60 ? `${sec.toFixed(sec < 10 ? 1 : 0)}s` : `${(sec / 60).toFixed(1)}m`;

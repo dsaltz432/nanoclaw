@@ -143,16 +143,16 @@ the default assumption stays that the projection is right.
 
 | Subtab | What it shows |
 |--------|---------------|
-| **Today** | The landing view (`ff.cli api today`). Served from `payload_cache` (built by the ff-news job every 15 min, `_generated_at` / `_cached` in the payload; computed live on a miss older than 20 min). **Right now** at the top, then **Since yesterday** — the diff against the last daily snapshot (snapshots filed once a day after 06:00, kept 14 days): new/cleared roster flags, rank moves ≥ 2 on your roster, new sell/buy targets, players newly in or out of the talk, new Right-now items — then tiles, then: **your roster as the sites see it** (consensus rank across sources with spread and movement, the claims tally, and flags where the sites disagree with your lineup); **moves** with the expert overlay (top three, "more on Moves"); **available and being talked about** (three, then a fold); one-line pointers to Trades (sell/buy counts) and Moves (crowd); **consensus movers** once two snapshots exist. |
-| **Lineup** | Start / sit this week (`ff.cli api lineup`). Tiles for your set lineup vs the projection-optimal one; a **look at these** list of lineup changes the numbers suggest and disagreements where the sites' this-week claims point the other way (with who he'd displace); starters and bench with Rotowire under this league's scoring plus ESPN and the Fantasy Footballers, a ± when they disagree, **matchup** (opponent and Vegas implied team total, BYE), **usage** (last completed week's snap and target share with the week-over-week move; a 15+ point snap move is a *role change* badge), the consensus rank, the this-week claims and the newest injury/role wire note inline; **streaming** picks at QB/TE/DEF/K with matchup. Guillotine league: a **Survival** card on top — your set total against every surviving roster's, the margin above the lowest rival, last week's chop line. |
-| **Moves** | Add / drop / claim / stash (`ff.cli api moves`). The engine's add/drop pairs by lineup gain with rank, sites-say, crowd and the inline wire note on each row; the candidate **board** (rest-of-season points and rank for the dynasty league); **drop candidates** with drop or hold talk; **stash** (contingent value plus stash claims); **the crowd**; and the full waiver engine — price table, rivals' budgets, burn curves, searchable board — behind a fold. Guillotine league: the **chopped roster** on top, each released player with his fate (claimed by whom / on waivers until), the board's price and bid guidance sized against remaining budgets, and a superflex QB premium note. |
-| **Trades** | **Trade intel** first (`ff.cli api trade-intel`): sell talk on your roster, a **weakening** list (drop/sit talk or a consensus fall of 3+, softer than a sell call), buy targets on rival rosters, for the dynasty league the value gaps between FantasyPros dynasty ECR and FantasyCalc market rank (cheap by the market / sell high) and **your picks** held and sent priced at FantasyCalc (ownership from Sleeper's traded-picks feed). Every row has a **price this** action that drops the player (or pick) into the builder; builder rows show the sites-say tally. Then the trade builder, rosters side by side, positional fit and counterparty behaviour as before. |
-| **Rankings** | The consensus board (`ff.cli api consensus`): scope, position, everyone / available / mine, claims window, and a **snapshot date** picker that pins the board to an earlier day; a **by position** mode groups the board into QB/RB/WR/TE/K/DEF sections in position-rank order; the dynasty scope shows age and a rookie flag. Median position rank across sources with spread and move, per-source ranks, claims badges with the strongest rationale, roster status, league-correct projections from three sources. A "most discussed" strip on top; the board folds after 25 rows. |
-| **Reading** | One feed (`ff.cli api reading`): articles with the model's one-line summary and the claims each produced (your players highlighted), and Rotowire wire notes with topic tags; filter to your players, articles vs wire, site, claim horizon, window, unread only. Read state is shared with the old News tab (`news_read`, keyed on article or note id). Box-score-only notes are shown only for your players. No trending sidebars: that signal lives on Moves and Today. |
-| **Player dossier** (panel) | Opened from player names on Today, Lineup, Moves, Trade intel, Rankings and Reading (`ff.cli api dossier`): status and projections in all three leagues, this week's matchup, rankings per scope by source with FantasyPros' expert range and a **rank-trajectory sparkline** over the stored snapshots, every claim with rationale and link, the last six weeks of **usage**, recent wire notes, age and rookie flag. |
-| **Admin** | Ingest health for the content layer: per-site jobs, the claims-extraction job, the **resolver** panel (unresolved names per run and per source, the top names still unresolved in rankings and claims), paywalled-teaser counts per source, every article with its extraction status, the run log (each content run's `detail` carries its resolver delta). |
+| **Today** | The landing view (`ff.cli api today`). Served from `payload_cache` (built by the ff-news job every 15 min, `_generated_at` / `_cached` in the payload; computed live on a miss older than 20 min). **Right now** at the top (from the payload's `needs_you`; starters the bench already covers go on one quiet "covered off the bench" line), then **Since yesterday** — the diff against the last daily snapshot (snapshots filed once a day after 06:00, kept 14 days): new/cleared drop and injury flags, position-prefixed consensus rank moves on your roster (depth-scaled: at least 2 places or 10% of the previous rank, whichever is larger), new talk/sell/buy lines only when the player has a claim published since the snapshot (a player who merely entered a top-N list because others aged out is not news), new Right-now items; then **your roster as the sites see it** (flagged rows only — drop talk, a falling consensus rank or an injury designation — folded at 5: consensus rank, the claims summary and one quote); **moves** (top three add/drop pairs with the expert overlay, bid in dollars, then a link to Moves); and an **Elsewhere** line linking to Trades (sell talk on your players, or buy targets) and Moves (crowd signals, only when there are any). The dashboard requests the digest with `slim=1`, which serves counts in place of the trade/crowd lists and drops fields the tab does not render; the stored digest, the CLI and the Telegram agent keep the full payload. |
+| **Lineup** | Start / sit this week (`ff.cli api lineup`). **Switch these** (swaps the projections suggest, plus bench players the sites rank above a starter he could replace), **streaming** picks at QB/TE/DEF/K grouped by position (highest Rotowire projection first, anyone projected at zero left out, compared against your weakest set starter there), then **Starters**, **Bench**, **IR** and **Taxi** in one column layout, each row led by its **Slot** (QB, RB, WR, TE, FLEX, SFLEX, K, DEF; BN, IR, TX — a fixed gutter left of the name on a phone): Rotowire under this league's scoring (ESPN and the Fantasy Footballers in the tooltip, a ± when they disagree), **matchup** (opponent and the Vegas implied team total as "28 pts", BYE; hover for kickoff, the O/U total, the spread and both sides' implied points) with **usage** under it (last completed week's snap and target share in plain grey, the week-over-week moves and raw counts on hover, carries only when he had some or is a back; no usage line for QB, K or DEF. The payload still carries `role_change` for the Telegram agent; the dashboard does not show it), the consensus rank, what the sites say, and the newest wire note inline. A player whose game has kicked off is locked: his Proj cell reads *played* and shows what he scored, his matchup and usage dim, he is never part of a switch, and the totals stay projections. Guillotine league: a **Survival** card on top — your set total against every surviving roster's, the margin above the lowest rival, last week's chop line. |
+| **Moves** | Add / drop / claim / stash (`ff.cli api moves`). The **Board** is the one add/drop list: up to 150 available players sorted by lineup gain, with name/team search, position chips and (weekly leagues) an "include players who wouldn't start" switch; each row carries availability (free, or the waiver clear time and the market's price range), the engine's move with a bid in dollars and who it displaces, rank, sites-say and the crowd's verdict under the name (rest-of-season points and rank for the dynasty league). Then **drop candidates** (bench only, weakest first, capped at 6; hurt players are tagged "hurt, not weak" and sorted last), **stash** (contingent value plus stash claims), **the crowd**, and a collapsed **FAAB market** reference card (price table, rivals' budgets, burn curves). Guillotine league: the **chopped roster** (above the Board while a released player is still on waivers, below it otherwise) — unclaimed players with price and bid guidance sized against live rivals' budgets, every claimed player on one line, and the superflex QB premium in the subtitle. |
+| **Trades** | **Trade intel** first (`ff.cli api trade-intel`): sell talk on your roster, a **weakening** list (drop/sit talk or a consensus fall of 3+, softer than a sell call), buy targets on rival rosters (one quote each; the dossier has the rest), for the dynasty league the value gaps between FantasyPros dynasty ECR and FantasyCalc market rank (cheap by the market / sell high) and **your picks** priced at FantasyCalc. Every row has a **price this** action that drops the player (or pick) into the builder. Then the trade builder (`ff.cli api trades`), both rosters (folded at 12 rows), **your surplus → who needs it** (spare players and the managers short at that position), positional strength for every roster, and who actually accepts trades. Chopped guillotine rosters are excluded everywhere. |
+| **Rankings** | One **consensus board** card (`ff.cli api consensus`): scope, position and everyone / available always visible; the claims window and a **snapshot date** picker sit in the card header on desktop and behind a Filters toggle on phones. In All, the number before each name is the FLEX / SUPERFLEX / OVERALL rank the list is ordered by; every row shows the position-prefixed median rank (range in the tooltip), then **By source** and **Proj** as one-line sub-columns under their site labels (FP · CBS · FBG · FFB; roto · espn · ffb, projections in the weekly and rest-of-season scopes only), then the sites' lean with one quote. Your own players get a green edge and tint; other owners are not named (the slim payload drops `owner`). The dynasty scope shows age and a rookie flag instead of projections. The dashboard requests `slim=1`, which leaves out the buzz lists and trims each row's claims to the counts and the one quote shown. Folds after 25 rows. |
+| **Reading** | One feed (`ff.cli api reading`): articles with the model's one-line summary and the claims each produced, and Rotowire wire notes with role/return tags; filter to my players (my roster in the selected league), articles vs wire, site, claim horizon, window, unread only. Read state is stored per article or note id (`news_read`), so marking read applies in every league. Box-score-only notes are shown only for your players. |
+| **Player dossier** (panel) | Opened from any player name (`ff.cli api dossier`), about the league being viewed: who has him and his projection (or points scored, once his game kicks off), a **Games** timeline, one line per ranking list the league plays with FantasyPros' expert range, a **trade value** chart, the claims (five, then a fold) with rationale and link, recent wire notes, age and rookie flag. Described below. |
+| **Admin** | Ingest health for the content layer (`ff.cli api content-status`, league-independent): a health line with anything late or failing, three tiles (articles and wire notes in 24h, unresolved names), the **sources** table (every site job, the core feeds and claims extraction in one list with state, last run and what is stored), the **resolver** panel, every article with its extraction status, and the run log (collapsed). The header's health badge summarises the audit, failing sources and `overview.content_health` and links here. |
 
-Retired as tabs: Waiver wire (code kept; renders inside Moves' fold), Experts (renamed Rankings). The News and Trends files were deleted on 2026-09-16 (their actionable rungs live on Moves, Today and Reading). The Alerts section was removed outright on 2026-09-16 (rule engine, `alert_log`, `ff.cli alerts`, tab, route) so a future alerting design starts clean. **Dynasty is league behaviour, not a tab**: selecting the dynasty league puts Trades on dynasty ECR vs market, Moves on rest-of-season, Rankings on the dynasty scope.
+Retired as tabs: Waiver wire (`WaiversTab.tsx` now only renders Moves' FAAB market card from the moves payload), Experts (renamed Rankings). The News and Trends files were deleted on 2026-09-16 (their actionable rungs live on Moves, Today and Reading). The Alerts section was removed outright on 2026-09-16 (rule engine, `alert_log`, `ff.cli alerts`, tab, route) so a future alerting design starts clean. **Dynasty is league behaviour, not a tab**: selecting the dynasty league puts Trades on dynasty ECR vs market, Moves on rest-of-season, Rankings on the dynasty scope.
 
 **Every panel is served by `python3 -m ff.cli api <endpoint>`.** The Express
 route shells out and caches; nothing is recomputed in TypeScript. Since
@@ -161,7 +161,24 @@ precomputed into the data layer's `payload_cache` by the ff-news job every 15
 minutes (`ff.cli digest-cache`) and served while younger than 20 minutes, so a
 subtab answers in ~0.2 s instead of 1–4 s; `fresh=1` forces a live build. The
 audit behind `overview` is cached for six hours the same way (it used to run on
-every page load at ~5 s). The scoring pass itself is memoised per process. League-correct
+every page load at ~5 s). The scoring pass itself is memoised per process, and
+`rescore_week` / `rank_consensus` / `claim_signals` take a `player_ids` filter,
+so the player dossier scores and ranks one player instead of every player (a
+cold dossier went from ~2.2 s to ~0.5 s, and Rankings from ~1 s to ~0.5 s).
+
+**The Express route never makes a visitor wait twice** (2026-09-27). Its cache is
+stale-while-revalidate: an expired entry is served at once and refreshed in the
+background (for up to an hour; after that the request waits), identical
+concurrent requests share one Python run, and cache keys ignore parameter order.
+A warmer re-runs every tab's default view in every league every 10 minutes
+(today, lineup, moves, trade-intel, trades, Rankings QB/RB/WR/TE/All, Reading,
+the default "find trades across the league" search, plus overview, news-index
+and content-status), so those answer in ~10–100 ms; and every 30 minutes it
+warms the dossiers of your own rostered players, since a phone tap has no hover
+to prefetch on.
+JSON over 2 KB is gzipped. Hovering a player name for 150 ms warms his dossier,
+so the click usually opens it in under 100 ms. Admin's Refresh (`refresh=1`)
+still waits for fresh data. League-correct
 scoring, the FAAB contest reconstruction and the untrusted-text boundary have
 exactly one implementation, and a second one in the dashboard would be a second
 set of conventions quietly producing a second set of answers — the failure mode
@@ -205,10 +222,38 @@ an account with no current roster — this league contains `Eyal10` (2020–21) 
 `Eyalshoham10` (2022–) as separate `owner_id`s, almost certainly the same person
 on two accounts, and keying on the id keeps them correctly separate.
 
-**Player news is one click from anywhere.** A small count badge sits beside each
-player's name on the waiver board, both roster panels and the trade chips; hover
-or tap it for his most recent reports with dates and links. The notes ship with
-the page payload (~24KB for a waiver board), so opening one fires no request.
+**The player dossier** (click any name) is about the league being viewed. Its
+header says who has him there (Yours / Free agent / Owned by X) and his number
+this week (projection, or what he scored once his game kicked off; the other
+sources on hover). **Games** is one timeline: his last four weeks (points scored
+under this league's scoring and his position's box score: carries, catches,
+yards and TDs for a back, targets for a receiver, passing for a QB, kicks and
+defensive stats) and his next five (date, bye, and the O/U and spread once
+posted), this season only. Each opponent is coloured green to red by how many
+fantasy points it allows his position per game this season (hover for the
+number and the games behind it). **Where the sites rank him** is one
+line per list the league plays (this week and rest of season, plus dynasty only
+in the dynasty league): consensus and move, each site's rank, the FantasyPros
+expert range. **Trade value** charts FantasyCalc over every stored daily
+snapshot in that league's format, with the 7- and 30-day change. Then what the
+sites say and recent wire notes. The Trades rows' "mkt 1,262 ▲659" is the 7-day
+change (one game in season); the hover gives 7 and 30 days. Both come from the
+stored snapshots, not FantasyCalc's own trend30Day, which is not a plain
+difference of its values and disagreed with the chart.
+
+**Player news is one click from anywhere.** Every player name opens the dossier,
+which ends with his recent wire notes; Lineup and Moves also carry a fresh (72h)
+injury / role note inline under the name. Beside every player name on Today,
+Lineup, Moves, Trades and Rankings sits a **news badge**: how many notes he has
+in the last 14 days (up to 3), in one hue at three strengths — solid when an
+injury / out / role / return note landed in the last 24h, a bright outline
+within 72h, dim when there are only older or routine notes (box scores). Red is
+kept for a note flagged as reading like an instruction. Hover or tap it for
+those notes, newest first, with links. Pure recency would light up nearly every
+player the morning after a game, since each gets a box score. The count and
+shade for every player, and the headlines, come from one page-wide
+`news-index` call (~43KB gzipped, pre-warmed), so a hover shows the notes at
+once and no tab's payload carries them. Reading (whose rows are the news) and Admin leave it off.
 Players with no notes render no badge at all — a greyed-out icon invites a click
 that does nothing, while an absent one correctly reads as "nothing to see".
 

@@ -19,8 +19,31 @@
  *
  * Below 640px each row becomes a card and each cell is labelled from the
  * column header via data-label. Opt in per table with .ff-stack so tables that
- * genuinely need a grid (the surplus matrix) can keep one.
+ * genuinely need a grid can keep one. .ff-stack-wrap goes on the overflow-x
+ * wrapper of an .ff-stack table only: it switches the sideways scroll off
+ * once the rows are cards, and means nothing around a table that stays a grid.
+ *
+ * The shared Td wraps a labelled value in .ff-val (display: contents on a
+ * desktop, so it changes nothing there). Cell modifiers set by Td props:
+ *   .ff-cell-block  prose; the label sits above and the text runs full width
+ *   .ff-empty       a null/"—" value; dropped from the card, kept on desktop
+ *
+ * Three phone patterns, chosen per table in this order of preference:
+ *   1. Compact row head -- primary player lists (Today roster, Lineup,
+ *      Moves Board, Rankings, Admin Sources / Run log). The row-head cell
+ *      (data-label="", .ff-row-head) carries line 1 (the name plus the one
+ *      key number, right-aligned) and an `sm:hidden` line 2 built with
+ *      viz.tsx MetaLine. Every other short cell is `hidden sm:table-cell` on
+ *      both Th and Td; prose (Sites say, Why) stays a Td `block` beneath. The
+ *      desktop table is unchanged.
+ *   2. Real narrow table -- small numeric grids (the FAAB price and burn
+ *      tables): no .ff-stack, text-xs, the non-essential columns
+ *      `hidden sm:table-cell`. It stays a grid because it is one.
+ *   3. The stacked card below -- only where neither of those fits.
  */
+.ff-val {
+  display: contents;
+}
 @media (max-width: 639px) {
   .ff-stack thead {
     position: absolute;
@@ -77,6 +100,25 @@
     letter-spacing: 0.04em;
     color: var(--color-gray-500, #6b7280);
   }
+  /* One flex item beside the label, right-aligned, so a multi-part value
+     groups at the right edge instead of being spread by space-between. */
+  .ff-stack td:not(.hidden) > .ff-val {
+    display: block;
+    text-align: right;
+    min-width: 0;
+  }
+  .ff-stack td.ff-cell-block:not(.hidden) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.125rem;
+  }
+  .ff-stack td.ff-cell-block:not(.hidden) > .ff-val {
+    text-align: left;
+  }
+  /* !important and the extra class: must beat `.ff-stack td:not(.hidden)`. */
+  .ff-stack td.ff-empty:not(.hidden) {
+    display: none !important;
+  }
   /* A cell with no label is the row's headline — give it the full width. */
   .ff-stack td[data-label=""]:not(.hidden)::before {
     display: none;
@@ -122,10 +164,16 @@
     min-height: 36px;
   }
 
-  /* Icon-only controls need width as well as height. The news-peek badge sits
-     beside a player name at 13px wide, which is a coin toss for a thumb. */
-  .ff-scope button.peer {
-    min-width: 32px;
+  /* Small inline targets (the news badge, source links, fold toggles)
+     grow an invisible hit area rather than their box, so a 16px badge stays
+     16px beside the name it annotates and a thumb still lands on it. */
+  .ff-hit {
+    position: relative;
+  }
+  .ff-hit::after {
+    content: '';
+    position: absolute;
+    inset: -10px;
   }
 
   /* The Select popover is portalled to <body>, outside .ff-scope, so it

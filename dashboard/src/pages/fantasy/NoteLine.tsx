@@ -1,13 +1,212 @@
-import { Badge } from "./viz";
-import { ago, srcShort } from "./labels";
+import { useContext, useState, type SyntheticEvent } from "react";
+import { Badge, HoverInfo, LeagueContext, NewsPeek } from "./viz";
+import { ACTION_TONE, ago, claimLean, claimMix, fmtDate, signed, srcShort } from "./labels";
 
 /**
- * Context beside a player that Lineup, Moves and the dossier all show: the
- * newest wire note on him, a role-change flag from snap share, and the
- * usage / matchup strips. One file so the three tabs cannot drift.
+ * Player facts every tab renders: his name (which opens the dossier), the
+ * newest wire note, what the sites say, his consensus rank, and the usage /
+ * matchup strips. One file so the tabs cannot drift into seven ways of
+ * printing the same fact.
  *
- * Third-party strings (headline) arrive defanged and are rendered as text.
+ * Third-party strings (headline, rationale) arrive defanged and are rendered
+ * as text.
  */
+
+/**
+ * Warms the server's cache for a player's dossier when the pointer rests on
+ * his name, so the click usually opens it at once instead of waiting ~0.5s
+ * for Python. The dwell keeps a pointer sweeping down a table from firing a
+ * request per row; each player is asked for at most once per page.
+ */
+const DOSSIER_DWELL_MS = 150;
+const dossierWarmed = new Set<string>();
+let dossierTimer: number | undefined;
+function warmDossier(id: string, league: string) {
+  window.clearTimeout(dossierTimer);
+  const key = `${league}|${id}`;
+  if (dossierWarmed.has(key)) return;
+  dossierTimer = window.setTimeout(() => {
+    dossierWarmed.add(key);
+    // The same URL PlayerDossier fetches, so the click lands on this cache entry.
+    fetch(`/api/fantasy/dossier?${new URLSearchParams({ league, player: id })}`).catch(() => dossierWarmed.delete(key));
+  }, DOSSIER_DWELL_MS);
+}
+
+/**
+ * A player's name as a button that opens his dossier, then "POS · TEAM", his
+ * Sleeper injury designation and the news badge. Plain text where no dossier handler is
+ * wired (a read-only panel).
+ */
+export function PlayerName({
+  id,
+  name,
+  pos,
+  team,
+  injury,
+  onPlayer,
+  news = true,
+}: {
+  id: string;
+  name: string | null;
+  pos?: string | null;
+  team?: string | null;
+  injury?: string | null;
+  onPlayer?: (id: string) => void;
+  /** The news badge; off where the row IS the news (Reading) or places it itself (Trades). */
+  news?: boolean;
+}) {
+  const league = useContext(LeagueContext);
+  const meta = [pos, team].filter(Boolean).join(" · ");
+  const label = name ?? id;
+  return (
+    <>
+      {onPlayer ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            // Rows that expand on click must not also toggle.
+            e.stopPropagation();
+            onPlayer(id);
+          }}
+          onMouseEnter={() => warmDossier(id, league)}
+          onMouseLeave={() => window.clearTimeout(dossierTimer)}
+          onFocus={() => warmDossier(id, league)}
+          // ff-inline: a name sits in prose and 11px meta lines, where the
+          // touch rule's 36px min-height would make the whole line tall.
+          className="ff-inline text-left text-gray-100 hover:text-indigo-300 hover:underline"
+        >
+          {label}
+        </button>
+      ) : (
+        <span className="text-gray-100">{label}</span>
+      )}
+      {meta && <span className="ml-1.5 whitespace-nowrap text-xs text-gray-500">{meta}</span>}
+      {injury && (
+        <>
+          {" "}
+          <Badge tone="warning">{injury}</Badge>
+        </>
+      )}
+      {news && <NewsPeek id={id} name={label} />}
+    </>
+  );
+}
+
+/**
+ * What the sites say about him, at a glance: the lead call and, where the
+ * sites genuinely split, the opposing one ("start ×5 / sit ×2"). The whole
+ * mix is in the tooltip. `nSources` appends "N sites".
+ */
+export function ClaimsSummary({
+  byAction,
+  nSources,
+}: {
+  byAction: Record<string, number> | null | undefined;
+  nSources?: number | null;
+}) {
+  const lean = byAction ? claimLean(byAction) : null;
+  if (!byAction || !lean) return <span className="text-xs text-gray-700">quiet</span>;
+  const chip = ([a, n]: [string, number]) => (
+    <Badge tone={ACTION_TONE[a] ?? "neutral"}>
+      {a}
+      {n > 1 ? ` ×${n}` : ""}
+    </Badge>
+  );
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1" title={`all calls: ${claimMix(byAction)}`}>
+      {chip(lean.lead)}
+      {lean.counter && (
+        <>
+          <span className="text-gray-700">/</span>
+          {chip(lean.counter)}
+        </>
+      )}
+      {nSources != null && nSources > 0 && (
+        <span className="text-[11px] text-gray-600">
+          {nSources} site{nSources === 1 ? "" : "s"}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * One quoted claim: the linked source prefix, then the rationale, clamped to
+ * two lines unless `clamp` is off. A tap on the rationale opens the rest —
+ * the tooltip that shows it on a desktop does not exist under a thumb. The
+ * source link stays its own target (an anchor cannot sit inside a button),
+ * and the rationale is an inline span rather than a <button>, whose
+ * inline-block box would sit outside the line clamp.
+ */
+export function ClaimQuote({ e, clamp = true }: { e: Claim; clamp?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const clamped = clamp && !expanded;
+  const toggle = (ev: SyntheticEvent) => {
+    // Rows that expand on click must not also toggle.
+    ev.stopPropagation();
+    setExpanded((v) => !v);
+  };
+  return (
+    <div className={`text-xs text-gray-500 ${clamped ? "line-clamp-2" : ""}`} title={clamped ? e.rationale : undefined}>
+      <SrcLink e={e} />{" "}
+      {clamp ? (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-expanded={expanded}
+          onClick={toggle}
+          onKeyDown={(ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              toggle(ev);
+            }
+          }}
+          className="ff-inline cursor-pointer hover:text-gray-400"
+        >
+          {e.rationale}
+        </span>
+      ) : (
+        e.rationale
+      )}
+    </div>
+  );
+}
+
+/**
+ * Consensus rank as "WR11". The best–worst spread is in the tooltip, and the
+ * move since the previous snapshot is shown only when it is at least a whole
+ * place — a median wobbling by half a rank is noise, not news.
+ */
+export function RankText({
+  pos,
+  median,
+  best,
+  worst,
+  delta,
+}: {
+  pos?: string | null;
+  median: number | null | undefined;
+  best?: number | null;
+  worst?: number | null;
+  delta?: number | null;
+}) {
+  if (median == null) return <span className="text-gray-700">—</span>;
+  const d = delta != null && Math.abs(delta) >= 1 ? Math.round(delta) : null;
+  const spread = best != null && worst != null ? `sites range ${pos ?? ""}${best}–${pos ?? ""}${worst}` : undefined;
+  return (
+    <span className="whitespace-nowrap tabular-nums text-gray-300" title={spread}>
+      {pos ?? ""}
+      {Number(median.toPrecision(6))}
+      {d != null && (
+        <span className={d > 0 ? "text-green-400" : "text-red-400"}>
+          {" "}
+          {d > 0 ? "▲" : "▼"}
+          {Math.abs(d)}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export type Note = {
   published_at: string;
@@ -28,7 +227,6 @@ export type Usage = {
   targets: number | null;
   carries: number | null;
   touches: number | null;
-  role_change: "up" | "down" | null;
   played: boolean;
 } | null;
 
@@ -88,7 +286,7 @@ export function SrcLink({ e }: { e: Claim }) {
         target="_blank"
         rel="noreferrer"
         title={e.title || `Open this ${label} article`}
-        className="text-gray-500 underline decoration-gray-700 underline-offset-2 hover:text-indigo-300 hover:decoration-indigo-400"
+        className="ff-hit text-gray-500 underline decoration-gray-700 underline-offset-2 hover:text-indigo-300 hover:decoration-indigo-400"
       >
         {label}
         <span aria-hidden="true"> ↗</span>
@@ -146,82 +344,117 @@ export function NoteLine({ note, className = "mt-0.5 max-w-[26rem] whitespace-no
       ) : (
         <span>{note.headline}</span>
       )}
-      {when && <span className="text-gray-600"> {when}</span>}
+      {when && (
+        <>
+          {" "}
+          <span className="whitespace-nowrap text-gray-600">{when}</span>
+        </>
+      )}
       {note.flagged && (
         <>
           {" "}
-          <Badge tone="warning">reads as instruction</Badge>
+          <Badge tone="warning">reads as an instruction</Badge>
         </>
       )}
     </div>
   );
 }
 
-/** Snap share moved by the threshold or more, week over week. */
-export function RoleBadge({ change }: { change: "up" | "down" | null | undefined }) {
-  if (!change) return null;
-  return change === "up" ? <Badge tone="good">role change ↑</Badge> : <Badge tone="warning">role change ↓</Badge>;
-}
-
-const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
-
-/** "(+20)" in green, "(-8)" in red. */
-export function Delta({ d }: { d: number | null | undefined }) {
-  if (d == null) return null;
-  return <span className={d >= 0 ? "text-green-400" : "text-red-400"}> ({signed(d)})</span>;
-}
-
-/** Raw counts for a title attribute: "65 snaps · 6 targets · 23 carries (week 1)". */
-export function usageTitle(u: NonNullable<Usage>): string {
+/**
+ * Counts and week-over-week moves, one per line, for the usage HoverInfo:
+ * "Week 2 (change vs week 1)", "65 snaps, 88% (+13)", "6 targets, 19% (−11)",
+ * "23 carries". The moves live here rather than in the cell: coloured on
+ * every row they stopped meaning anything.
+ */
+export function usageTitle(u: NonNullable<Usage>, position?: string | null): string {
+  const move = (d: number | null) => (d == null ? "" : ` (${signed(d, 0)})`);
   const parts: string[] = [];
-  if (u.snaps != null) parts.push(`${u.snaps} snaps`);
-  if (u.targets != null) parts.push(`${u.targets} targets`);
-  if (u.carries != null) parts.push(`${u.carries} carries`);
+  if (u.snaps != null || u.snap_pct != null)
+    parts.push(`${u.snaps ?? "?"} snaps${u.snap_pct != null ? `, ${u.snap_pct}%${move(u.snap_delta)}` : ""}`);
+  if (u.targets != null || u.target_share != null)
+    parts.push(`${u.targets ?? "?"} target${u.targets === 1 ? "" : "s"}${u.target_share != null ? `, ${u.target_share}%${move(u.target_delta)}` : ""}`);
+  // Carries only when he had some, except a back, for whom zero is news.
+  if (u.carries != null && (u.carries > 0 || position === "RB")) parts.push(`${u.carries} carr${u.carries === 1 ? "y" : "ies"}`);
   if (!u.played) parts.push("did not play");
-  return `${parts.join(" · ")} (week ${u.week})`;
+  return [`Week ${u.week}${u.prev_week ? ` (change vs week ${u.prev_week})` : ""}`, ...parts].join("\n");
 }
 
-/** "snap 58% (+20) · tgt 21% (+3)" plus the role-change badge. QBs show snap only. */
+/** Snap and target share say little about a QB (he plays every snap), a kicker or a defense. */
+export function showsUsage(position: string | null | undefined): boolean {
+  return !["QB", "K", "DEF"].includes(position ?? "");
+}
+
+/**
+ * "vs ARI · 28 pts", and the betting line behind it for the HoverInfo:
+ *
+ *   SF vs ARI · Sep 27, 16:05 ET
+ *   O/U 48.5 · SF −7.5 (favored)
+ *   Implied points: SF 28.0 · ARI 20.5
+ *
+ * The Vegas number on the row is labelled and whole: a bare "28.0" beside the
+ * opponent read as nothing in particular. A defense shows what it faces, the
+ * opponent's total. `team` is the player's team, for naming the sides.
+ */
+export function matchupText(matchup: NonNullable<Matchup>, position: string | null | undefined, team?: string | null, sep = " · ") {
+  const def = position === "DEF";
+  const pts = def ? matchup.opp_implied_total : matchup.implied_total;
+  const opp = matchup.opponent ? `${matchup.home === false ? "@" : "vs"} ${matchup.opponent}` : "";
+  const text = [opp, pts != null ? `${Math.round(pts)} pts` : ""].filter(Boolean).join(sep);
+  const us = team ?? (def ? "the defense's team" : "his team");
+  const them = matchup.opponent ?? "opponent";
+  const lines: string[] = [];
+  const when = matchup.gameday ? `${fmtDate(matchup.gameday)}${matchup.gametime ? `, ${matchup.gametime} ET` : ""}` : "";
+  lines.push([`${team ? `${team} ` : ""}${opp}`.trim(), when].filter(Boolean).join(" · "));
+  if (matchup.total != null) {
+    // `spread` is from this team's side, positive when it is favoured; the
+    // betting convention prints the favourite with a minus.
+    const sp = matchup.spread ?? 0;
+    const line =
+      sp === 0 ? "pick'em" : sp > 0 ? `${us} −${sp} (favored)` : `${us} +${-sp} (underdog)`;
+    lines.push(`O/U ${matchup.total} · ${line}`);
+  }
+  if (matchup.implied_total != null && matchup.opp_implied_total != null)
+    lines.push(`Implied points: ${us} ${matchup.implied_total.toFixed(1)} · ${them} ${matchup.opp_implied_total.toFixed(1)}`);
+  if (def && pts != null) lines.push(`${Math.round(pts)} pts is what the defense faces: ${them}'s implied total`);
+  const title = lines.filter(Boolean).join("\n") || undefined;
+  return { text, title };
+}
+
+/**
+ * "snap 78% tgt 12%", in plain grey, with the week-over-week moves and raw
+ * counts on hover. Nothing for QB, K or DEF (showsUsage), and nothing without
+ * usage; the caller decides whether the empty cell says anything.
+ */
 export function UsageCell({ usage, position }: { usage: Usage; position: string | null }) {
-  if (!usage) return <span className="text-gray-700">—</span>;
-  const qb = position === "QB";
+  if (!usage || !showsUsage(position)) return null;
   return (
-    <span className="whitespace-nowrap text-xs tabular-nums text-gray-300" title={usageTitle(usage)}>
-      {usage.snap_pct != null ? (
-        <>
-          <span className="text-gray-500">snap</span> {usage.snap_pct}%
-          <Delta d={usage.snap_delta} />
-        </>
-      ) : (
-        <span className="text-gray-700">no snaps</span>
-      )}
-      {!qb && usage.target_share != null && (
-        <>
-          <span className="text-gray-600"> · </span>
-          <span className="text-gray-500">tgt</span> {usage.target_share}%
-          <Delta d={usage.target_delta} />
-        </>
-      )}
-      {usage.role_change && (
-        <>
-          {" "}
-          <RoleBadge change={usage.role_change} />
-        </>
-      )}
+    <span className="text-xs tabular-nums text-gray-400">
+      <HoverInfo info={usageTitle(usage, position)} className="whitespace-nowrap">
+        {usage.snap_pct != null ? (
+          <>
+            <span className="text-gray-500">snap</span> {usage.snap_pct}%
+          </>
+        ) : (
+          <span className="text-gray-700">no snaps</span>
+        )}
+        {usage.target_share != null && (
+          <>
+            <span className="ml-1.5 text-gray-500">tgt</span> {usage.target_share}%
+          </>
+        )}
+      </HoverInfo>
     </span>
   );
 }
 
-/** "vs DET · 29.5" / "@ DET · 29.5" / BYE. A DEF shows what it faces (the opponent's implied total). */
-export function MatchupCell({ matchup, position }: { matchup: Matchup; position: string | null }) {
+/** "vs DET · 29 pts" / "@ DET · 29 pts" / BYE. A DEF shows what it faces (the opponent's implied total). */
+export function MatchupCell({ matchup, position, team }: { matchup: Matchup; position: string | null; team?: string | null }) {
   if (!matchup) return <span className="text-gray-700">—</span>;
   if (matchup.bye) return <Badge tone="warning">BYE</Badge>;
-  const def = position === "DEF";
-  const pts = def ? matchup.opp_implied_total : matchup.implied_total;
+  const { text, title } = matchupText(matchup, position, team);
   return (
-    <span className="whitespace-nowrap text-xs tabular-nums text-gray-300" title={def ? "what the defense faces" : undefined}>
-      {matchup.opponent ? `${matchup.home === false ? "@" : "vs"} ${matchup.opponent}` : "—"}
-      {pts != null && <span className="text-gray-500"> · {pts.toFixed(1)}</span>}
-    </span>
+    <HoverInfo info={title} className="whitespace-nowrap text-xs tabular-nums text-gray-300">
+      {text}
+    </HoverInfo>
   );
 }

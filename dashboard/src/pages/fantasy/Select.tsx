@@ -228,7 +228,7 @@ export function Select({
     size === "sm"
       ? "px-2 py-1 text-xs gap-1.5"
       : tone === "accent"
-        ? "px-3 py-2.5 text-sm font-medium gap-2"
+        ? "px-3 py-1.5 text-sm font-medium gap-2"
         : "px-2.5 py-1.5 text-xs gap-1.5";
   const toneCls =
     tone === "accent"
