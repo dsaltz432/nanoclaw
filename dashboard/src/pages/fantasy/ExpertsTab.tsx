@@ -109,7 +109,7 @@ function overallList(d: Data): string {
 }
 
 const SUB_RANK_W = "1.75rem";
-const SUB_PROJ_W = "2.25rem";
+const SUB_PROJ_W = "2.5rem";
 const mine = (r: Row) => r.status === "mine";
 
 /** The same pick the server sorts on: FantasyPros where it ranks him, else the best other site. */

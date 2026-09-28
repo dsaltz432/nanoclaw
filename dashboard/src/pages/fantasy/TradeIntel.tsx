@@ -32,8 +32,8 @@ export type Row = {
   market_value: number | null;
   market_rank: number | null;
   /** Value change over the last week / 30 days, from the stored daily snapshots
-   *  (the payload's market_trend_30d is FantasyCalc's own figure, which is not
-   *  a plain difference of its values and disagrees with the dossier's chart). */
+   *  (not FantasyCalc's own trend30Day, which is not a plain difference of its
+   *  values and disagrees with the dossier's chart). */
   market_trend_7d?: number | null;
   market_change_30d?: number | null;
   /** Evidence is filtered server-side to the action that put the row on its list, newest first. */

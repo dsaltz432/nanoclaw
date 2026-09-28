@@ -200,6 +200,7 @@ const SOURCES: {
       "FAAB budget spent per manager, snapshotted so the burn curve can be reconstructed",
       "Matchups, draft picks, traded picks",
       "`news_updated` per player, which is the change detector that makes the news layer cheap",
+      "Weekly projections (Rotowire's; Sleeper serves no other provider), stored as raw stat lines and rescored under each league's settings. The number of record: Proj on Lineup, the lineup optimiser, the waiver board and the guillotine survival line",
     ],
     notUsed:
       "Nothing is ever written back. The GraphQL write path exists and risks the account; every recommendation here is executed by hand in the app.",
@@ -234,7 +235,7 @@ const SOURCES: {
     what: "The kona endpoint. One call returns both.",
     used: [
       "A second weekly projection, translated to Sleeper stat keys so it can be rescored under each league's settings",
-      "The DISAGREEMENT between it and Rotowire, which predicts how wrong the estimate will be — something one source structurally cannot provide",
+      "The DISAGREEMENT between it and Sleeper's projection, which predicts how wrong the estimate will be — something one source structurally cannot provide",
       "Roster ownership: percent owned, percent started, and ESPN's own weekly change figure",
     ],
     notUsed:
@@ -283,10 +284,10 @@ const SOURCES: {
     name: "The Fantasy Footballers — projections",
     what: "Stat-level weekly projections from the site's three analysts, averaged, read from its position rankings pages.",
     used: [
-      "A third weekly projection beside Rotowire and ESPN, rescored under each league's settings",
-      "In the tooltip on Lineup's projection, beside Rotowire on Rankings and in the dossier, and part of the spread that flags when the sources disagree",
+      "A third weekly projection beside Sleeper and ESPN, rescored under each league's settings",
+      "In the tooltip on Lineup's projection, beside Sleeper on Rankings and in the dossier, and part of the spread that flags when the sources disagree",
     ],
-    notUsed: "Not the number of record: Rotowire is, so an optimal lineup never depends on which third source ran last.",
+    notUsed: "Not the number of record: Sleeper's projection is, so an optimal lineup never depends on which third source ran last.",
     cost: "free · refreshed every 2 hours",
   },
   {

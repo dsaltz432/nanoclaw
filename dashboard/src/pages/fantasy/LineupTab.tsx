@@ -171,7 +171,7 @@ const ordinal = (n: number) => {
  * one each favours.
  *
  * The headline number hides how thin a call can be. "Purdy over Dak, +0.5"
- * reads settled; underneath, Rotowire and ESPN prefer Purdy, the Fantasy
+ * reads settled; underneath, Sleeper and ESPN prefer Purdy, the Fantasy
  * Footballers prefer Dak by a point, and the four ranking sources split two
  * apiece. That is a coin flip, and the row could not say so.
  */
@@ -1132,7 +1132,7 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
           </span>
         }
         info={
-          "Proj = Rotowire under this league's scoring" +
+          "Proj = Sleeper's projection under this league's scoring" +
           (data.usage_week != null ? `; usage = week ${data.usage_week} snap/target share.` : ".")
         }
       >

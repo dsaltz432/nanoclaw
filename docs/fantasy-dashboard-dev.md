@@ -119,14 +119,36 @@ new number, add it to the payload.
 ## Verifying in the browser
 
 The user keeps two Chrome tabs in the Claude tab group: one desktop, one with
-DevTools device emulation (Pixel 9, 400×582). Useful habits:
+DevTools device emulation (Pixel 9, 400×582).
+
+**Finding them at the start of a session.** The Chrome tools only see the tab
+group *this session* created; a group from an earlier session is invisible, so
+`tabs_context_mcp` answers "No tab group exists" even with both tabs open.
+Switching browsers does not help. The Basement Laptop is the one to use (listed
+as "Browser 2", deviceId `3ec7fe21-…`, usually already selected). Do this, in
+order, without trying other browsers first:
+
+1. `tabs_context_mcp` with `createIfEmpty: true`. It opens a new window holding
+   one blank tab in a fresh group.
+2. Ask the user to drag their two `/fantasy` tabs into that group (emulation
+   survives the move). The blank tab disappears or gets reused.
+3. `tabs_context_mcp` again, then confirm each tab by measuring
+   `innerWidth` (400 on the phone tab, ~1355 on desktop) and whether the
+   user agent is a mobile one.
+
+Useful habits:
 
 - Measure instead of eyeballing: `document.documentElement.scrollWidth` against
   the viewport, elements whose right edge passes it, `getBoundingClientRect()`.
 - The automation tabs are in the background, so **timers are throttled to
   ~1 s**; time things with a `MutationObserver` or `performance` entries, not
-  `setTimeout` gaps. A single JS evaluation times out at 45 s, so sweep one
-  league per call.
+  `setTimeout` gaps. A tab left in the background a while gets Chrome's
+  intensive throttling (chained timers about once a minute), so a wait loop
+  built on `setTimeout` stalls; yield with a `MessageChannel` tick instead
+  (`new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); })`)
+  and compare against `performance.now()`. A single JS evaluation times out at
+  45 s, so sweep one league per call. `HoverInfo` opens on an Enter keydown on
+  its `span[role=button]`, and the popup is the last child of `body`.
 - Do not click controls that write (mark read, refresh jobs) while testing.
 - After a server restart, wait for the warmer (~20 s, dossiers ~90 s) before
   timing anything.

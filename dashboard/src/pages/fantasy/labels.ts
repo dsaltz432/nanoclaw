@@ -36,14 +36,19 @@ export const SOURCE_LABEL: Record<string, string> = {
  * wrong above a column of projected points.
  */
 export const PROJ_LABEL: Record<string, string> = {
-  rotowire: "Rotowire",
+  rotowire: "Sleeper",
   espn: "ESPN",
   ffballers: "Fantasy Footballers",
 };
 
-/** Projection sources print lowercase beside a number: "roto 12 · espn 11 · ffb 13". */
+/**
+ * Projection sources print lowercase beside a number: "sleeper 12 · espn 11 · ffb 13".
+ * The `rotowire` key is Sleeper's projection feed (Rotowire is its only
+ * provider); it is labelled by where it comes from, so it is not confused
+ * with the Rotowire news wire.
+ */
 export const PROJ_SHORT: Record<string, string> = {
-  rotowire: "roto",
+  rotowire: "sleeper",
   espn: "espn",
   ffballers: "ffb",
 };
