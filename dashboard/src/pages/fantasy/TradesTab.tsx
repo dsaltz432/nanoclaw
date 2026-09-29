@@ -958,6 +958,20 @@ type Lead =
 
 type OppRival = { owner_id: string; owner: string; cells: Record<string, OppCell>; two_way: boolean; signals: number };
 
+type StrengthCell = {
+  /** Points a game from the dedicated slots at this position, last n weeks, whoever started. */
+  form: number | null;
+  games: number;
+  /** This week's projection, averaged over those slots' starters. */
+  week: number | null;
+  form_rank: number | null;
+  week_rank: number | null;
+  starters: string[];
+  spare: string | null;
+};
+
+type StrengthTeam = { owner_id: string; owner: string; is_me: boolean; cells: Record<string, StrengthCell> };
+
 type Opportunities = {
   week: number;
   n: number;
@@ -973,12 +987,22 @@ type Opportunities = {
   leads: Lead[];
   leads_total: number;
   players: Record<string, OppPlayer>;
+  /** Where each team is weak: every team and position, ranked across the league. */
+  strength?: { teams: StrengthTeam[]; n_teams: number };
   volume_warning?: string;
   reason?: string;
 };
 
+/** Rank → the green-to-red scale the player popup's opponents use, one shade per fifth of the league. */
+const RANK_CLS = ["text-green-400", "text-green-200", "text-gray-200", "text-red-200", "text-red-400"];
+const rankCls = (rank: number | null, n: number) =>
+  rank == null || n < 2 ? "text-gray-500" : RANK_CLS[Math.min(4, Math.floor(((rank - 1) / (n - 1)) * 5))];
+const ordinal = (k: number) => `${k}${k % 100 >= 11 && k % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][k % 10] ?? "th"}`;
+
 /** Leads shown before "show more". */
 const LEAD_FOLD = 5;
+/** Teams in "Where each team is weak" before "Show all" (you plus eleven: a whole 12-team league). */
+const STRENGTH_FOLD = 12;
 /** Rivals a "give" lead names inline before "+N more". */
 const LEAD_RIVALS = 3;
 
@@ -1049,9 +1073,6 @@ function TradeOpportunities({
   };
 
   const rivalById = new Map(o.rivals.map((r) => [r.owner_id, r]));
-  const active = o.rivals.filter((r) => r.signals > 0 || r.two_way);
-  const quiet = o.rivals.length - active.length;
-  const rivals = allRivals ? o.rivals : active;
   const leads = allLeads ? o.leads : o.leads.slice(0, LEAD_FOLD);
 
   return (
@@ -1157,97 +1178,35 @@ function TradeOpportunities({
         })}
       </ul>
 
-      {/* ── every rival by position ── */}
-      <SubHead className="mt-4 mb-1.5">By position · this week / on form</SubHead>
-      {active.length === 0 && !allRivals ? (
-        <p className="text-xs text-gray-500">No rival has a gap either way.</p>
-      ) : narrow ? (
-        <ul className="divide-y divide-gray-800/60">
-          {rivals.map((r) => (
-            <li key={r.owner_id} className="py-1.5">
-              <RivalName r={r} onPartner={onPartner} />
-              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
-                {o.positions.flatMap((p) => {
-                  const c = r.cells[p];
-                  if (!c) return [];
-                  return (["give", "get"] as const)
-                    .filter((dir) => c[dir].signal)
-                    .map((dir) => (
-                      <span key={p + dir}>
-                        <span className="text-gray-500">
-                          {p} {dir}{" "}
-                        </span>
-                        <HoverInfo info={dirInfo(c[dir], dir, r.owner, c, p)} className={SIGNAL_CLS[c[dir].signal ?? ""]}>
-                          {gapPair(c[dir])}
-                        </HoverInfo>
-                      </span>
-                    ));
-                })}
-                {r.signals === 0 && <span className="text-gray-600">nothing either way</span>}
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b border-gray-800">
-                <Th>Manager</Th>
-                {o.positions.map((p) => (
-                  <Th key={p} className="text-center">
-                    {p}
-                  </Th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rivals.map((r) => (
-                <tr key={r.owner_id} className="border-b border-gray-800/60">
-                  <Td className="whitespace-nowrap">
-                    <RivalName r={r} onPartner={onPartner} />
-                  </Td>
-                  {o.positions.map((p) => {
-                    const c = r.cells[p];
-                    const dirs = c ? (["give", "get"] as const).filter((dir) => c[dir].signal) : [];
-                    return (
-                      <Td key={p} className="px-1 text-center text-xs tabular-nums">
-                        {dirs.length === 0 ? (
-                          <span className="text-gray-700">—</span>
-                        ) : (
-                          <span className="inline-flex flex-col items-center leading-snug">
-                            {dirs.map((dir) => (
-                              <span key={dir} className="whitespace-nowrap">
-                                <span className="text-gray-500">{dir} </span>
-                                <HoverInfo
-                                  info={dirInfo(c![dir], dir, r.owner, c!, p)}
-                                  className={SIGNAL_CLS[c![dir].signal ?? ""]}
-                                >
-                                  {gapPair(c![dir])}
-                                </HoverInfo>
-                              </span>
-                            ))}
-                          </span>
-                        )}
-                      </Td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {/* ── where each team is weak: every team and position, coloured by
+          league rank, so a need shows even when no spare of yours fits it ── */}
+      {o.strength && o.strength.teams.length > 0 && (
+        <StrengthGrid
+          o={o}
+          teams={allRivals ? o.strength.teams : o.strength.teams.slice(0, STRENGTH_FOLD)}
+          narrow={narrow}
+          name={name}
+          line={line}
+          dirInfo={dirInfo}
+          rivalById={rivalById}
+          onPartner={onPartner}
+        />
       )}
-      {quiet > 0 && (
+      {o.strength && o.strength.teams.length > STRENGTH_FOLD && (
         <FoldToggle
           mode="all"
-          total={o.rivals.length}
-          shown={rivals.length}
+          total={o.strength.teams.length}
+          shown={allRivals ? o.strength.teams.length : STRENGTH_FOLD}
           expanded={allRivals}
           onToggle={() => setAllRivals((v) => !v)}
         />
       )}
 
+      <Note>
+        Where each team is weak: each team&rsquo;s own slots at a position (not flex), what they actually scored a
+        game over the last {o.n} completed weeks whoever was started, coloured from the best fifth of the league
+        (green) to the worst (red). A + marks a position where a spare of yours would start for them.
+      </Note>
       <Note>
         &ldquo;Give&rdquo; is your best spare at a position — a player neither this week&rsquo;s lineup nor the
         form lineup starts — against the weakest slot a player there could take on their roster; &ldquo;get&rdquo; is
@@ -1306,6 +1265,127 @@ function sideGroups(o: Opportunities) {
     if (c.slot_avg) g.slotAvg.push([p, c.slot_avg]);
   }
   return groups;
+}
+
+/**
+ * Where each team is weak. One row per team (yours first), one cell per
+ * position: what that team's own slots there have actually scored a game over
+ * the last few weeks, coloured by where that ranks in the league. The hover
+ * has this week's projection for the same slots, who fills them, the best
+ * bench player, and whether a spare of yours would start there (marked +).
+ */
+function StrengthGrid({
+  o,
+  teams,
+  narrow,
+  name,
+  line,
+  dirInfo,
+  rivalById,
+  onPartner,
+}: {
+  o: Opportunities;
+  teams: StrengthTeam[];
+  narrow: boolean;
+  name: (id: string | null | undefined) => string;
+  line: (id: string) => string;
+  dirInfo: (d: Direction, dir: "give" | "get", owner: string, cell: OppCell | null, pos: string) => string;
+  rivalById: Map<string, OppRival>;
+  onPartner: (ownerId: string) => void;
+}) {
+  const n = o.strength!.n_teams;
+  // Team slots count weeks, not a player's games.
+  const weeks = Math.max(0, ...o.strength!.teams.flatMap((t) => Object.values(t.cells).map((c) => c.games)));
+  const weeksLabel = weeks > 0 ? `last ${plural(weeks, "week")}` : "no weeks yet";
+  const info = (t: StrengthTeam, p: string) => {
+    const c = t.cells[p];
+    if (!c) return "";
+    const who = t.is_me ? "Your" : `${t.owner}'s`;
+    const slots = c.starters.length === 1 ? "slot has" : "slots have";
+    const lines = [
+      c.form != null
+        ? `${who} ${p} ${slots} scored ${f1(c.form)} a game (last ${plural(c.games, "week")}), ${ordinal(c.form_rank!)} of ${n}`
+        : `${who} ${p} ${c.starters.length === 1 ? "slot" : "slots"}: no completed weeks yet`,
+      c.week != null
+        ? `This week they project ${f1(c.week)}, ${ordinal(c.week_rank!)} of ${n}: ${c.starters.map((id) => name(id)).join(", ") || "nobody"}`
+        : "",
+      c.spare ? `Best bench: ${line(c.spare)}` : "No bench player here",
+    ].filter(Boolean);
+    const r = t.is_me ? null : rivalById.get(t.owner_id);
+    const cell = r?.cells[p];
+    // Where a spare of yours would start here, or theirs for you: the gap itself.
+    if (cell?.give.signal) lines.push("", dirInfo(cell.give, "give", t.owner, cell, p));
+    if (cell?.get.signal) lines.push("", dirInfo(cell.get, "get", t.owner, cell, p));
+    return lines.join("\n");
+  };
+  const fits = (t: StrengthTeam, p: string) => !t.is_me && !!rivalById.get(t.owner_id)?.cells[p]?.give.signal;
+  const value = (t: StrengthTeam, p: string) => {
+    const c = t.cells[p];
+    if (!c) return <span className="text-gray-700">—</span>;
+    return (
+      <>
+        <HoverInfo info={info(t, p)} className={rankCls(c.form_rank, n)}>
+          {f1(c.form)}
+        </HoverInfo>
+        {fits(t, p) && <span className="ml-0.5 text-green-400">+</span>}
+      </>
+    );
+  };
+  const teamName = (t: StrengthTeam) =>
+    t.is_me ? (
+      <span className="font-medium text-gray-200">You</span>
+    ) : rivalById.get(t.owner_id) ? (
+      <RivalName r={rivalById.get(t.owner_id)!} onPartner={onPartner} />
+    ) : (
+      <span>{t.owner}</span>
+    );
+  return (
+    <>
+      <SubHead className="mt-4 mb-1.5">Where each team is weak · points a game, {weeksLabel}</SubHead>
+      {narrow ? (
+        <ul className="divide-y divide-gray-800/60">
+          {teams.map((t) => (
+            <li key={t.owner_id} className={`flex items-baseline gap-2 py-1.5 text-xs ${t.is_me ? "bg-green-500/5" : ""}`}>
+              <span className="min-w-0 flex-1 truncate">{teamName(t)}</span>
+              {o.positions.map((p) => (
+                <span key={p} className="w-[3.25rem] shrink-0 whitespace-nowrap text-right tabular-nums">
+                  <span className="text-[10px] text-gray-600">{p} </span>
+                  {value(t, p)}
+                </span>
+              ))}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-gray-800">
+                <Th>Team</Th>
+                {o.positions.map((p) => (
+                  <Th key={p} className="text-right">
+                    {p}
+                  </Th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {teams.map((t) => (
+                <tr key={t.owner_id} className={`border-b border-gray-800/60 ${t.is_me ? "bg-green-500/5" : ""}`}>
+                  <Td className="whitespace-nowrap">{teamName(t)}</Td>
+                  {o.positions.map((p) => (
+                    <Td key={p} className="whitespace-nowrap text-right text-xs tabular-nums">
+                      {value(t, p)}
+                    </Td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
 }
 
 function RivalName({ r, onPartner }: { r: OppRival; onPartner: (ownerId: string) => void }) {
