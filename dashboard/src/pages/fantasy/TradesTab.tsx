@@ -106,6 +106,9 @@ type Package = {
   market_pct: number | null;
   /** Pinned searches only: my lineup gain in market units. */
   market_equivalent: number | null;
+  /** Their lineup gets slightly worse (within the tolerance) but they gain
+   *  market value: shown, marked, rather than hidden. */
+  close_call?: boolean;
 };
 
 type Generated = {
@@ -123,6 +126,8 @@ type Generated = {
   /** Legal packages checked, and for a pinned search that found none, the one
    *  that came closest to improving their lineup. */
   tried?: number;
+  /** How much a package may cost their lineup and still be a close call. */
+  tolerance?: { points: number; weeks: number; per_week: number };
   closest?: { counterparty: string; give: Asset[]; get: Asset[]; their_gain: number; my_gain: number } | null;
 };
 
@@ -1691,7 +1696,8 @@ function TradeBuilder({
                 <div className="space-y-1 text-xs text-gray-500">
                   <p>
                     None of the {generated.tried ?? 0} packages with the pinned players improves{" "}
-                    {generated.counterparty ?? "the other manager"}'s lineup on rest-of-season points, so
+                    {generated.counterparty ?? "the other manager"}'s lineup on rest-of-season points, or
+                    costs it under {generated.tolerance?.points ?? 0} while giving them market value, so
                     they have no reason to accept.
                   </p>
                   {generated.closest && (
@@ -1744,6 +1750,16 @@ function TradeBuilder({
                       <div className="mt-1 flex flex-wrap items-center gap-x-4 text-xs tabular-nums">
                         <span style={{ color: p.my_gain >= 0 ? C.s3 : C.critical }}>my lineup {signed(p.my_gain)}</span>
                         <span className="text-gray-500">their lineup {signed(p.their_gain)}</span>
+                        {p.close_call && (
+                          <HoverInfo
+                            info={`Their lineup gets ${Math.abs(p.their_gain).toFixed(1)} rest-of-season points worse — under the ${
+                              generated.tolerance?.points ?? ""
+                            } allowed (${generated.tolerance?.per_week ?? 1} a week) — but they gain market value. Close enough that it comes down to how they rate the players.`}
+                            className="text-amber-300/80"
+                          >
+                            close call
+                          </HoverInfo>
+                        )}
                         <span
                           style={{ color: p.market_delta >= 0 ? C.s1 : C.warning }}
                           title={
