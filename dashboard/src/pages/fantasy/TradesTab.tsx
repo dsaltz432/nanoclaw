@@ -120,6 +120,10 @@ type Generated = {
   rate_note?: string | null;
   season_note: string | null;
   reason?: string;
+  /** Legal packages checked, and for a pinned search that found none, the one
+   *  that came closest to improving their lineup. */
+  tried?: number;
+  closest?: { counterparty: string; give: Asset[]; get: Asset[]; their_gain: number; my_gain: number } | null;
 };
 
 export default function TradesTab({
@@ -148,6 +152,17 @@ export default function TradesTab({
   // failed search belongs inside the builder, not in place of the whole tab.
   const [evalErr, setEvalErr] = useState<string | null>(null);
   const [genErr, setGenErr] = useState<string | null>(null);
+
+  // A pin is a piece of the deal held constant, so it can only exist while the
+  // player is in the deal: removing a chip (its ×, the roster row, Clear deal,
+  // loading another package) unpins him. Otherwise a pin outlives its chip and
+  // silently constrains every later search.
+  useEffect(() => {
+    const inGive = new Set(give.map((a) => a.player_id));
+    const inGet = new Set(get.map((a) => a.player_id));
+    setPinMine((prev) => (prev.every((p) => inGive.has(p.player_id)) ? prev : prev.filter((p) => inGive.has(p.player_id))));
+    setPinTheirs((prev) => (prev.every((p) => inGet.has(p.player_id)) ? prev : prev.filter((p) => inGet.has(p.player_id))));
+  }, [give, get]);
 
   useEffect(() => {
     setGive([]);
@@ -244,6 +259,10 @@ export default function TradesTab({
     },
     [ownerOfPlayer]
   );
+
+  const remove = useCallback((side: "give" | "get", id: string) => {
+    (side === "give" ? setGive : setGet)((prev) => prev.filter((x) => x.player_id !== id));
+  }, []);
 
   const togglePin = useCallback(
     (side: "mine" | "theirs", p: Asset) => {
@@ -427,6 +446,7 @@ export default function TradesTab({
               actionLabel="give"
               selected={give.map((g) => g.player_id)}
               onPick={(p) => add("give", p)}
+              onUnpick={(p) => remove("give", p.player_id)}
               pinned={pinMine.map((p) => p.player_id)}
               onPin={(p) => togglePin("mine", p)}
               onPlayer={onPlayer}
@@ -439,6 +459,7 @@ export default function TradesTab({
               actionLabel="get"
               selected={get.map((g) => g.player_id)}
               onPick={(p) => add("get", p)}
+              onUnpick={(p) => remove("get", p.player_id)}
               pinned={pinTheirs.map((p) => p.player_id)}
               onPin={(p) => togglePin("theirs", p)}
               onPlayer={onPlayer}
@@ -566,6 +587,7 @@ function RosterPanel({
   actionLabel,
   selected,
   onPick,
+  onUnpick,
   pinned = [],
   onPin,
   picker,
@@ -578,6 +600,8 @@ function RosterPanel({
   actionLabel: "give" | "get";
   selected: string[];
   onPick: (p: RosterPlayer) => void;
+  /** Takes a player back out of the deal (and so unpins him). */
+  onUnpick: (p: RosterPlayer) => void;
   pinned?: string[];
   onPin?: (p: RosterPlayer) => void;
   picker?: React.ReactNode;
@@ -721,17 +745,18 @@ function RosterPanel({
                 ))}
                 <Td className="pl-1 pr-0">
                   <div className="flex justify-end gap-1">
+                    {/* In the deal: the same button takes him back out. */}
                     <button
                       type="button"
-                      onClick={() => onPick(p)}
-                      disabled={chosen}
+                      onClick={() => (chosen ? onUnpick(p) : onPick(p))}
+                      aria-pressed={chosen}
                       className={`${ROW_BTN} ${
                         chosen
-                          ? "cursor-default text-indigo-400 ring-indigo-500/30"
+                          ? "text-indigo-300 ring-indigo-500/40 hover:text-red-300 hover:ring-red-500/40"
                           : "text-gray-400 ring-gray-700 hover:text-gray-100 hover:ring-gray-500"
                       }`}
                     >
-                      {chosen ? "Added" : cap(actionLabel)}
+                      {chosen ? "Remove" : cap(actionLabel)}
                     </button>
                     {onPin && (
                       <button
@@ -1662,11 +1687,33 @@ function TradeBuilder({
             {generated.reason ? (
               <p className="text-sm text-amber-300/80">{generated.reason}</p>
             ) : generated.packages.length === 0 ? (
-              <p className="text-xs text-gray-500">
-                Nothing viable across {generated.searched} team
-                {generated.searched === 1 ? "" : "s"}. With nothing pinned that means no package improves
-                both lineups — the normal answer in a league where everyone drafted sensibly.
-              </p>
+              anyPinned ? (
+                <div className="space-y-1 text-xs text-gray-500">
+                  <p>
+                    None of the {generated.tried ?? 0} packages with the pinned players improves{" "}
+                    {generated.counterparty ?? "the other manager"}'s lineup on rest-of-season points, so
+                    they have no reason to accept.
+                  </p>
+                  {generated.closest && (
+                    <p className="flex flex-wrap items-baseline gap-x-1.5">
+                      <span>Closest: send</span>
+                      <AssetNames assets={generated.closest.give} onPlayer={onPlayer} />
+                      <span>for</span>
+                      <AssetNames assets={generated.closest.get} onPlayer={onPlayer} />
+                      <span className="tabular-nums">
+                        · their lineup {signed(generated.closest.their_gain)} · yours{" "}
+                        {signed(generated.closest.my_gain)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Nothing viable across {generated.searched} team
+                  {generated.searched === 1 ? "" : "s"}. No package improves both lineups — the normal
+                  answer in a league where everyone drafted sensibly.
+                </p>
+              )
             ) : (
               <>
                 <div className="mb-2 flex flex-wrap items-baseline gap-2 text-xs text-gray-500">
