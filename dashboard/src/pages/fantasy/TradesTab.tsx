@@ -968,6 +968,8 @@ type StrengthCell = {
   week_rank: number | null;
   starters: string[];
   spare: string | null;
+  /** Who filled those slots each counted week, newest first (id null: left empty). */
+  log: { week: number; players: { id: string | null; pts: number }[] }[];
 };
 
 type StrengthTeam = { owner_id: string; owner: string; is_me: boolean; cells: Record<string, StrengthCell> };
@@ -1183,20 +1185,10 @@ function TradeOpportunities({
       {o.strength && o.strength.teams.length > 0 && (
         <StrengthGrid
           o={o}
-          teams={allRivals ? o.strength.teams : o.strength.teams.slice(0, STRENGTH_FOLD)}
           narrow={narrow}
           name={name}
-          line={line}
-          dirInfo={dirInfo}
           rivalById={rivalById}
           onPartner={onPartner}
-        />
-      )}
-      {o.strength && o.strength.teams.length > STRENGTH_FOLD && (
-        <FoldToggle
-          mode="all"
-          total={o.strength.teams.length}
-          shown={allRivals ? o.strength.teams.length : STRENGTH_FOLD}
           expanded={allRivals}
           onToggle={() => setAllRivals((v) => !v)}
         />
@@ -1205,7 +1197,8 @@ function TradeOpportunities({
       <Note>
         Where each team is weak: each team&rsquo;s own slots at a position (not flex), what they actually scored a
         game over the last {o.n} completed weeks whoever was started, coloured from the best fifth of the league
-        (green) to the worst (red). A + marks a position where a spare of yours would start for them.
+        (green) to the worst (red); a position header sorts by it. A + marks a position where a spare of yours
+        would start for them. Hover a number for the game log behind it.
       </Note>
       <Note>
         &ldquo;Give&rdquo; is your best spare at a position — a player neither this week&rsquo;s lineup nor the
@@ -1267,56 +1260,116 @@ function sideGroups(o: Opportunities) {
   return groups;
 }
 
+/** "Chase Brown" -> "C. Brown": a week of three receivers fits one hover line. */
+const shortName = (n: string) => {
+  const parts = n.split(" ");
+  return parts.length > 1 && !/^[A-Z]{2,4}$/.test(n) ? `${parts[0]![0]}. ${parts.slice(1).join(" ")}` : n;
+};
+
+type StrengthSort = { pos: string; dir: "desc" | "asc" } | null;
+
 /**
- * Where each team is weak. One row per team (yours first), one cell per
- * position: what that team's own slots there have actually scored a game over
- * the last few weeks, coloured by where that ranks in the league. The hover
- * has this week's projection for the same slots, who fills them, the best
- * bench player, and whether a spare of yours would start there (marked +).
+ * Where each team is weak. One row per team (yours first until sorted), one
+ * cell per position: what that team's own slots there have actually scored a
+ * game over the last few weeks, coloured by where that ranks in the league.
+ * A position header sorts by it — most points first, again for fewest. The
+ * hover is the game log behind the number: who filled those slots each week
+ * and what they scored, then who starts this week, the best bench player, and
+ * the gap where a spare fits either way (marked +).
  */
 function StrengthGrid({
   o,
-  teams,
   narrow,
   name,
-  line,
-  dirInfo,
   rivalById,
   onPartner,
+  expanded,
+  onToggle,
 }: {
   o: Opportunities;
-  teams: StrengthTeam[];
   narrow: boolean;
   name: (id: string | null | undefined) => string;
-  line: (id: string) => string;
-  dirInfo: (d: Direction, dir: "give" | "get", owner: string, cell: OppCell | null, pos: string) => string;
   rivalById: Map<string, OppRival>;
   onPartner: (ownerId: string) => void;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
+  const [sort, setSort] = useState<StrengthSort>(null);
+  const P = o.players;
+  const all = o.strength!.teams;
   const n = o.strength!.n_teams;
   // Team slots count weeks, not a player's games.
-  const weeks = Math.max(0, ...o.strength!.teams.flatMap((t) => Object.values(t.cells).map((c) => c.games)));
+  const weeks = Math.max(0, ...all.flatMap((t) => Object.values(t.cells).map((c) => c.games)));
   const weeksLabel = weeks > 0 ? `last ${plural(weeks, "week")}` : "no weeks yet";
+
+  const sorted = sort
+    ? [...all].sort((a, b) => {
+        const x = a.cells[sort.pos]?.form ?? null;
+        const y = b.cells[sort.pos]?.form ?? null;
+        if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1; // no number: last either way
+        return sort.dir === "desc" ? y - x : x - y;
+      })
+    : all;
+  const teams = expanded ? sorted : sorted.slice(0, STRENGTH_FOLD);
+  const toggleSort = (p: string) =>
+    setSort((cur) => (cur?.pos === p ? { pos: p, dir: cur.dir === "desc" ? "asc" : "desc" } : { pos: p, dir: "desc" }));
+  const arrow = (p: string) => (sort?.pos === p ? (sort.dir === "desc" ? " ▼" : " ▲") : "");
+
+  const short = (id: string | null) => (id ? shortName(name(id)) : "empty");
   const info = (t: StrengthTeam, p: string) => {
     const c = t.cells[p];
     if (!c) return "";
-    const who = t.is_me ? "Your" : `${t.owner}'s`;
-    const slots = c.starters.length === 1 ? "slot has" : "slots have";
-    const lines = [
-      c.form != null
-        ? `${who} ${p} ${slots} scored ${f1(c.form)} a game (last ${plural(c.games, "week")}), ${ordinal(c.form_rank!)} of ${n}`
-        : `${who} ${p} ${c.starters.length === 1 ? "slot" : "slots"}: no completed weeks yet`,
-      c.week != null
-        ? `This week they project ${f1(c.week)}, ${ordinal(c.week_rank!)} of ${n}: ${c.starters.map((id) => name(id)).join(", ") || "nobody"}`
-        : "",
-      c.spare ? `Best bench: ${line(c.spare)}` : "No bench player here",
-    ].filter(Boolean);
     const r = t.is_me ? null : rivalById.get(t.owner_id);
     const cell = r?.cells[p];
-    // Where a spare of yours would start here, or theirs for you: the gap itself.
-    if (cell?.give.signal) lines.push("", dirInfo(cell.give, "give", t.owner, cell, p));
-    if (cell?.get.signal) lines.push("", dirInfo(cell.get, "get", t.owner, cell, p));
-    return lines.join("\n");
+    const now = c.starters.map((id) => `${short(id)} ${P[id]?.week != null ? f1(P[id]!.week) : P[id]?.why ?? "—"}`);
+    return (
+      <div className="space-y-1.5">
+        {c.log.length === 0 ? (
+          <div className="text-gray-500">No completed weeks yet</div>
+        ) : (
+          <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 tabular-nums">
+            {c.log.map((g) => (
+              <Fragment key={g.week}>
+                <span className="text-gray-500">Wk {g.week}</span>
+                <span>
+                  {g.players.map((x, i) => (
+                    <span key={i}>
+                      {i > 0 && <span className="text-gray-600"> · </span>}
+                      {short(x.id)} <span className="text-gray-100">{f1(x.pts)}</span>
+                    </span>
+                  ))}
+                </span>
+              </Fragment>
+            ))}
+          </div>
+        )}
+        {now.length > 0 && (
+          <div>
+            <span className="text-gray-500">Wk {o.week} proj </span>
+            {now.join(" · ")}
+          </div>
+        )}
+        {c.spare && (
+          <div>
+            <span className="text-gray-500">Bench </span>
+            {short(c.spare)} {P[c.spare]?.week != null ? f1(P[c.spare]!.week) : P[c.spare]?.why ?? ""}
+          </div>
+        )}
+        {cell?.give.signal && cell.give.spare && (
+          <div className="text-green-400">
+            + your {short(cell.give.spare)} would start here: {gapPair(cell.give)}
+          </div>
+        )}
+        {cell?.get.signal && cell.get.spare && (
+          <div className="text-green-400">
+            their {short(cell.get.spare)} would start for you: {gapPair(cell.get)}
+          </div>
+        )}
+        <div className="text-gray-500">
+          {ordinal(c.form_rank ?? n)} of {n} · this week {c.week_rank ? ordinal(c.week_rank) : "—"}
+        </div>
+      </div>
+    );
   };
   const fits = (t: StrengthTeam, p: string) => !t.is_me && !!rivalById.get(t.owner_id)?.cells[p]?.give.signal;
   const value = (t: StrengthTeam, p: string) => {
@@ -1339,23 +1392,42 @@ function StrengthGrid({
     ) : (
       <span>{t.owner}</span>
     );
+  const sortBtn = (p: string, cls = "") => (
+    <button
+      type="button"
+      onClick={() => toggleSort(p)}
+      className={`whitespace-nowrap uppercase hover:text-gray-200 ${sort?.pos === p ? "text-gray-200" : ""} ${cls}`}
+    >
+      {p}
+      {arrow(p)}
+    </button>
+  );
   return (
     <>
       <SubHead className="mt-4 mb-1.5">Where each team is weak · points a game, {weeksLabel}</SubHead>
       {narrow ? (
-        <ul className="divide-y divide-gray-800/60">
-          {teams.map((t) => (
-            <li key={t.owner_id} className={`flex items-baseline gap-2 py-1.5 text-xs ${t.is_me ? "bg-green-500/5" : ""}`}>
-              <span className="min-w-0 flex-1 truncate">{teamName(t)}</span>
-              {o.positions.map((p) => (
-                <span key={p} className="w-[3.25rem] shrink-0 whitespace-nowrap text-right tabular-nums">
-                  <span className="text-[10px] text-gray-600">{p} </span>
-                  {value(t, p)}
-                </span>
-              ))}
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="flex items-baseline gap-2 border-b border-gray-800 pb-1 text-[10px] font-medium tracking-wide text-gray-500">
+            <span className="min-w-0 flex-1 uppercase">Team</span>
+            {o.positions.map((p) => (
+              <span key={p} className="w-[3.25rem] shrink-0 text-right">
+                {sortBtn(p)}
+              </span>
+            ))}
+          </div>
+          <ul className="divide-y divide-gray-800/60">
+            {teams.map((t) => (
+              <li key={t.owner_id} className={`flex items-baseline gap-2 py-1.5 text-xs ${t.is_me ? "bg-green-500/5" : ""}`}>
+                <span className="min-w-0 flex-1 truncate">{teamName(t)}</span>
+                {o.positions.map((p) => (
+                  <span key={p} className="w-[3.25rem] shrink-0 whitespace-nowrap text-right tabular-nums">
+                    {value(t, p)}
+                  </span>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
@@ -1363,8 +1435,12 @@ function StrengthGrid({
               <tr className="border-b border-gray-800">
                 <Th>Team</Th>
                 {o.positions.map((p) => (
-                  <Th key={p} className="text-right">
-                    {p}
+                  <Th
+                    key={p}
+                    className="text-right"
+                    aria-sort={sort?.pos === p ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}
+                  >
+                    {sortBtn(p)}
                   </Th>
                 ))}
               </tr>
@@ -1383,6 +1459,9 @@ function StrengthGrid({
             </tbody>
           </table>
         </div>
+      )}
+      {all.length > STRENGTH_FOLD && (
+        <FoldToggle mode="all" total={all.length} shown={teams.length} expanded={expanded} onToggle={onToggle} />
       )}
     </>
   );
