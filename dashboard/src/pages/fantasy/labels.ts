@@ -229,3 +229,14 @@ export function fmtDateTime(iso: string | null | undefined): string {
   const hm = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
   return `${fmtDate(iso)}, ${hm}`;
 }
+
+/** Opponent colour by matchup (consensus.matchup_strength tier): green soft, red tough, one shade per six teams. */
+export const TIER_CLS: Record<number, string> = {
+  2: "text-green-400",
+  1: "text-green-200",
+  0: "text-gray-200",
+  [-1]: "text-red-200",
+  [-2]: "text-red-400",
+};
+export const ordinal = (k: number) => `${k}${k % 100 >= 11 && k % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][k % 10] ?? "th"}`;
+export const posPlural: Record<string, string> = { QB: "QBs", RB: "RBs", WR: "WRs", TE: "TEs", K: "kickers" };

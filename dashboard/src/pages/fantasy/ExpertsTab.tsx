@@ -1,7 +1,20 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ClaimQuote, ClaimsSummary, PlayerName, RankText, type Claim } from "./NoteLine";
-import { Badge, Card, ErrorBox, FoldToggle, Loading, MetaLine, Note, Td, Th, useIsNarrow } from "./viz";
-import { PROJ_SHORT, SCOPE_LABEL, cap, claimLean, fmtDate, projLabel, projShort, srcLabel, srcShort } from "./labels";
+import { Badge, Card, ErrorBox, FoldToggle, HoverInfo, Loading, MetaLine, Note, Td, Th, useIsNarrow } from "./viz";
+import {
+  PROJ_SHORT,
+  SCOPE_LABEL,
+  TIER_CLS,
+  cap,
+  claimLean,
+  fmtDate,
+  ordinal,
+  posPlural,
+  projLabel,
+  projShort,
+  srcLabel,
+  srcShort,
+} from "./labels";
 import { Segmented, Select } from "./Select";
 
 /**
@@ -47,7 +60,37 @@ type Row = {
   bye?: boolean;
   /** A later week only: the mean of `proj`, which that board is ordered by. */
   proj_avg?: number | null;
+  /** Weekly scope: his opponent in the week shown and how kind that defence is to his position
+   *  (consensus.matchup_strength: rank 1 allows the most; tier 2 easiest … -2 hardest). */
+  opp?: {
+    bye?: boolean;
+    team?: string;
+    home?: boolean;
+    allowed?: number | null;
+    rank?: number | null;
+    tier?: number | null;
+    games?: number | null;
+    of?: number | null;
+  } | null;
 };
+
+/** "vs JAX" / "@ CAR", coloured by how kind that defence is to his position; the numbers on hover. */
+function OppTag({ opp, pos }: { opp: NonNullable<Row["opp"]>; pos: string | null }) {
+  if (opp.bye) return <span className="text-gray-500">bye</span>;
+  const label = `${opp.home ? "vs" : "@"} ${opp.team}`;
+  if (opp.allowed == null || opp.rank == null) return <span className="text-gray-400">{label}</span>;
+  const p = pos ?? "";
+  const info =
+    (p === "DEF"
+      ? `${opp.team}'s offense gives defenses ${opp.allowed} pts/game, ${ordinal(opp.rank)} most of ${opp.of ?? 32}`
+      : `${opp.team} allows ${opp.allowed} pts/game to ${posPlural[p] ?? p}, ${ordinal(opp.rank)} most of ${opp.of ?? 32}`) +
+    `\n(this season, ${opp.games} game${opp.games === 1 ? "" : "s"})`;
+  return (
+    <HoverInfo info={info} className={`whitespace-nowrap ${TIER_CLS[opp.tier ?? 0] ?? ""}`}>
+      {label}
+    </HoverInfo>
+  );
+}
 
 type Data = {
   league: string;
@@ -370,6 +413,8 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
   const projHead = data.week != null ? `Proj wk ${data.week}` : "Proj (this wk)";
   // Only the sources that price someone on this list, in the fixed order.
   const projSources = showProj ? PROJ_ORDER.filter((s) => data.rows.some((r) => s in r.proj)) : [];
+  // One game only: the weekly scope (this week or a later one from the picker).
+  const showOpp = data.rows.some((r) => r.opp);
   const projTitle = `${data.legend.proj ?? "league-correct projection"}: ${projSources.map(projShort).join(" · ")}`;
   // Only the ranking sites that rank someone on this list, in the fixed order.
   const rankSources = RANK_ORDER.filter((s) => data.rows.some((r) => s in r.ranks));
@@ -417,13 +462,14 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             )}
           </div>
           <MetaLine className="mt-0.5 sm:hidden">
+            {r.opp && <OppTag opp={r.opp} pos={r.pos} />}
             {dynasty && r.age != null && (
               <span>
                 age {r.age}
                 {r.rookie ? " (R)" : ""}
               </span>
             )}
-            {r.bye && data.week != null && <span>bye wk {data.week}</span>}
+            {r.bye && data.week != null && !r.opp && <span>bye wk {data.week}</span>}
             {projLine && !r.bye && (
               <span className="whitespace-nowrap tabular-nums">
                 {data.week != null ? `wk ${data.week} proj` : "proj"} {projLine}
@@ -446,6 +492,11 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
             </div>
           )}
         </Td>
+        {showOpp && (
+          <Td data-label="Opp" empty={!r.opp} className="hidden whitespace-nowrap text-xs sm:table-cell">
+            {r.opp ? <OppTag opp={r.opp} pos={r.pos} /> : <span className="text-gray-700">—</span>}
+          </Td>
+        )}
         {dynasty && (
           <Td data-label="Age" empty={r.age == null} className="hidden whitespace-nowrap text-right text-xs tabular-nums text-gray-300 sm:table-cell">
             {r.age ?? <span className="text-gray-700">—</span>}
@@ -547,6 +598,7 @@ export default function ExpertsTab({ league, onPlayer }: { league: string; onPla
                 <thead>
                   <tr>
                     <Th title={numbered ? `the number is the ${list} rank this list is ordered by` : undefined}>Player</Th>
+                    {showOpp && <Th>Opp</Th>}
                     {dynasty && (
                       <Th className="text-right" title="age this season; R = rookie">
                         Age

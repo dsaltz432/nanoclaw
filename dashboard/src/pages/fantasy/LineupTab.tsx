@@ -438,8 +438,8 @@ function ProjCell({ r }: { r: Row }) {
       </HoverInfo>
     );
   if (r.projected == null) return <span className="text-gray-700">—</span>;
-  // Every source, the one the lineup is built on first; "↕" marks a week the
-  // sources disagree by 4 or more (highest minus lowest, not a ± margin).
+  // Every source on hover, the one the lineup is built on first, and how far
+  // apart they are when that is 4 or more (highest minus lowest).
   const sources = Object.entries(r.proj).sort(([a], [b]) => (a === "rotowire" ? -1 : b === "rotowire" ? 1 : 0));
   const split = r.proj_spread != null && r.proj_spread >= 4;
   const info =
@@ -452,7 +452,6 @@ function ProjCell({ r }: { r: Row }) {
   return (
     <HoverInfo info={info} className="whitespace-nowrap tabular-nums">
       <span className="text-gray-100">{r.projected.toFixed(1)}</span>
-      {split && <span className="ml-1 text-[11px] text-amber-300">↕{r.proj_spread!.toFixed(1)}</span>}
     </HoverInfo>
   );
 }

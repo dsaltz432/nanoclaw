@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Badge, ErrorBox, FoldToggle, HoverInfo, Loading, SubHead, useIsNarrow } from "./viz";
 import { SectionProvider } from "./method";
-import { ACTION_TONE, cap, fmtDate, horizonLabel, projLabel, SCOPE_LABEL, srcLabel, srcShort } from "./labels";
+import { ACTION_TONE, cap, fmtDate, horizonLabel, ordinal, posPlural, projLabel, SCOPE_LABEL, srcLabel, srcShort, TIER_CLS } from "./labels";
 import { ClaimsSummary, NoteLine, type Note as WireNote } from "./NoteLine";
 
 /**
@@ -336,16 +336,6 @@ const STAT_COLS: Record<string, StatCol[]> = {
 };
 STAT_COLS.TE = STAT_COLS.WR!;
 
-/** Opponent colour by matchup: green soft, red tough, one shade per six teams. */
-const TIER_CLS: Record<number, string> = {
-  2: "text-green-400",
-  1: "text-green-200",
-  0: "text-gray-200",
-  [-1]: "text-red-200",
-  [-2]: "text-red-400",
-};
-const ordinal = (k: number) => `${k}${k % 100 >= 11 && k % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][k % 10] ?? "th"}`;
-const posPlural: Record<string, string> = { QB: "QBs", RB: "RBs", WR: "WRs", TE: "TEs", K: "kickers" };
 
 function Opponent({ g, pos }: { g: Played; pos: string }) {
   const label = `${g.home ? "vs" : "@"} ${g.opponent}`;

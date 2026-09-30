@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TradeIntel, { type Pick as IntelPick, type PriceSide, type Row as IntelRow } from "./TradeIntel";
 import { Select } from "./Select";
-import { ACTION_TONE, signed, cap } from "./labels";
+import { ACTION_TONE, signed, cap, ordinal } from "./labels";
 import { PlayerName } from "./NoteLine";
 import {
   Badge,
@@ -999,7 +999,6 @@ type Opportunities = {
 const RANK_CLS = ["text-green-400", "text-green-200", "text-gray-200", "text-red-200", "text-red-400"];
 const rankCls = (rank: number | null, n: number) =>
   rank == null || n < 2 ? "text-gray-500" : RANK_CLS[Math.min(4, Math.floor(((rank - 1) / (n - 1)) * 5))];
-const ordinal = (k: number) => `${k}${k % 100 >= 11 && k % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][k % 10] ?? "th"}`;
 
 /** Leads shown before "show more". */
 const LEAD_FOLD = 5;
