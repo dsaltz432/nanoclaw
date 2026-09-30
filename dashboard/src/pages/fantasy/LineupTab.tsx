@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Badge, Card, ErrorBox, FoldToggle, HoverInfo, Loading, MetaLine, Note, QuietLine, SubHead, Td, Th } from "./viz";
-import { projLabel, projShort, signed, srcLabel } from "./labels";
+import { projLabel, signed, srcLabel } from "./labels";
 import {
   ClaimQuote,
   ClaimsSummary,
@@ -425,9 +425,9 @@ const rowTint = (m: Marker | undefined) => {
 function ProjCell({ r }: { r: Row }) {
   if (r.locked)
     return (
-      <span
+      <HoverInfo
+        info={`His game has kicked off, so he can't be moved${r.projected != null ? ` · projected ${r.projected.toFixed(1)}` : ""}`}
         className="whitespace-nowrap tabular-nums"
-        title={`His game has kicked off, so he can't be moved${r.projected != null ? ` · projected ${r.projected.toFixed(1)}` : ""}`}
       >
         <span className="text-[11px] text-gray-500 sm:block">played </span>
         {r.actual_points != null ? (
@@ -435,22 +435,25 @@ function ProjCell({ r }: { r: Row }) {
         ) : (
           <span className="text-gray-600">{r.projected?.toFixed(1) ?? "—"}</span>
         )}
-      </span>
+      </HoverInfo>
     );
   if (r.projected == null) return <span className="text-gray-700">—</span>;
-  const others = Object.entries(r.proj)
-    .filter(([s]) => s !== "rotowire")
-    .map(([s, v]) => `${projShort(s)} ${v.toFixed(1)}`)
-    .join(" · ");
+  // Every source, the one the lineup is built on first; "↕" marks a week the
+  // sources disagree by 4 or more (highest minus lowest, not a ± margin).
+  const sources = Object.entries(r.proj).sort(([a], [b]) => (a === "rotowire" ? -1 : b === "rotowire" ? 1 : 0));
+  const split = r.proj_spread != null && r.proj_spread >= 4;
+  const info =
+    sources.length > 1
+      ? [
+          ...sources.map(([s, v]) => `${projLabel(s)} ${v.toFixed(1)}${s === "rotowire" ? " (used)" : ""}`),
+          ...(split ? [`The sources are ${r.proj_spread!.toFixed(1)} apart: a less certain week`] : []),
+        ].join("\n")
+      : "";
   return (
-    <span className="whitespace-nowrap tabular-nums" title={others ? `also ${others}` : undefined}>
+    <HoverInfo info={info} className="whitespace-nowrap tabular-nums">
       <span className="text-gray-100">{r.projected.toFixed(1)}</span>
-      {r.proj_spread != null && r.proj_spread >= 4 && (
-        <span className="ml-1 text-[11px] text-amber-300" title="projection sources disagree">
-          ±{r.proj_spread.toFixed(1)}
-        </span>
-      )}
-    </span>
+      {split && <span className="ml-1 text-[11px] text-amber-300">↕{r.proj_spread!.toFixed(1)}</span>}
+    </HoverInfo>
   );
 }
 
