@@ -6,7 +6,6 @@ import {
   ClaimsSummary,
   MatchupCell,
   matchupText,
-  NoteLine,
   PlayerName,
   RankText,
   showsUsage,
@@ -542,7 +541,6 @@ function RowHead({
         </div>
         <PhoneMeta pos={r.position} team={r.team} matchup={r.matchup} usage={r.usage} rank={r.rank} delta={r.delta} locked={r.locked} />
         <SwapTag m={marker} />
-        <NoteLine note={r.note} />
       </div>
     </div>
   );
@@ -594,7 +592,6 @@ function SwapSide({ r, tone, onPlayer }: { r: Row; tone: "in" | "out" | "rank"; 
           </>
         )}
       </div>
-      <NoteLine note={r.note} />
     </div>
   );
 }
@@ -1088,7 +1085,6 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
                               {proj != null && <span className="shrink-0 text-sm tabular-nums text-gray-100 sm:hidden">{proj.toFixed(1)}</span>}
                             </div>
                             <PhoneMeta pos={pos} team={s.team} matchup={s.matchup} usage={s.usage} rank={s.rank} delta={s.delta} action={details} />
-                            <NoteLine note={s.note} />
                           </Td>
                           <Td className="hidden text-right sm:table-cell">
                             <span className="whitespace-nowrap tabular-nums text-gray-100">{proj != null ? proj.toFixed(1) : "—"}</span>

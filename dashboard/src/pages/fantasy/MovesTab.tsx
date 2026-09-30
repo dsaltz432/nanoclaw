@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Badge, Card, ErrorBox, FoldToggle, Loading, MetaLine, Note, QuietLine, Td, Th, useIsNarrow } from "./viz";
 import { Select } from "./Select";
 import { fmtDateTime, signed } from "./labels";
-import { ClaimQuote, ClaimsSummary, NoteLine, PlayerName, RankText, type Claim, type Note as WireNote } from "./NoteLine";
+import { ClaimQuote, ClaimsSummary, PlayerName, RankText, type Claim, type Note as WireNote } from "./NoteLine";
 import FaabMarket, { type Market } from "./WaiversTab";
 
 /**
@@ -194,7 +194,6 @@ function Sites({ o }: { o: Overlay }) {
           )}
         </>
       )}
-      <NoteLine note={o?.note ?? null} />
     </div>
   );
 }
@@ -796,7 +795,6 @@ export default function MovesTab({ league, onPlayer }: { league: string; onPlaye
                       </span>
                     </div>
                     {d.why && <div className="text-xs text-gray-500">{d.why}</div>}
-                    <NoteLine note={d.overlay?.note ?? null} />
                   </li>
                 );
               })}
