@@ -839,8 +839,19 @@ const POPOVER_LEAVE_MS = 200;
  * a dotted underline so it reads as something to point at. `info` is a node,
  * or a string whose lines ("\n") become lines of the panel.
  */
-export function HoverInfo({ info, children, className = "" }: { info: ReactNode; children: ReactNode; className?: string }) {
-  const p = usePopover({ width: 300, interactive: false });
+export function HoverInfo({
+  info,
+  children,
+  className = "",
+  width = 300,
+}: {
+  info: ReactNode;
+  children: ReactNode;
+  className?: string;
+  /** Panel width in px on desktop (capped to the window); a phone gets the full-width sheet. */
+  width?: number;
+}) {
+  const p = usePopover({ width, interactive: false });
   if (!info) return <span className={className}>{children}</span>;
   return (
     <>

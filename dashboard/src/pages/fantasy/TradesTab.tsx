@@ -1330,7 +1330,7 @@ function StrengthGrid({
             {c.log.map((g) => (
               <Fragment key={g.week}>
                 <span className="text-gray-500">Wk {g.week}</span>
-                <span>
+                <span className="sm:whitespace-nowrap">
                   {g.players.map((x, i) => (
                     <span key={i}>
                       {i > 0 && <span className="text-gray-600"> · </span>}
@@ -1376,7 +1376,7 @@ function StrengthGrid({
     if (!c) return <span className="text-gray-700">—</span>;
     return (
       <>
-        <HoverInfo info={info(t, p)} className={rankCls(c.form_rank, n)}>
+        <HoverInfo info={info(t, p)} width={440} className={rankCls(c.form_rank, n)}>
           {f1(c.form)}
         </HoverInfo>
         {fits(t, p) && <span className="ml-0.5 text-green-400">+</span>}
