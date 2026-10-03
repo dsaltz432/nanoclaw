@@ -1,30 +1,40 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Badge, Card, StatTile, Td, Th } from "./viz";
-import { ACTION_TONE, projLabel, projShort, srcLabel, srcShort } from "./labels";
-import { SrcLink, MatchupCell, NoteLine, RoleBadge, UsageCell, type Matchup, type Note, type Usage } from "./NoteLine";
+import { Badge, Card, ErrorBox, FoldToggle, HoverInfo, Loading, MetaLine, Note, QuietLine, SubHead, Td, Th } from "./viz";
+import { projLabel, signed, srcLabel } from "./labels";
+import {
+  ClaimQuote,
+  ClaimsSummary,
+  MatchupCell,
+  matchupText,
+  PlayerName,
+  RankText,
+  showsUsage,
+  UsageCell,
+  usageTitle,
+  type Claim,
+  type Matchup,
+  type Note as WireNote,
+  type Usage,
+} from "./NoteLine";
 
 /**
  * Lineup — start / sit this week.
  *
- * The projection-optimal lineup (the engine's number of record) against the
- * one you actually have set, with the other two projection sources and the
- * consensus rank on every row, and the sites' this-week claims beside them.
- * Every change the engine would make is shown as a paired switch — start him,
- * sit that one, at this slot, for this many points — and both halves are
- * highlighted where they sit in Starters and Bench, each naming the other.
- * Disagreements — a starter the sites say sit, a bench player they say
- * start — join the same table with who he would displace. Streaming picks at
- * QB/TE/DEF/K show the best available with what the sites say.
+ * The lineup you actually have set against the projection-optimal one (the
+ * engine's number of record), with the consensus rank on every row and the
+ * sites' this-week claims beside it. Every change the engine would make is
+ * shown as a paired switch — start him, sit that one, at this slot, for this
+ * many points — and both halves are tagged under their names in Starters and
+ * Bench, each naming the other. A bench player the experts rank above a
+ * starter he could replace joins the same table. Streaming picks at QB/TE/DEF/K
+ * show the best available with what the sites say.
  */
 
-type Rank = { median: number; best: number; worst: number; spread: number; n: number } | null;
+type Rank = { median: number; best: number; worst: number } | null;
 type Claims = {
-  n: number;
   n_sources: number;
-  net: number;
   by_action: Record<string, number>;
-  week: number;
-  evidence: { action: string; horizon: string; confidence: number | null; rationale: string; source: string; title: string; url: string }[];
+  evidence: Claim[];
 } | null;
 
 type Row = {
@@ -41,13 +51,12 @@ type Row = {
   ranks: Record<string, number>;
   delta: number | null;
   claims: Claims;
-  current_starter: boolean;
-  optimal_starter: boolean;
-  reserve?: boolean;
-  points?: number;
+  /** His game has kicked off: he cannot be moved, and his number is what he scored. */
+  locked: boolean;
+  actual_points: number | null;
   usage: Usage;
   matchup: Matchup;
-  note: Note;
+  note: WireNote;
 };
 
 /** One set-lineup change, paired to the starter it displaces (tabs.pair_swaps). */
@@ -76,7 +85,6 @@ type Side = {
   position: string | null;
   team: string | null;
   proj: Record<string, number>;
-  projected?: number | null;
   rank: Rank;
   ranks: Record<string, number>;
   delta?: number | null;
@@ -90,10 +98,10 @@ type Stream = {
   ranks: Record<string, number>;
   delta: number | null;
   proj: Record<string, number>;
-  claims: { n: number; net: number; by_action: Record<string, number>; evidence: { rationale: string; source: string }[] } | null;
+  claims: { by_action: Record<string, number>; evidence: Claim[] } | null;
   usage: Usage;
   matchup: Matchup;
-  note: Note;
+  note: WireNote;
 };
 
 /** One surviving roster in the guillotine league, by projected set total. */
@@ -129,8 +137,6 @@ type Data = {
   /** The lineup actually set, slot by slot — what the Starters table shows. */
   starters: Row[];
   bench: Row[];
-  /** The projection-optimal lineup. Not rendered as a table; it is what the swaps are against. */
-  optimal: Row[];
   empty_slots: string[];
   reserve?: Row[];
   taxi?: Row[];
@@ -141,17 +147,22 @@ type Data = {
   totals: { optimal: number; current: number };
   swaps: Swap[];
   rank_flags: RankFlag[];
-  cross_list: string;
   streaming: Record<string, Stream[]>;
   note: string;
   context_note: string;
   usage_week: number | null;
-  usage_prev_week: number | null;
-  role_change_points: number;
-  note_hours: number;
   error?: string;
 };
 
+/** Sleeper's slot names, as short as a row prefix needs them. */
+const slotLabel = (s: string) => (s === "SUPER_FLEX" ? "SFLEX" : s);
+
+/** 1 -> "1st", 2 -> "2nd", 13 -> "13th". */
+const ordinal = (n: number) => {
+  const sfx = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${sfx[(v - 20) % 10] ?? sfx[v] ?? sfx[0]}`;
+};
 
 /**
  * Side-by-side detail for a proposed switch: every projection source and
@@ -159,7 +170,7 @@ type Data = {
  * one each favours.
  *
  * The headline number hides how thin a call can be. "Purdy over Dak, +0.5"
- * reads settled; underneath, Rotowire and ESPN prefer Purdy, the Fantasy
+ * reads settled; underneath, Sleeper and ESPN prefer Purdy, the Fantasy
  * Footballers prefer Dak by a point, and the four ranking sources split two
  * apiece. That is a coin flip, and the row could not say so.
  */
@@ -233,7 +244,7 @@ function SwapDetails({
     mark?: string;
   }) => (
     <div>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400">{title}</h4>
+      <SubHead>{title}</SubHead>
       <p className="mt-0.5 text-[11px] text-gray-600">{note}</p>
       <table className="mt-2 w-full text-xs">
         <thead>
@@ -264,7 +275,7 @@ function SwapDetails({
           ))}
           {ls.length === 0 && (
             <tr>
-              <td colSpan={4} className="py-1 text-gray-600">
+              <td colSpan={4} className="py-1 text-xs text-gray-500">
                 No source has both players.
               </td>
             </tr>
@@ -275,34 +286,17 @@ function SwapDetails({
   );
 
   const Head = ({ s, tone }: { s: Side; tone: "a" | "b" }) => (
-    <div className={`border-l-2 pl-2 ${tone === "a" ? "border-emerald-500/60" : "border-amber-500/60"}`}>
-      <button
-        onClick={() => onPlayer(s.player_id)}
-        className="text-left text-sm font-medium text-gray-100 hover:text-indigo-300 hover:underline"
-      >
-        {s.name}
-      </button>
-      <div className="text-[11px] text-gray-500">
-        {s.position}
-        {s.team ? ` · ${s.team}` : ""}
+    <div className={`border-l-2 pl-2 text-sm ${tone === "a" ? "border-emerald-500/60" : "border-amber-500/60"}`}>
+      <div>
+        <PlayerName id={s.player_id} name={s.name} pos={s.position} team={s.team} onPlayer={onPlayer} />
       </div>
-      <div className="mt-1 text-xs tabular-nums text-gray-300">
+      {/* Which way the board has moved him since the last snapshot: a call
+          this close is often really a question of who is trending. */}
+      <div className="mt-1 text-xs">
         {s.rank ? (
-          <>
-            {s.position}
-            {s.rank.median} <span className="text-gray-600">({s.rank.best}–{s.rank.worst}, n={s.rank.n})</span>
-          </>
+          <RankText pos={s.position} median={s.rank.median} best={s.rank.best} worst={s.rank.worst} delta={s.delta} />
         ) : (
           <span className="text-gray-700">unranked</span>
-        )}
-        {/* Which way the board has moved him since the last snapshot: a call
-            this close is often really a question of who is trending. */}
-        {s.delta != null && s.delta !== 0 && (
-          <span className={s.delta > 0 ? " text-emerald-400" : " text-amber-300"}>
-            {" "}
-            {s.delta > 0 ? "▲" : "▼"}
-            {Math.abs(s.delta)}
-          </span>
         )}
       </div>
     </div>
@@ -320,15 +314,18 @@ function SwapDetails({
         aria-modal="true"
         aria-label={`${a.name} compared with ${b.name}`}
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        {/* Sticky, like the dossier's, so "close" stays in reach on a phone
+            scrolled down to the rankings. The negative margins cancel the
+            sheet's padding so the band runs edge to edge. */}
+        <div className="sticky -top-4 z-10 -mx-4 -mt-4 mb-4 flex items-start gap-3 border-b border-gray-800 bg-gray-950 px-4 pb-3 pt-4 sm:-top-6 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6">
+          <div className="min-w-0 flex-1">
             <h3 className="text-base font-semibold text-gray-100">
               {a.name} <span className="text-gray-500">vs</span> {b.name}
             </h3>
-            {slot && <p className="text-xs text-gray-500">at {slot}</p>}
+            {slot && <p className="text-xs text-gray-500">at {slotLabel(slot)}</p>}
           </div>
-          <button onClick={onClose} className="shrink-0 text-xs text-gray-400 hover:text-gray-200" aria-label="Close">
-            close
+          <button type="button" onClick={onClose} className="shrink-0 text-xs text-gray-400 hover:text-gray-200">
+            Close
           </button>
         </div>
 
@@ -365,6 +362,428 @@ function SwapDetails({
   );
 }
 
+/**
+ * Which half of a switch a row is, so a tagged row in Starters or Bench can
+ * name the other half instead of only flagging itself. "Start Purdy" and
+ * "sit Dak" are one decision; the tables should not make you rebuild the
+ * pairing by eye.
+ */
+type Marker = {
+  role: "in" | "out";
+  /** "projection" = he out-projects the starter; "rank" = the experts order him ahead. */
+  basis: "projection" | "rank";
+  slot: string | null;
+  gain: number | null;
+  counterpart: Row | null;
+};
+
+/**
+ * The tag under a name when the row is half of a switch: "start him over
+ * Dak at QB · +0.5". A plain starting or bench row says nothing — which
+ * table it is in already says that.
+ */
+function SwapTag({ m }: { m: Marker | undefined }) {
+  if (!m) return null;
+  return (
+    <div className="mt-0.5 text-xs font-normal text-gray-500">
+      <Badge tone={m.basis === "rank" ? "info" : m.role === "in" ? "good" : "warning"}>
+        {m.basis === "rank"
+          ? m.role === "in"
+            ? "ranked higher"
+            : "ranked lower"
+          : m.role === "in"
+            ? "start him"
+            : "sit him"}
+      </Badge>
+      {m.counterpart && (
+        <>
+          {" "}
+          {m.role === "in" ? "over " : "for "}
+          {m.counterpart.name}
+          {m.slot ? ` at ${slotLabel(m.slot)}` : ""}
+          {m.gain != null && <span className="tabular-nums text-gray-600"> · {signed(m.gain)}</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Tint both halves of a switch where they sit, so the pair is findable by eye. */
+const rowTint = (m: Marker | undefined) => {
+  if (!m) return "";
+  // A rank flag is the weaker of the two claims — the projections are still
+  // against it — so it reads as its own colour rather than a fainter green.
+  if (m.basis === "rank") return "bg-indigo-500/10";
+  return m.role === "in" ? "bg-emerald-500/10" : "bg-amber-500/10";
+};
+
+// One decimal, not none: rounded whole, projected points sit a column from
+// "WR11" and read as ranks, and the rounding hid the disagreement the ±
+// flags. The other sources are in the tooltip and in Details. A locked row
+// shows what he scored instead, or the projection dimmed until the stat
+// line arrives; in the narrow desktop column "played" sits above the number.
+function ProjCell({ r }: { r: Row }) {
+  if (r.locked)
+    return (
+      <HoverInfo
+        info={`His game has kicked off, so he can't be moved${r.projected != null ? ` · projected ${r.projected.toFixed(1)}` : ""}`}
+        className="whitespace-nowrap tabular-nums"
+      >
+        <span className="text-[11px] text-gray-500 sm:block">played </span>
+        {r.actual_points != null ? (
+          <span className="text-gray-100">{r.actual_points.toFixed(1)}</span>
+        ) : (
+          <span className="text-gray-600">{r.projected?.toFixed(1) ?? "—"}</span>
+        )}
+      </HoverInfo>
+    );
+  if (r.projected == null) return <span className="text-gray-700">—</span>;
+  // Every source on hover, the one the lineup is built on first, and how far
+  // apart they are when that is 4 or more (highest minus lowest).
+  const sources = Object.entries(r.proj).sort(([a], [b]) => (a === "rotowire" ? -1 : b === "rotowire" ? 1 : 0));
+  const split = r.proj_spread != null && r.proj_spread >= 4;
+  const info =
+    sources.length > 1
+      ? [
+          ...sources.map(([s, v]) => `${projLabel(s)} ${v.toFixed(1)}${s === "rotowire" ? " (used)" : ""}`),
+          ...(split ? [`The sources are ${r.proj_spread!.toFixed(1)} apart: a less certain week`] : []),
+        ].join("\n")
+      : "";
+  return (
+    <HoverInfo info={info} className="whitespace-nowrap tabular-nums">
+      <span className="text-gray-100">{r.projected.toFixed(1)}</span>
+    </HoverInfo>
+  );
+}
+
+/**
+ * A phone's second line under the name: matchup, last week's usage and the
+ * consensus rank — the three columns hidden below sm — plus an optional
+ * control (Details) at its right edge.
+ */
+function PhoneMeta({
+  pos,
+  team,
+  matchup,
+  usage,
+  rank,
+  delta,
+  action,
+  locked = false,
+}: {
+  pos: string | null;
+  team?: string | null;
+  matchup: Matchup;
+  usage: Usage;
+  rank: Rank;
+  delta: number | null | undefined;
+  action?: ReactNode;
+  /** His game has kicked off: this week's matchup is history, so it recedes. */
+  locked?: boolean;
+}) {
+  const use = usage && showsUsage(pos) ? usage : null;
+  if (!matchup && !use && !rank && !action) return null;
+  const m = matchup && !matchup.bye ? matchupText(matchup, pos, team, " ") : null;
+  return (
+    <div className="mt-0.5 flex items-center gap-2 sm:hidden">
+      <MetaLine className="min-w-0 flex-1">
+        {matchup &&
+          (matchup.bye ? (
+            <span className="text-amber-300">BYE</span>
+          ) : (
+            <HoverInfo info={m?.title} className={`whitespace-nowrap tabular-nums ${locked ? "opacity-50" : ""}`}>
+              {m?.text}
+            </HoverInfo>
+          ))}
+        {use && (
+          <span className={`whitespace-nowrap tabular-nums ${locked ? "opacity-50" : ""}`}>
+            <HoverInfo info={usageTitle(use, pos)}>
+              {use.snap_pct != null ? `snap ${use.snap_pct}%` : "no snaps"}
+              {use.target_share != null && ` tgt ${use.target_share}%`}
+            </HoverInfo>
+          </span>
+        )}
+        {rank && <RankText pos={pos} median={rank.median} best={rank.best} worst={rank.worst} delta={delta} />}
+      </MetaLine>
+      {action}
+    </div>
+  );
+}
+
+/**
+ * The row head. On a phone the slot (QB, FLEX, BN…) sits in a fixed gutter at
+ * the left, as the Slot column does from sm up, so every name lines up. Line
+ * 1: the name and — on a phone, where the column is hidden — Proj at the
+ * right ("played" once his game has kicked off). Line 2 (phone only):
+ * matchup · usage · rank. Then the switch tag, and the newest wire note so a
+ * starter's status is visible without opening the dossier.
+ */
+function RowHead({
+  r,
+  slot,
+  marker,
+  onPlayer,
+}: {
+  r: Row;
+  slot: string;
+  marker: Marker | undefined;
+  onPlayer: (id: string) => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      <SlotLabel slot={slot} className="w-9 shrink-0 pt-0.5 sm:hidden" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <div className="min-w-0 flex-1">
+            <PlayerName id={r.player_id} name={r.name} pos={r.position} team={r.team} injury={r.injury_status} onPlayer={onPlayer} />
+          </div>
+          <span className="shrink-0 text-sm sm:hidden">
+            <ProjCell r={r} />
+          </span>
+        </div>
+        <PhoneMeta pos={r.position} team={r.team} matchup={r.matchup} usage={r.usage} rank={r.rank} delta={r.delta} locked={r.locked} />
+        <SwapTag m={marker} />
+      </div>
+    </div>
+  );
+}
+
+/** "FLEX", "BN": the slot a row fills, in the Slot column or the phone gutter. */
+function SlotLabel({ slot, className = "" }: { slot: string; className?: string }) {
+  return <span className={`text-[11px] font-medium uppercase tracking-wide text-gray-500 ${className}`}>{slot}</span>;
+}
+
+/**
+ * Sites say: the lead call (and the counter-call where they split), then one
+ * quote — one line of it on a phone, where a tap opens the rest, two from sm up.
+ */
+function SitesCell({ c, nSources }: { c: { by_action: Record<string, number>; evidence: Claim[] } | null; nSources?: number }) {
+  return (
+    <>
+      <ClaimsSummary byAction={c?.by_action} nSources={nSources} />
+      {c?.evidence[0] && (
+        <div className="mt-0.5 max-sm:[&>.line-clamp-2]:line-clamp-1">
+          <ClaimQuote e={c.evidence[0]} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * One half of a switch: who, what he projects, where the consensus has him,
+ * and the wire note that might be the whole reason for the move.
+ */
+function SwapSide({ r, tone, onPlayer }: { r: Row; tone: "in" | "out" | "rank"; onPlayer: (id: string) => void }) {
+  return (
+    <div
+      className={`border-l-2 pl-2 ${
+        tone === "rank" ? "border-indigo-500/60" : tone === "in" ? "border-emerald-500/60" : "border-amber-500/60"
+      }`}
+    >
+      <div>
+        <PlayerName id={r.player_id} name={r.name} pos={r.position} team={r.team} injury={r.injury_status} onPlayer={onPlayer} />
+      </div>
+      <div className="text-xs tabular-nums text-gray-400">
+        {r.projected?.toFixed(1) ?? "—"}
+        <span className="text-gray-600"> proj</span>
+        {r.rank && (
+          <>
+            {" · "}
+            <RankText pos={r.position} median={r.rank.median} best={r.rank.best} worst={r.rank.worst} delta={r.delta} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailsButton({ a, b, onOpen }: { a: Side; b: Side; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`Compare ${a.name} and ${b.name} source by source`}
+      className="ff-inline ff-hit shrink-0 rounded-md border border-gray-800 px-2 py-0.5 text-[11px] text-gray-400 hover:border-gray-700 hover:text-gray-200 pointer-coarse:min-w-[2.5rem]"
+    >
+      Details
+    </button>
+  );
+}
+
+/** Bench and Taxi show this many rows (plus any half of a switch) until opened. */
+const FOLD = 8;
+
+/**
+ * Starters, Bench, IR and Taxi share one set of column widths, so the four
+ * tables line up down the page and fit the card without sideways scroll;
+ * Sites say takes whatever is left. On a phone Proj, Matchup and Rank move
+ * into the row head (line 1 and line 2) and Sites say runs beneath it.
+ */
+function RosterTable({
+  rows,
+  slotOf,
+  fold = false,
+  side,
+  onPlayer,
+}: {
+  rows: Row[];
+  /** The slot each row fills: its lineup slot for starters, BN / IR / TX otherwise. */
+  slotOf: (r: Row) => string;
+  fold?: boolean;
+  side: Map<string, Marker>;
+  onPlayer: (id: string) => void;
+}) {
+  const [all, setAll] = useState(false);
+  // Half of a switch stays visible past the fold: the tag on the other half
+  // names him, and he should be findable without opening the list.
+  const shown = fold && !all ? rows.filter((r, i) => i < FOLD || side.has(r.player_id)) : rows;
+  return (
+    <>
+      <div className="ff-stack-wrap overflow-x-auto">
+        <table className="ff-stack w-full table-fixed">
+          <thead>
+            <tr>
+              <Th className="hidden w-[3.5rem] sm:table-cell">Slot</Th>
+              <Th className="w-[24%]">Player</Th>
+              <Th className="hidden w-[5rem] text-right sm:table-cell">Proj</Th>
+              <Th className="hidden w-[18%] sm:table-cell">Matchup</Th>
+              <Th className="hidden w-[5rem] sm:table-cell">Rank</Th>
+              <Th>Sites say</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r) => (
+              <tr key={r.player_id} className={`border-t border-gray-800/60 align-top ${rowTint(side.get(r.player_id))}`}>
+                <Td className="hidden sm:table-cell">
+                  <SlotLabel slot={slotOf(r)} />
+                </Td>
+                <Td data-label="" className="ff-row-head">
+                  <RowHead r={r} slot={slotOf(r)} marker={side.get(r.player_id)} onPlayer={onPlayer} />
+                </Td>
+                <Td className="hidden text-right sm:table-cell">
+                  <ProjCell r={r} />
+                </Td>
+                {/* Matchup with last week's usage under it: side by side they
+                    pushed the table past its card. */}
+                {/* A kicked-off player's matchup is history: dimmed, so the rows
+                    that can still change stand out. */}
+                <Td className={`hidden text-xs tabular-nums sm:table-cell ${r.locked ? "opacity-50" : ""}`}>
+                  <MatchupCell matchup={r.matchup} position={r.position} team={r.team} />
+                  {r.usage && showsUsage(r.position) && (
+                    <div className="mt-0.5">
+                      <UsageCell usage={r.usage} position={r.position} />
+                    </div>
+                  )}
+                </Td>
+                <Td className="hidden text-xs sm:table-cell">
+                  <RankText pos={r.position} median={r.rank?.median} best={r.rank?.best} worst={r.rank?.worst} delta={r.delta} />
+                </Td>
+                {/* Unlabelled on a phone: the call chips and the quote say
+                    what they are, and the label cost every card a line. */}
+                <Td data-label="" className="text-xs" block empty={r.claims == null}>
+                  <SitesCell c={r.claims} nSources={r.claims?.n_sources} />
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {fold && <FoldToggle total={rows.length} shown={shown.length} expanded={all} onToggle={() => setAll((v) => !v)} mode="all" />}
+    </>
+  );
+}
+
+/** One survival fact: label over value in a phone's 2x2 grid, "label value" inline from sm up. */
+function SurvivalStat({ label, children, title, labelAfter = false }: { label: string; children: ReactNode; title?: string; labelAfter?: boolean }) {
+  return (
+    <div className="flex min-w-0 flex-col sm:flex-row sm:items-baseline sm:gap-1" title={title}>
+      <span className={`text-[11px] text-gray-500 sm:text-sm ${labelAfter ? "max-sm:first-letter:uppercase sm:order-last" : ""}`}>{label}</span>
+      <span className="min-w-0">{children}</span>
+    </div>
+  );
+}
+
+// Guillotine: the question is not "am I optimal" but "am I above the chop
+// line". The lowest six rosters are the line as the projections see it;
+// your own row is appended when you sit comfortably above them.
+const SURVIVAL_ROWS = 6;
+
+function SurvivalCard({ survival }: { survival: NonNullable<Survival> }) {
+  const low = survival.distribution.slice(0, SURVIVAL_ROWS);
+  const mine = survival.distribution.find((r) => r.is_me);
+  const rows = mine && !low.some((r) => r.roster_id === mine.roster_id) ? [...low, mine] : low;
+  const margin = survival.margin_above_lowest;
+  const marginTone = margin == null ? "text-gray-300" : margin < 5 ? "text-red-400" : margin < 15 ? "text-amber-300" : "text-emerald-400";
+  // Rank from the top reads the right way round: "2nd of 19" is safe at a
+  // glance, where "18 from the bottom" had to be worked out.
+  const fromTop = (fromBottom: number | null, teams: number) => (fromBottom != null ? teams - fromBottom + 1 : null);
+  const myTop = fromTop(survival.my_rank_from_bottom, survival.teams_alive);
+  const lastTop = survival.last_week ? fromTop(survival.last_week.my_rank_from_bottom, survival.last_week.teams) : null;
+  const rival = survival.lowest_rival;
+  return (
+    <Card
+      title="Survival"
+      subtitle={`week ${survival.week} · ${survival.teams_alive} teams alive · ${survival.eliminated_so_far} chopped so far`}
+    >
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm tabular-nums text-gray-100 sm:flex sm:flex-wrap sm:gap-x-4 sm:gap-y-1">
+        <SurvivalStat label="Your set">{survival.mine?.set.toFixed(1) ?? "—"}</SurvivalStat>
+        <SurvivalStat label="Lowest rival" title={rival?.owner}>
+          <span className="flex min-w-0 items-baseline gap-1">
+            <span className="shrink-0">{rival?.set.toFixed(1) ?? "—"}</span>
+            {rival && <span className="min-w-0 truncate text-gray-500">({rival.owner})</span>}
+          </span>
+        </SurvivalStat>
+        <SurvivalStat label="Margin">
+          <span className={marginTone}>{margin != null ? signed(margin) : "—"}</span>
+          {survival.margin_if_optimal != null && margin != null && survival.margin_if_optimal !== margin && (
+            <span className="text-xs text-gray-500"> ({signed(survival.margin_if_optimal)} if optimal)</span>
+          )}
+        </SurvivalStat>
+        {myTop != null && (
+          <SurvivalStat
+            label="from the top"
+            labelAfter
+            title={survival.median_set != null ? `median set lineup ${survival.median_set.toFixed(1)}` : undefined}
+          >
+            {ordinal(myTop)} of {survival.teams_alive}
+          </SurvivalStat>
+        )}
+      </div>
+      {rows.length > 0 && (
+        <ul className="mt-3 max-w-sm space-y-0.5 text-xs">
+          {rows.map((r) => (
+            <li
+              key={r.roster_id}
+              className={`flex items-baseline justify-between gap-2 rounded px-2 py-1 ${r.is_me ? "bg-indigo-500/10 text-gray-100" : "text-gray-300"}`}
+            >
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                <span className="min-w-0 truncate" title={r.owner}>
+                  {r.owner}
+                </span>
+                {r.is_me && <span className="shrink-0 text-indigo-400">you</span>}
+                {r.starters_without_projection > 0 && <Badge tone="warning">{r.starters_without_projection} empty</Badge>}
+              </span>
+              <span className="shrink-0 tabular-nums">
+                {r.set.toFixed(1)}
+                {/* Only where starting his best would move the number. */}
+                {Math.abs(r.optimal - r.set) >= 1 && <span className="text-gray-500"> (optimal {r.optimal.toFixed(1)})</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {survival.last_week && (
+        <p className="mt-2 text-xs text-gray-500">
+          Week {survival.last_week.week}: chop line {survival.last_week.chop_line} ({survival.last_week.chopped}) · you scored{" "}
+          {survival.last_week.my_points != null ? survival.last_week.my_points.toFixed(1) : "—"}
+          {lastTop != null && `, ${ordinal(lastTop)} of ${survival.last_week.teams}`}
+        </p>
+      )}
+      <Note>{survival.note}</Note>
+    </Card>
+  );
+}
 
 export default function LineupTab({ league, onPlayer }: { league: string; onPlayer: (id: string) => void }) {
   const [data, setData] = useState<Data | null>(null);
@@ -373,40 +792,19 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
   // The two players a Details popup is currently comparing, or null.
   const [compare, setCompare] = useState<{ a: Side; b: Side; slot: string | null } | null>(null);
 
+  // FantasyPage keys this tab by league, so a league switch remounts it and
+  // this runs once per league.
   useEffect(() => {
-    setData(null);
     fetch(`/api/fantasy/lineup?league=${encodeURIComponent(league)}`)
       .then((r) => r.json())
-      .then((d) => (d.error ? setErr(d.error) : (setErr(null), setData(d))))
+      .then((d: Data) => (d.error ? setErr(d.error) : setData(d)))
       .catch((e) => setErr(String(e)));
   }, [league]);
 
-  if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
-  if (!data) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  if (err) return <ErrorBox>{err}</ErrorBox>;
+  if (!data) return <Loading label="Loading lineup…" rows={6} />;
 
-  const gainText = (g: number) => `${g >= 0 ? "+" : ""}${g.toFixed(1)}`;
-
-  const DetailsButton = ({ a, b, slot }: { a: Side; b: Side; slot: string | null }) => (
-    <button
-      onClick={() => setCompare({ a, b, slot })}
-      className="ff-inline rounded-md border border-gray-800 px-2 py-0.5 text-[11px] text-gray-400 hover:border-gray-700 hover:text-gray-200"
-    >
-      Details
-    </button>
-  );
-
-  // Both halves of every switch, indexed by player, so a highlighted row in
-  // Starters or Bench can name the other half instead of only flagging
-  // itself. "Start Purdy" and "sit Dak" are one decision; the tables should
-  // not make you rebuild the pairing by eye.
-  type Marker = {
-    role: "in" | "out";
-    /** "projection" = he out-projects the starter; "rank" = the experts order him ahead. */
-    basis: "projection" | "rank";
-    slot: string | null;
-    gain: number | null;
-    counterpart: Row | null;
-  };
+  // Both halves of every switch, indexed by player.
   const side = new Map<string, Marker>();
   for (const s of data.swaps) {
     if (s.in) side.set(s.in.player_id, { role: "in", basis: "projection", slot: s.slot, gain: s.gain, counterpart: s.out });
@@ -420,250 +818,6 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
     if (!side.has(f.out.player_id))
       side.set(f.out.player_id, { role: "out", basis: "rank", slot: f.slot, gain: f.gain, counterpart: f.in });
   }
-
-  const Name = ({ r }: { r: Row }) => (
-    <>
-      <button onClick={() => onPlayer(r.player_id)} className="text-left text-gray-100 hover:text-indigo-300 hover:underline">
-        {r.name}
-      </button>
-      <span className="ml-1.5 text-xs text-gray-500">
-        {r.position}
-        {r.team ? ` · ${r.team}` : ""}
-      </span>
-      {r.injury_status && (
-        <>
-          {" "}
-          <Badge tone="warning">{r.injury_status}</Badge>
-        </>
-      )}
-      {/* The newest injury / out / role / return wire note, inline, so a
-          starter's status is visible without opening the dossier. */}
-      <NoteLine note={r.note} />
-    </>
-  );
-
-  const ProjCell = ({ r }: { r: Row }) => (
-    <span className="whitespace-nowrap tabular-nums">
-      <span className="text-gray-100">{r.projected?.toFixed(1) ?? "—"}</span>
-      {/* The other two sources are a desktop detail; on a phone the
-          league-correct number and the disagreement flag are the answer. */}
-      {/* One decimal, not none. These are projected points, but rounded whole
-          they sit one column from "RB113 (82–128)" and read as ranks — and
-          the rounding also hid the disagreement the ± beside them flags,
-          printing 4.6 and 1.3 as 5 and 1. */}
-      <span className="ml-1.5 hidden text-[11px] text-gray-600 xl:inline">
-        {Object.entries(r.proj)
-          .filter(([s]) => s !== "rotowire")
-          .map(([s, v]) => `${projShort(s)} ${v.toFixed(1)}`)
-          .join(" · ")}
-      </span>
-      {r.proj_spread != null && r.proj_spread >= 4 && (
-        <span className="ml-1 text-amber-300" title="projection sources disagree">
-          ±{r.proj_spread.toFixed(1)}
-        </span>
-      )}
-    </span>
-  );
-
-  const RankCell = ({ r }: { r: Row }) =>
-    r.rank ? (
-      <span className="whitespace-nowrap tabular-nums text-gray-300" title={Object.entries(r.ranks).map(([s, v]) => `${srcShort(s)} ${v}`).join(", ")}>
-        {r.position}
-        {r.rank.median}
-        <span className="text-gray-600"> ({r.rank.best}–{r.rank.worst})</span>
-      </span>
-    ) : (
-      <span className="text-gray-700">—</span>
-    );
-
-  const ClaimsCell = ({ c }: { c: Claims }) =>
-    c ? (
-      <span>
-        <span className="inline-flex flex-wrap gap-1">
-          {Object.entries(c.by_action)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([a, n]) => (
-              <Badge key={a} tone={ACTION_TONE[a] ?? "neutral"}>
-                {a}
-                {n > 1 ? ` ×${n}` : ""}
-              </Badge>
-            ))}
-        </span>
-        {c.evidence[0] && (
-          <div className="mt-0.5 max-w-[24rem] text-[11px] text-gray-500">
-            <SrcLink e={c.evidence[0]} /> {c.evidence[0].rationale}
-          </div>
-        )}
-      </span>
-    ) : (
-      <span className="text-xs text-gray-700">quiet</span>
-    );
-
-  const SetCell = ({ r }: { r: Row }) => {
-    // Taxi rows are `reserve` too — they are both "parked" — but they are not
-    // on IR, and badging four taxi players "IR slot" said they were hurt.
-    if (r.reserve) return <Badge tone="neutral">{r.slot === "TAXI" ? "taxi" : "IR slot"}</Badge>;
-    const sw = side.get(r.player_id);
-    if (!sw) return <span className="text-gray-600">{r.current_starter ? "starting" : "bench"}</span>;
-    return (
-      <div>
-        <Badge tone={sw.basis === "rank" ? "info" : sw.role === "in" ? "good" : "warning"}>
-          {sw.basis === "rank"
-            ? sw.role === "in"
-              ? "ranked higher"
-              : "ranked lower"
-            : sw.role === "in"
-              ? "start him"
-              : "sit him"}
-        </Badge>
-        {sw.counterpart && (
-          <div className="mt-0.5 text-gray-500">
-            {sw.role === "in" ? "over " : "for "}
-            {sw.counterpart.name}
-            {sw.slot ? ` at ${sw.slot}` : ""}
-            {sw.gain != null && <span className="text-gray-600"> · {gainText(sw.gain)}</span>}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  /** Tint both halves of a switch where they sit, so the pair is findable by eye. */
-  const rowTint = (r: Row) => {
-    const sw = side.get(r.player_id);
-    if (!sw) return "";
-    // A rank flag is the weaker of the two claims — the projections are still
-    // against it — so it reads as its own colour rather than a fainter green.
-    if (sw.basis === "rank") return "bg-indigo-500/10";
-    return sw.role === "in" ? "bg-emerald-500/10" : "bg-amber-500/10";
-  };
-
-  /**
-   * One half of a switch: who, what he projects, where the consensus has him,
-   * and the wire note that might be the whole reason for the move.
-   */
-  const SwapSide = ({ r, tone, muted = false }: { r: Row; tone: "in" | "out" | "rank"; muted?: boolean }) => (
-    <div
-      className={`border-l-2 pl-2 ${
-        muted
-          ? "border-gray-700"
-          : tone === "rank"
-            ? "border-indigo-500/60"
-            : tone === "in"
-              ? "border-emerald-500/60"
-              : "border-amber-500/60"
-      }`}
-    >
-      <div>
-        <button
-          onClick={() => onPlayer(r.player_id)}
-          className={`text-left hover:text-indigo-300 hover:underline ${muted ? "text-gray-400" : "text-gray-100"}`}
-        >
-          {r.name}
-        </button>
-        <span className="ml-1.5 text-xs text-gray-500">
-          {r.position}
-          {r.team ? ` · ${r.team}` : ""}
-        </span>
-        {r.injury_status && (
-          <>
-            {" "}
-            <Badge tone="warning">{r.injury_status}</Badge>
-          </>
-        )}
-        {/* A bench player whose snap share jumped is often the whole reason. */}
-        {!muted && r.usage?.role_change && (
-          <>
-            {" "}
-            <RoleBadge change={r.usage.role_change} />
-          </>
-        )}
-      </div>
-      <div className="text-xs tabular-nums text-gray-400">
-        {r.projected?.toFixed(1) ?? "—"}
-        <span className="text-gray-600"> proj</span>
-        {r.rank && (
-          <>
-            {" · "}
-            {r.position}
-            {r.rank.median}
-          </>
-        )}
-      </div>
-      {/* The wire note belongs to the player the row is about. Repeating a
-          three-line injury note for a displaced player who is only inferred —
-          and inferred twice over, once per sites row — buried the card. */}
-      {!muted && <NoteLine note={r.note} className="whitespace-normal" />}
-    </div>
-  );
-
-  /**
-   * A card with nothing in it is still worth saying — "your lineup is already
-   * optimal" is an answer — but it does not deserve a header, a subtitle and
-   * two rows of padding to say it. One slim line, same border, same order in
-   * the page, so the tab opens on the things that need you.
-   */
-  const QuietLine = ({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) => (
-    <section className="flex min-w-0 flex-col gap-x-3 gap-y-1 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 sm:flex-row sm:items-baseline sm:px-4">
-      <h3 className="shrink-0 text-sm font-semibold text-gray-300">{title}</h3>
-      <p className="min-w-0 text-xs text-gray-500">{children}</p>
-      {right && <div className="shrink-0 sm:ml-auto">{right}</div>}
-    </section>
-  );
-
-  const Table = ({ rows, slotCol }: { rows: Row[]; slotCol: boolean }) => (
-    <div className="ff-stack-wrap overflow-x-auto">
-      <table className="ff-stack w-full">
-        <thead>
-          <tr>
-            {slotCol && <Th>Slot</Th>}
-            <Th>Player</Th>
-            <Th>Set</Th>
-            <Th className="text-right">Proj</Th>
-            <Th>Matchup · usage</Th>
-            <Th>Rank</Th>
-            <Th>Sites say (this week)</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.player_id} className={`border-t border-gray-800/60 align-top ${rowTint(r)}`}>
-              {slotCol && <Td data-label="Slot" className="text-xs text-gray-500">{r.slot}</Td>}
-              <Td data-label="" className="ff-row-head whitespace-nowrap">
-                <Name r={r} />
-              </Td>
-              <Td data-label="Set" className="text-xs">
-                <SetCell r={r} />
-              </Td>
-              <Td data-label="Proj" className="text-right">
-                <ProjCell r={r} />
-              </Td>
-              {/* Two short facts stacked in one column: side by side they
-                  pushed the starters table 170px past its card at 1259px. */}
-              <Td data-label="Matchup · usage" className="whitespace-nowrap text-xs tabular-nums">
-                <div>
-                  <div>
-                    <MatchupCell matchup={r.matchup} position={r.position} />
-                  </div>
-                  <div className="text-gray-400">
-                    <UsageCell usage={r.usage} position={r.position} />
-                  </div>
-                </div>
-              </Td>
-              <Td data-label="Rank" className="text-xs">
-                <RankCell r={r} />
-              </Td>
-              <Td data-label="Sites say" className="text-xs sm:min-w-[13rem]">
-                <ClaimsCell c={r.claims} />
-              </Td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-
 
   // One row per decision, not per player. Two rules put a row here and
   // nothing else does: the projections move a bench player into the lineup,
@@ -713,101 +867,53 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
   ];
   const swing = data.totals.optimal - data.totals.current;
 
-  // A streaming panel is worth opening only where the set starter projects
-  // below the best available; a set QB with nobody better on the wire is
-  // noise. Kickers rarely stream, so K is treated the same way.
-  /** The weakest set starter at a position — who a streaming pickup replaces. */
+  // A streaming panel is worth opening only where the best available
+  // out-projects the starter a pickup would replace — the weakest one set at
+  // the position; a set QB with nobody better on the wire is noise.
   const setStarter = (pos: string): Row | null => {
     const at = data.starters.filter((r) => r.position === pos);
     return at.length ? at.reduce((lo, r) => ((r.projected ?? 0) < (lo.projected ?? 0) ? r : lo)) : null;
   };
-  const starterProj = (pos: string) =>
-    Math.max(0, ...data.starters.filter((r) => r.position === pos).map((r) => r.projected ?? 0));
   const weak = (pos: string, rows: Stream[]) => {
     const best = Math.max(0, ...rows.map((s) => s.proj.rotowire ?? 0));
-    return rows.length > 0 && best > starterProj(pos);
+    return rows.length > 0 && best > (setStarter(pos)?.projected ?? 0);
   };
   const streams = Object.entries(data.streaming);
   const openStreams = allStreams ? streams : streams.filter(([pos, rows]) => weak(pos, rows));
+  // The toggle reveals or hides the positions that are not a weak spot
+  // ("Show options"). No toggle when every position is already on show.
+  const extra = streams.filter(([pos, rows]) => !weak(pos, rows)).map(([pos]) => pos);
+  const streamToggle =
+    extra.length > 0 ? (
+      <button
+        type="button"
+        onClick={() => setAllStreams((v) => !v)}
+        className="ff-inline ff-hit whitespace-nowrap text-xs text-indigo-400 hover:text-indigo-300"
+      >
+        {allStreams ? "Hide options" : "Show options"}
+      </button>
+    ) : undefined;
 
-  // Guillotine: the question is not "am I optimal" but "am I above the chop
-  // line". The lowest six rosters are the line as the projections see it;
-  // your own row is appended when you sit comfortably above them.
   const survival = data.survival ?? null;
-  const SURVIVAL_ROWS = 6;
-  const survivalRows = (() => {
-    if (!survival) return [];
-    const low = survival.distribution.slice(0, SURVIVAL_ROWS);
-    const mine = survival.distribution.find((r) => r.is_me);
-    return mine && !low.some((r) => r.roster_id === mine.roster_id) ? [...low, mine] : low;
-  })();
-  const margin = survival?.margin_above_lowest ?? null;
-  const marginTone: "critical" | "warning" | "good" = margin == null ? "good" : margin < 5 ? "critical" : margin < 15 ? "warning" : "good";
-  const marginHint =
-    survival?.margin_if_optimal != null && margin != null && survival.margin_if_optimal !== margin
-      ? `+${survival.margin_if_optimal.toFixed(1)} if optimal`
-      : undefined;
 
   return (
     <div className="space-y-4">
-      {survival && (
-        <Card
-          title="Survival"
-          subtitle={`week ${survival.week} · ${survival.teams_alive} teams alive · ${survival.eliminated_so_far} chopped so far`}
-        >
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatTile label="Your set lineup" value={survival.mine?.set.toFixed(1) ?? "—"} />
-            <StatTile label="Lowest rival" value={survival.lowest_rival?.set.toFixed(1) ?? "—"} hint={survival.lowest_rival?.owner} />
-            <StatTile label="Margin above the line" value={margin != null ? `${margin >= 0 ? "+" : ""}${margin.toFixed(1)}` : "—"} tone={marginTone} hint={marginHint} />
-            <StatTile
-              label="From the bottom"
-              value={survival.my_rank_from_bottom != null ? `${survival.my_rank_from_bottom} of ${survival.teams_alive}` : "—"}
-              hint={survival.median_set != null ? `median ${survival.median_set.toFixed(1)}` : undefined}
-            />
-          </div>
-          {survivalRows.length > 0 && (
-            <ul className="mt-3 space-y-0.5 text-xs">
-              {survivalRows.map((r) => (
-                <li
-                  key={r.roster_id}
-                  className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-2 py-1 ${r.is_me ? "bg-indigo-500/10 text-gray-100" : "text-gray-300"}`}
-                >
-                  <span className="min-w-0 truncate">
-                    {r.owner}
-                    {r.is_me && <span className="ml-1 text-indigo-400">you</span>}
-                  </span>
-                  <span className="tabular-nums">
-                    · {r.set.toFixed(1)} <span className="text-gray-500">(optimal {r.optimal.toFixed(1)})</span>
-                  </span>
-                  {r.starters_without_projection > 0 && <Badge tone="warning">{r.starters_without_projection} empty</Badge>}
-                </li>
-              ))}
-            </ul>
-          )}
-          {survival.last_week && (
-            <p className="mt-2 text-xs text-gray-500">
-              Week {survival.last_week.week}: chop line {survival.last_week.chop_line} ({survival.last_week.chopped}) · you scored{" "}
-              {survival.last_week.my_points != null ? survival.last_week.my_points.toFixed(1) : "—"}, {survival.last_week.my_rank_from_bottom ?? "—"} from the bottom of{" "}
-              {survival.last_week.teams}
-            </p>
-          )}
-          <p className="mt-2 text-[11px] text-gray-600">{survival.note}</p>
-        </Card>
-      )}
-
+      {survival && <SurvivalCard survival={survival} />}
 
       {moves.length === 0 ? (
-        <QuietLine title="Switch these">
-          Nothing to change — your lineup is the projection-optimal one for week {data.week} ({data.totals.current.toFixed(1)}{" "}
-          projected), and no bench player is ranked above a starter he could replace.
+        <QuietLine
+          title="Switch these"
+          info="Bench players who out-project a starter, or whom the experts rank above one, each paired with the starter he would displace."
+        >
+          Your lineup is optimal for week {data.week}.
         </QuietLine>
       ) : (
         <Card
           title="Switch these"
-          subtitle={`Changes to your set lineup, each paired with the starter it would displace. A player is here because he out-projects a starter, or because the experts rank him above one (positional ranks at a fixed slot, the ${data.cross_list} list at a flex). Nothing here is an override.`}
+          info="Bench players who out-project a starter, or whom the experts rank above one, each paired with the starter he would displace."
           right={
             data.swaps.length > 0 ? (
-              <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">{gainText(swing)} projected</span>
+              <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">{signed(swing)} projected</span>
             ) : undefined
           }
         >
@@ -826,30 +932,28 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
               <tbody>
                 {moves.map((m) => (
                   <tr key={m.key} className="border-t border-gray-800/60 align-top">
-                    <Td data-label="Slot" className="whitespace-nowrap text-xs font-medium text-gray-400">
-                      {m.slot ?? "—"}
+                    <Td data-label="Slot" className="whitespace-nowrap text-xs font-medium text-gray-400" empty={m.slot == null}>
+                      {m.slot ? slotLabel(m.slot) : "—"}
                     </Td>
-                    {/* Half a switch is still a decision, and the missing half
-                        means something different either side of the source: a
-                        numbers row with nobody coming in is a slot being
-                        filled from elsewhere in the lineup; a sites row with
-                        nobody coming in is a slot filled from elsewhere in
-                        the lineup. A rank row always has both. */}
-                    <Td data-label="Start" className="whitespace-nowrap">
+                    {/* Half a switch is still a decision. A numbers row with
+                        nobody coming in is a slot being filled from elsewhere
+                        in the lineup; with nobody going out, it fills an empty
+                        slot. A rank row always has both halves. */}
+                    <Td data-label="Start">
                       {m.in ? (
-                        <SwapSide r={m.in} tone={m.source === "ranks" ? "rank" : "in"} />
+                        <SwapSide r={m.in} tone={m.source === "ranks" ? "rank" : "in"} onPlayer={onPlayer} />
                       ) : (
-                        <span className="text-xs text-gray-600">someone already in your lineup</span>
+                        <span className="text-xs text-gray-500">someone already in your lineup</span>
                       )}
                     </Td>
-                    <Td data-label="Sit" className="whitespace-nowrap">
+                    <Td data-label="Sit">
                       {m.out ? (
-                        <SwapSide r={m.out} tone={m.source === "ranks" ? "rank" : "out"} />
+                        <SwapSide r={m.out} tone={m.source === "ranks" ? "rank" : "out"} onPlayer={onPlayer} />
                       ) : (
-                        <span className="text-xs text-gray-600">an empty slot</span>
+                        <span className="text-xs text-gray-500">an empty slot</span>
                       )}
                     </Td>
-                    <Td data-label="Gain" className="text-right">
+                    <Td data-label="Gain" className="text-right" empty={m.gain == null}>
                       {m.gain != null ? (
                         // A rank row always costs projected points — that is
                         // the disagreement — so the number is the first thing
@@ -865,41 +969,44 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
                                 : "inside the noise between projection sources"
                           }
                         >
-                          {gainText(m.gain)}
+                          {signed(m.gain)}
                         </Badge>
                       ) : (
                         <span className="text-xs text-gray-700">—</span>
                       )}
                     </Td>
-                    <Td data-label="Why" className="text-xs sm:min-w-[16rem]">
-                      <div>
-                        <Badge tone={m.source === "numbers" ? "info" : "neutral"}>{m.source}</Badge>
-                        {/* "55 to 58" is two bare numbers; a rank only means
-                            something with its list attached — WR55 over WR58
-                            at the position, or 118 over 120 on the FLEX list
-                            where the positional numbers do not compare. */}
-                        <span className="ml-1.5 text-gray-500">
-                          {m.ranks
-                            ? m.ranks.basis === "position"
-                              ? `experts rank him ${m.in?.position}${m.ranks.in} over ${m.out?.position}${m.ranks.out}`
-                              : `experts rank him ${m.ranks.in} over ${m.ranks.out} on the ${m.ranks.basis} list`
-                            : "projection-optimal for this slot"}
-                        </span>
-                        {/* What a site actually wrote about the player coming
-                            in. Context on him, not the reason the row exists —
-                            that is the rank or the projection, above. */}
-                        {m.evidence?.claims?.evidence[0] && (
-                          <div className="mt-0.5 max-w-[24rem] text-gray-500">
-                            <SrcLink e={m.evidence.claims.evidence[0]} />{" "}
-                            {m.evidence.claims.evidence[0].rationale}
-                          </div>
-                        )}
-                      </div>
+                    <Td data-label="Why" className="text-xs" block>
+                      <Badge tone={m.source === "numbers" ? "info" : "neutral"}>{m.source}</Badge>
+                      {/* "55 to 58" is two bare numbers; a rank only means
+                          something with its list attached — WR55 over WR58
+                          at the position, or 118 over 120 on the FLEX list
+                          where the positional numbers do not compare. */}
+                      <span className="ml-1.5 text-gray-500">
+                        {m.ranks
+                          ? m.ranks.basis === "position"
+                            ? `experts rank him ${m.in?.position}${m.ranks.in} over ${m.out?.position}${m.ranks.out}`
+                            : `experts rank him ${m.ranks.in} over ${m.ranks.out} on the ${m.ranks.basis} list`
+                          : "projection-optimal for this slot"}
+                      </span>
+                      {/* What a site actually wrote about the player coming
+                          in. Context on him, not the reason the row exists —
+                          that is the rank or the projection, above. */}
+                      {m.evidence?.claims?.evidence[0] && (
+                        <div className="mt-0.5">
+                          <ClaimQuote e={m.evidence.claims.evidence[0]} />
+                        </div>
+                      )}
                     </Td>
-                    <Td data-label="" className="text-right">
-                      {/* Both halves present is the only case with anything to
-                          compare source by source. */}
-                      {m.in && m.out && <DetailsButton a={m.in} b={m.out} slot={m.slot} />}
+                    {/* Both halves present is the only case with anything to
+                        compare source by source. Right-aligned in a
+                        full-width box so it sits at the right edge of a
+                        phone's stacked card too. */}
+                    <Td data-label="" empty={!(m.in && m.out)}>
+                      {m.in && m.out && (
+                        <div className="flex w-full justify-end">
+                          <DetailsButton a={m.in} b={m.out} onOpen={() => setCompare({ a: m.in as Row, b: m.out as Row, slot: m.slot })} />
+                        </div>
+                      )}
                     </Td>
                   </tr>
                 ))}
@@ -912,120 +1019,99 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
       {openStreams.length === 0 ? (
         <QuietLine
           title="Streaming"
-          right={streams.length > 0 ? (
-            <button
-              onClick={() => setAllStreams((v) => !v)}
-              className="rounded-md border border-gray-800 px-2 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-            >
-              {allStreams ? "weak spots only" : `show all ${streams.length}`}
-            </button>
-          ) : undefined}
+          info="Positions where the best available player out-projects your weakest set starter there."
+          right={streamToggle}
         >
-          Your set starter out-projects the best available at every streamable position
-          {streams.length > 0 ? ` (${streams.map(([pos]) => pos).join(", ")})` : ""}.
+          No upgrade available{streams.length > 0 ? ` at ${streams.map(([pos]) => pos).join(", ")}` : ""}.
         </QuietLine>
       ) : (
         <Card
           title="Streaming"
-          subtitle={
+          info={
             allStreams
-              ? "Best available at the streamable positions in this league, by consensus rank, with what the sites say."
-              : "Positions where the best available projects above your set starter. The rest are folded."
+              ? "Best available at each streamable position, highest projection first, leaving out anyone projected at zero."
+              : "Positions where the best available out-projects your weakest set starter, highest projection first."
           }
-          right={
-            <button
-              onClick={() => setAllStreams((v) => !v)}
-              className="rounded-md border border-gray-800 px-2 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-            >
-              {allStreams ? "weak spots only" : `show all ${streams.length}`}
-            </button>
-          }
+          right={streamToggle}
         >
           <div className="ff-stack-wrap overflow-x-auto">
-            <table className="ff-stack w-full">
+            <table className="ff-stack w-full table-fixed">
               <thead>
                 <tr>
-                  <Th>Pos</Th>
-                  <Th>Player</Th>
-                  <Th>Rank</Th>
-                  <Th className="text-right">Proj</Th>
-                  <Th>Matchup</Th>
+                  <Th className="w-[24%]">Player</Th>
+                  <Th className="hidden w-[5rem] text-right sm:table-cell">Proj</Th>
+                  <Th className="hidden w-[18%] sm:table-cell">Matchup</Th>
+                  <Th className="hidden w-[5rem] sm:table-cell">Rank</Th>
                   <Th>Sites say</Th>
-                  <Th>{""}</Th>
+                  <Th className="hidden w-[5.5rem] sm:table-cell">{""}</Th>
                 </tr>
               </thead>
               <tbody>
-                {openStreams.flatMap(([pos, rows]) =>
-                  rows.length === 0
-                    ? [
-                        <tr key={pos} className="border-t border-gray-800/60">
-                          <Td data-label="Pos" className="text-xs font-medium text-gray-400">{pos}</Td>
-                          <Td data-label="" className="text-xs text-gray-600" colSpan={6}>nobody ranked available</Td>
-                        </tr>,
-                      ]
-                    : rows.map((s, i) => (
-                        <tr key={`${pos}-${s.player_id}`} className={`align-top ${i === 0 ? "border-t border-gray-800/60" : "border-t border-gray-800/30"}`}>
-                          <Td data-label="Pos" className="whitespace-nowrap text-xs font-medium text-gray-400">
-                            {i === 0 ? (
-                              <div>
-                                {pos}
-                                {starterProj(pos) > 0 && <div className="font-normal text-gray-600">set starter {starterProj(pos).toFixed(1)}</div>}
+                {openStreams.flatMap(([pos, rows]) => {
+                  // The position and who you would be replacing head each
+                  // group as its own full-width row: a plain heading on a
+                  // phone rather than a card of its own. Every comparison is
+                  // against that starter — the weakest one set at the position.
+                  const cur = setStarter(pos);
+                  const heading = (
+                    <tr
+                      key={`${pos}-head`}
+                      className="border-t border-gray-800/60 max-sm:mb-0! max-sm:border-0! max-sm:px-0! max-sm:pb-0!"
+                    >
+                      <Td data-label="" colSpan={6} className="ff-row-head pb-0.5 pt-2.5 text-xs font-medium text-gray-400">
+                        {pos}
+                        {rows.length === 0 ? (
+                          <span className="font-normal text-gray-500"> · nobody projected to play is available</span>
+                        ) : (
+                          cur?.projected != null && (
+                            <span className="font-normal tabular-nums text-gray-500"> · set starter {cur.projected.toFixed(1)}</span>
+                          )
+                        )}
+                      </Td>
+                    </tr>
+                  );
+                  return [
+                    heading,
+                    ...rows.map((s) => {
+                      const details = cur && (
+                        <DetailsButton a={{ ...s, position: pos }} b={cur} onOpen={() => setCompare({ a: { ...s, position: pos }, b: cur, slot: pos })} />
+                      );
+                      const proj = s.proj.rotowire;
+                      return (
+                        <tr key={`${pos}-${s.player_id}`} className="border-t border-gray-800/30 align-top">
+                          <Td data-label="" className="ff-row-head">
+                            <div className="flex items-baseline gap-2">
+                              <div className="min-w-0 flex-1">
+                                <PlayerName id={s.player_id} name={s.name} pos={pos} team={s.team} onPlayer={onPlayer} />
                               </div>
-                            ) : (
-                              // Stacked on a phone the label needs a value; on a desktop the group header carries it.
-                              <span className="sm:hidden">{pos}</span>
+                              {proj != null && <span className="shrink-0 text-sm tabular-nums text-gray-100 sm:hidden">{proj.toFixed(1)}</span>}
+                            </div>
+                            <PhoneMeta pos={pos} team={s.team} matchup={s.matchup} usage={s.usage} rank={s.rank} delta={s.delta} action={details} />
+                          </Td>
+                          <Td className="hidden text-right sm:table-cell">
+                            <span className="whitespace-nowrap tabular-nums text-gray-100">{proj != null ? proj.toFixed(1) : "—"}</span>
+                          </Td>
+                          <Td className="hidden text-xs tabular-nums sm:table-cell">
+                            <MatchupCell matchup={s.matchup} position={pos} team={s.team} />
+                            {s.usage && showsUsage(pos) && (
+                              <div className="mt-0.5">
+                                <UsageCell usage={s.usage} position={pos} />
+                              </div>
                             )}
                           </Td>
-                          <Td data-label="" className="ff-row-head whitespace-nowrap">
-                            <button onClick={() => onPlayer(s.player_id)} className="text-left text-gray-100 hover:text-indigo-300 hover:underline">
-                              {s.name}
-                            </button>
-                            <span className="ml-1.5 text-xs text-gray-500">
-                              {pos}
-                              {s.team ? ` · ${s.team}` : ""}
-                            </span>
-                            {s.note && <NoteLine note={s.note} className="whitespace-normal" />}
+                          <Td className="hidden text-xs sm:table-cell">
+                            <RankText pos={pos} median={s.rank?.median} best={s.rank?.best} worst={s.rank?.worst} delta={s.delta} />
                           </Td>
-                          <Td data-label="Rank" className="whitespace-nowrap text-xs tabular-nums text-gray-300">
-                            {s.rank ? `${pos}${s.rank.median}` : "—"}
+                          <Td data-label="" className="text-xs" block empty={s.claims == null}>
+                            <SitesCell c={s.claims} />
                           </Td>
-                          <Td data-label="Proj" className="whitespace-nowrap text-right tabular-nums text-gray-100">
-                            {s.proj.rotowire != null ? s.proj.rotowire.toFixed(1) : "—"}
-                          </Td>
-                          <Td data-label="Matchup" className="whitespace-nowrap text-xs tabular-nums">
-                            <MatchupCell matchup={s.matchup} position={pos} />
-                          </Td>
-                          <Td data-label="Sites say" className="text-xs sm:min-w-[13rem]">
-                            {s.claims ? (
-                              <div>
-                                <span className="inline-flex flex-wrap gap-1">
-                                  {Object.entries(s.claims.by_action)
-                                    .sort((x, y) => y[1] - x[1])
-                                    .slice(0, 2)
-                                    .map(([a, n]) => (
-                                      <Badge key={a} tone={ACTION_TONE[a] ?? "neutral"}>
-                                        {a}
-                                        {n > 1 ? ` ×${n}` : ""}
-                                      </Badge>
-                                    ))}
-                                </span>
-                                {s.claims.evidence[0] && <div className="mt-0.5 max-w-[24rem] text-[11px] text-gray-500">{s.claims.evidence[0].rationale}</div>}
-                              </div>
-                            ) : (
-                              <span className="text-gray-700">quiet</span>
-                            )}
-                          </Td>
-                          <Td data-label="" className="text-right">
-                            {/* Compared against the starter he would actually
-                                replace — the weakest one at the position. */}
-                            {(() => {
-                              const cur = setStarter(pos);
-                              return cur ? <DetailsButton a={{ ...s, position: pos }} b={cur} slot={pos} /> : null;
-                            })()}
-                          </Td>
+                          {/* On a phone Details rides at the end of line 2. */}
+                          <Td className="hidden text-right sm:table-cell">{details}</Td>
                         </tr>
-                      ))
-                )}
+                      );
+                    }),
+                  ];
+                })}
               </tbody>
             </table>
           </div>
@@ -1042,67 +1128,65 @@ export default function LineupTab({ league, onPlayer }: { league: string; onPlay
             )}
           </span>
         }
-        subtitle={
-          `The lineup you have set for week ${data.week}, slot by slot — anything to change is flagged in Set and listed above. Proj is Rotowire under this league's scoring, with ESPN and the Fantasy Footballers beside it.` +
-          (data.usage_week != null
-            ? ` Matchup is the opponent and the Vegas implied team total; usage is snap and target share for week ${data.usage_week}` +
-              (data.usage_prev_week != null ? ` (change from week ${data.usage_prev_week})` : "") +
-              "."
-            : "")
+        info={
+          "Proj = Sleeper's projection under this league's scoring" +
+          (data.usage_week != null ? `; usage = week ${data.usage_week} snap/target share.` : ".")
         }
       >
-        <Table rows={data.starters} slotCol />
+        <RosterTable rows={data.starters} slotOf={(r) => slotLabel(r.slot ?? r.position ?? "")} side={side} onPlayer={onPlayer} />
         {data.empty_slots.length > 0 && (
           <p className="mt-2 text-xs text-amber-300">
-            Nothing set at {data.empty_slots.join(", ")} — an empty slot scores zero.
+            Nothing set at {data.empty_slots.map(slotLabel).join(", ")} — an empty slot scores zero.
           </p>
         )}
+        <Note>{data.note}</Note>
+        <Note>{data.context_note}</Note>
       </Card>
-      <Card title="Bench" subtitle="Everyone rostered and not in the lineup, highest projection first.">
-        <Table rows={data.bench} slotCol={false} />
+      <Card title="Bench" info="Everyone rostered and not in the lineup, highest projection first.">
+        <RosterTable rows={data.bench} slotOf={() => "BN"} fold side={side} onPlayer={onPlayer} />
       </Card>
       {/* Two benches with two different rules, and a league can have either,
           both or neither. Each shows only where the league has the slots. */}
-      {data.reserve_slots > 0 && (
-        <Card
-          title="IR"
-          subtitle={data.reserve_note}
-          right={
-            <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">
-              {(data.reserve ?? []).length} of {data.reserve_slots}
-            </span>
-          }
-        >
-          {(data.reserve ?? []).length > 0 ? (
-            <Table rows={data.reserve ?? []} slotCol={false} />
-          ) : (
-            <p className="text-xs text-gray-600">Nobody on IR.</p>
-          )}
-        </Card>
-      )}
-      {data.taxi_slots > 0 && (
-        <Card
-          title="Taxi squad"
-          subtitle={data.taxi_note}
-          right={
-            <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">
-              {(data.taxi ?? []).length} of {data.taxi_slots}
-            </span>
-          }
-        >
-          {(data.taxi ?? []).length > 0 ? (
-            <Table rows={data.taxi ?? []} slotCol={false} />
-          ) : (
-            <p className="text-xs text-gray-600">Taxi squad is empty.</p>
-          )}
-        </Card>
-      )}
+      {data.reserve_slots > 0 &&
+        ((data.reserve ?? []).length > 0 ? (
+          <Card
+            title="IR"
+            right={
+              <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">
+                {(data.reserve ?? []).length} of {data.reserve_slots} slots
+              </span>
+            }
+          >
+            <RosterTable rows={data.reserve ?? []} slotOf={() => "IR"} side={side} onPlayer={onPlayer} />
+            {data.reserve_note && <Note>{data.reserve_note}</Note>}
+          </Card>
+        ) : (
+          <QuietLine title="IR" right={<span className="text-xs tabular-nums text-gray-500">0 of {data.reserve_slots} slots</span>}>
+            Nobody on IR.
+          </QuietLine>
+        ))}
+      {data.taxi_slots > 0 &&
+        ((data.taxi ?? []).length > 0 ? (
+          <Card
+            title="Taxi squad"
+            right={
+              <span className="whitespace-nowrap text-xs tabular-nums text-gray-400">
+                {(data.taxi ?? []).length} of {data.taxi_slots} slots
+              </span>
+            }
+          >
+            <RosterTable rows={data.taxi ?? []} slotOf={() => "TX"} fold side={side} onPlayer={onPlayer} />
+            {data.taxi_note && <Note>{data.taxi_note}</Note>}
+          </Card>
+        ) : (
+          <QuietLine title="Taxi squad" right={<span className="text-xs tabular-nums text-gray-500">0 of {data.taxi_slots} slots</span>}>
+            Taxi squad is empty.
+          </QuietLine>
+        ))}
 
       {compare && (
         <SwapDetails a={compare.a} b={compare.b} slot={compare.slot} onPlayer={onPlayer} onClose={() => setCompare(null)} />
       )}
-      <p className="text-[11px] text-gray-600">{data.note}</p>
-      <p className="text-[11px] text-gray-600">{data.context_note}</p>
     </div>
   );
 }

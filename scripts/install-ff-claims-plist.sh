@@ -14,7 +14,8 @@ LAUNCHD_LOG_DIR="${HOME}/.local/share/nanoclaw/logs"
 LABEL=com.nanoclaw.ff-claims
 
 [[ -d "${FF_DIR}/ff" ]] || { echo "ERROR: ff package not found at ${FF_DIR}"; exit 1; }
-command -v claude >/dev/null 2>&1 || ls "${HOME}"/.nvm/versions/node/*/bin/claude >/dev/null 2>&1 \
+command -v claude >/dev/null 2>&1 || [[ -x "${HOME}/.local/bin/claude" ]] \
+    || ls "${HOME}"/.nvm/versions/node/*/bin/claude >/dev/null 2>&1 \
     || { echo "ERROR: claude CLI not found; the extractor needs Claude Code installed and logged in"; exit 1; }
 
 mkdir -p "${LAUNCHD_LOG_DIR}" "${HOME}/Library/LaunchAgents"

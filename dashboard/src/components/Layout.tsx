@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 const navItems = [
@@ -112,7 +112,9 @@ export default function Layout() {
         </header>
 
         <main className="flex-1 overflow-auto">
-          <Outlet />
+          <Suspense fallback={<div className="p-8 text-sm text-gray-500">Loading…</div>}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

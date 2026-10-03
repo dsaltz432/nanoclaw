@@ -31,11 +31,11 @@ if [ ! -d "${FF_DIR}/ff" ]; then
   exit 1
 fi
 
-# The claude CLI lives under nvm, which launchd's PATH does not include. Put
-# its directory (which also holds node) on PATH and tell the extractor where
-# it is, unless the operator already did.
+# The claude CLI lives in ~/.local/bin (native installer) or, on older npm
+# installs, under nvm — launchd's PATH includes neither. Put its directory on
+# PATH and tell the extractor where it is, unless the operator already did.
 if [ -z "${FF_CLAUDE_BIN:-}" ]; then
-  for c in "$(command -v claude 2>/dev/null)" "${HOME}"/.nvm/versions/node/*/bin/claude; do
+  for c in "$(command -v claude 2>/dev/null)" "${HOME}/.local/bin/claude" "${HOME}"/.nvm/versions/node/*/bin/claude; do
     if [ -n "${c}" ] && [ -x "${c}" ]; then FF_CLAUDE_BIN="${c}"; break; fi
   done
 fi

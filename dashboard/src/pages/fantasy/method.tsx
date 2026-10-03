@@ -38,6 +38,12 @@ export function SectionProvider({ name, children }: { name: string; children: Re
   return <SectionCtx.Provider value={name}>{children}</SectionCtx.Provider>;
 }
 
+/**
+ * Holds the notes registered by whatever is mounted beneath it. The page
+ * keys it on the league, so the registry starts empty on every league change:
+ * a note is written for one league ("12 rivals still hold 20%+ of budget"),
+ * and one left over from another would sit beside it and contradict it.
+ */
 export function MethodProvider({ children }: { children: ReactNode }) {
   const [reg, setReg] = useState<Registry>(new Map());
 
@@ -123,9 +129,9 @@ const GLOSSARY: { term: string; means: string }[] = [
       "A rank inside this league, not an absolute standard. Top quarter is strong, bottom quarter weak, and an unfillable slot is a hole. Twelve points of surplus means something different in a 12-team league than in a 22-team one, so no constant is used.",
   },
   {
-    term: "FAAB, as a percent",
+    term: "FAAB bids",
     means:
-      "Bids are shown as a share of the budget because one league runs a $100 budget and another $1,000. A $40 bid is a rout in one and a rounding error in the other.",
+      "Bids are shown in dollars, because that is what you type into Sleeper. The tooltip gives the percent of this league's budget, because one league runs $100 and another $1,000: a $40 bid is a rout in one and a rounding error in the other.",
   },
   {
     term: "Rest-of-season points",
@@ -149,7 +155,7 @@ const STANDING: { title: string; body: string }[] = [
   {
     title: "Acceptance cannot be modelled",
     body:
-      "Sleeper records only completed trades — across 98 trades in three leagues there is not one rejected or expired offer. Nothing here can estimate whether an offer will be accepted; it can only say whether the deal is good for you. The accept-share column describes how often each manager has been the one to accept, which is history, not prediction.",
+      "Sleeper records only completed trades — across every completed trade in these leagues there is not one rejected or expired offer. Nothing here can estimate whether an offer will be accepted; it can only say whether the deal is good for you. The accept-share column describes how often each manager has been the one to accept, which is history, not prediction.",
   },
   {
     title: "Third-party text is data, never instruction",
@@ -159,7 +165,7 @@ const STANDING: { title: string; body: string }[] = [
   {
     title: "Market value versus league value",
     body:
-      "Where both are shown, league VOR is the primary number and market value is context — your counterparty is probably using it, and the gap between the two is where a trade is available. Public value tables cannot model scoring quirks like a per-completion bonus, so positions those quirks favour are worth more to you than the market implies.",
+      "Where both are shown, the primary number is market value in the dynasty league and league VOR everywhere else; the other is context. Your counterparty is probably using market value, and the gap between the two is where a trade is available. Public value tables cannot model scoring quirks like a per-completion bonus, so positions those quirks favour are worth more to you than the market implies.",
   },
   {
     title: "Pinning changes the question",
@@ -194,6 +200,7 @@ const SOURCES: {
       "FAAB budget spent per manager, snapshotted so the burn curve can be reconstructed",
       "Matchups, draft picks, traded picks",
       "`news_updated` per player, which is the change detector that makes the news layer cheap",
+      "Weekly projections (Rotowire's; Sleeper serves no other provider), stored as raw stat lines and rescored under each league's settings. The number of record: Proj on Lineup, the lineup optimiser, the waiver board and the guillotine survival line",
     ],
     notUsed:
       "Nothing is ever written back. The GraphQL write path exists and risks the account; every recommendation here is executed by hand in the app.",
@@ -228,7 +235,7 @@ const SOURCES: {
     what: "The kona endpoint. One call returns both.",
     used: [
       "A second weekly projection, translated to Sleeper stat keys so it can be rescored under each league's settings",
-      "The DISAGREEMENT between it and Rotowire, which predicts how wrong the estimate will be — something one source structurally cannot provide",
+      "The DISAGREEMENT between it and Sleeper's projection, which predicts how wrong the estimate will be — something one source structurally cannot provide",
       "Roster ownership: percent owned, percent started, and ESPN's own weekly change figure",
     ],
     notUsed:
@@ -241,6 +248,7 @@ const SOURCES: {
     used: [
       "A value per player in redraft-1qb-12tm, dynasty-1qb-12tm and redraft-sf-22tm",
       "The 30-day change, which is an absolute move in value points and is converted to a percentage of where the player started",
+      "Every daily value is stored: the dossier's trade value chart, and the 7- and 30-day changes on Trades rows, are differences between those snapshots rather than FantasyCalc's own 30-day figure",
       "Draft pick prices, as slots",
     ],
     notUsed:
@@ -248,15 +256,39 @@ const SOURCES: {
     cost: "free · no key",
   },
   {
-    name: "nflverse — schedules and injury reports",
-    what: "The community NFL data project, published as release assets on GitHub.",
+    name: "nflverse — schedules, injury reports, snap counts",
+    what: "The community NFL data project, published as release assets on GitHub. Refreshed by the daily job.",
     used: [
-      "Schedules with Vegas lines and totals, for game environment",
+      "Schedules with Vegas lines and totals: the opponent and implied team total on Lineup, and kickoff times, which lock a player once his game starts",
       "Official weekly injury reports: report status, practice status, body part",
+      "Snap share and target share per week, with the week-over-week move: the usage line under Lineup's matchup and the snap share in the dossier's Games table",
     ],
     notUsed:
-      "Snap counts, depth charts and weekly usage stats are available but not wired in. They stop at 2025 — there is no 2026 data until the season starts — and a usage-based breakout detector was tested against projection residuals and found nothing.",
+      "Usage is context beside the projection, never an input to it. A usage-based breakout detector was tested against projection residuals and found nothing.",
     cost: "free · no key",
+  },
+  {
+    name: "Expert sites — articles, claims, rankings",
+    what:
+      "FantasyPros, CBS, Footballguys, the Fantasy Footballers, DraftSharks and FantasyLife. Articles are fetched every 15 minutes; rankings snapshots every 2 hours (FantasyPros, the Fantasy Footballers) or daily (CBS, Footballguys).",
+    used: [
+      "Claims: every 15 minutes a headless Claude reads new articles and extracts start, sit, buy, sell, add, drop, hold and stash calls, each with its rationale and a link back",
+      "Rankings snapshots: the Rankings board, the consensus rank and its move on every row, and the dossier's rankings",
+      "Claims feed the Sites say columns on Today, Lineup, Moves and Rankings, the quotes on Trades, the Reading feed and the dossier",
+    ],
+    notUsed:
+      "A claim is what a site said, never the tool's own view. Paywalled teasers are stored but not read, and a claim written before a player's last game is marked pre-game rather than dropped.",
+    cost: "free · public pages",
+  },
+  {
+    name: "The Fantasy Footballers — projections",
+    what: "Stat-level weekly projections from the site's three analysts, averaged, read from its position rankings pages.",
+    used: [
+      "A third weekly projection beside Sleeper and ESPN, rescored under each league's settings",
+      "In the tooltip on Lineup's projection, beside Sleeper on Rankings and in the dossier, and part of the spread that flags when the sources disagree",
+    ],
+    notUsed: "Not the number of record: Sleeper's projection is, so an optimal lineup never depends on which third source ran last.",
+    cost: "free · refreshed every 2 hours",
   },
   {
     name: "DynastyProcess — the id crosswalk",
@@ -314,22 +346,53 @@ export function MethodologyPage({ onBack }: { onBack: () => void }) {
   const reg = useContext(RegistryCtx);
   const sections = [...reg.entries()].filter(([, v]) => v.length > 0);
 
+  // Jump links: the source cards alone are several phone screens, and the
+  // panel notes you most likely came for are at the very bottom.
+  const jumps = [
+    { id: "method-sources", label: "Sources" },
+    { id: "method-rules", label: "Rules" },
+    { id: "method-terms", label: "Terms" },
+    ...(sections.length > 0 ? [{ id: "method-panels", label: "Panels" }] : []),
+  ];
+
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-baseline gap-3">
-        <h3 className="text-base font-semibold text-gray-100">Methodology</h3>
-        <span className="text-xs text-gray-500">
-          Where every number comes from, and what it is not allowed to claim
-        </span>
-        <button
-          onClick={onBack}
-          className="ml-auto rounded-md border border-gray-800 px-2.5 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200"
-        >
-          back to the hub
-        </button>
+      <div className="mb-5">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h3 className="text-base font-semibold text-gray-100">Methodology</h3>
+          {/* On a phone the subtitle drops under the title row, so "back"
+              stays beside the title instead of wrapping onto a line alone. */}
+          <span className="text-xs text-gray-500 max-sm:order-last max-sm:w-full">
+            Where every number comes from, and what it is not allowed to claim
+          </span>
+          <button
+            type="button"
+            onClick={onBack}
+            className="ff-inline ff-hit ml-auto text-xs text-indigo-400 hover:text-indigo-300"
+          >
+            ← Back
+          </button>
+        </div>
+        <nav aria-label="Methodology sections" className="mt-1.5 flex flex-wrap gap-x-3 text-xs">
+          {jumps.map((j) => (
+            <a
+              key={j.id}
+              href={`#${j.id}`}
+              onClick={(e) => {
+                // The dashboard routes on the path; a bare hash would add a
+                // history entry for nothing, so scroll by hand.
+                e.preventDefault();
+                document.getElementById(j.id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+              }}
+              className="ff-hit text-indigo-400 hover:text-indigo-300"
+            >
+              {j.label}
+            </a>
+          ))}
+        </nav>
       </div>
 
-      <Group title="Data sources">
+      <Group title="Data sources" id="method-sources">
         <div className="grid gap-3 xl:grid-cols-2">
           {SOURCES.map((s) => (
             <SourceCard key={s.name} s={s} />
@@ -338,7 +401,7 @@ export function MethodologyPage({ onBack }: { onBack: () => void }) {
       </Group>
 
       <div className="grid gap-x-8 lg:grid-cols-2">
-        <Group title="Standing rules">
+        <Group title="Standing rules" id="method-rules">
           {STANDING.map((s) => (
             <div key={s.title} className="border-l-2 border-gray-800 pl-3">
               <div className="text-xs font-medium text-gray-300">{s.title}</div>
@@ -347,7 +410,7 @@ export function MethodologyPage({ onBack }: { onBack: () => void }) {
           ))}
         </Group>
 
-        <Group title="Terms">
+        <Group title="Terms" id="method-terms">
           {GLOSSARY.map((g) => (
             <div key={g.term} className="border-l-2 border-gray-800 pl-3">
               <div className="text-xs font-medium text-gray-300">{g.term}</div>
@@ -358,7 +421,7 @@ export function MethodologyPage({ onBack }: { onBack: () => void }) {
       </div>
 
       {sections.length > 0 && (
-        <Group title="From the panels you have opened">
+        <Group title="From the panels you have opened" id="method-panels">
           {sections.map(([name, notes]) => (
             <div key={name} className="border-l-2 border-gray-800 pl-3">
               <div className="text-xs font-medium text-gray-300">{name}</div>
@@ -375,10 +438,12 @@ export function MethodologyPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+function Group({ title, id, children }: { title: string; id: string; children: ReactNode }) {
   return (
     <section className="mb-6">
-      <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">{title}</h4>
+      <h4 id={id} className="mb-2 scroll-mt-4 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+        {title}
+      </h4>
       <div className="space-y-2.5">{children}</div>
     </section>
   );

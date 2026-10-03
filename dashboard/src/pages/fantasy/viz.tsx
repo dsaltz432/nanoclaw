@@ -1,5 +1,18 @@
-import { ComponentPropsWithoutRef, CSSProperties, ReactNode, useEffect, useState } from "react";
+import {
+  Children,
+  ComponentPropsWithoutRef,
+  ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { SectionProvider } from "./method";
+import { fmtDate } from "./labels";
 
 /**
  * Chart primitives for the Fantasy tab. Plain SVG — the dashboard has no chart
@@ -49,16 +62,32 @@ export function useIsNarrow() {
   return narrow;
 }
 
+// Literal class names (Tailwind only emits classes it can find in the source).
+const GRID_COLS = ["", "grid-cols-1", "grid-cols-[minmax(0,1fr)_auto]", "grid-cols-[minmax(0,1fr)_auto_auto]"];
+const SM_GRID_COLS = ["", "sm:grid-cols-1", "sm:grid-cols-[minmax(0,1fr)_auto]", "sm:grid-cols-[minmax(0,1fr)_auto_auto]"];
+const COL_SPAN = ["", "col-span-1", "col-span-2", "col-span-3"];
+
 export function Card({
   title,
   subtitle,
+  info,
   right,
   children,
   className = "",
   secondary = false,
+  collapsible = false,
+  defaultOpen = false,
+  rightStacks = false,
 }: {
   title?: string;
+  /** Data about the card's contents ("17 players · market 40,544"): beside the title from sm up. */
   subtitle?: ReactNode;
+  /**
+   * What the card is and how it is chosen: shown on hover (a tap on a phone)
+   * over the title, which gets a dotted underline. A sentence of explanation
+   * under every title cost a line per card, and it is read once.
+   */
+  info?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -70,42 +99,86 @@ export function Card({
    * removing anything.
    */
   secondary?: boolean;
+  /**
+   * Reference material on every screen size: collapsed (unless `defaultOpen`)
+   * behind the same show/hide link `secondary` uses on a phone. Unlike
+   * `secondary`, the `right` slot stays visible while folded.
+   */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  /**
+   * The right slot holds wide controls (inputs, selects, segmented buttons):
+   * on a phone it takes its own full-width row under the title and subtitle
+   * instead of sharing the title row.
+   */
+  rightStacks?: boolean;
 }) {
   const narrow = useIsNarrow();
-  const [open, setOpen] = useState(false);
-  const collapsible = secondary && narrow;
-  const shown = !collapsible || open;
+  const [open, setOpen] = useState(collapsible && defaultOpen);
+  const folds = collapsible || (secondary && narrow);
+  const shown = !folds || open;
+  const toggle = folds && (
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      aria-expanded={open}
+      className="ff-inline ff-hit shrink-0 text-left text-xs text-indigo-400 hover:text-indigo-300"
+    >
+      {open ? "Hide" : "Show"}
+    </button>
+  );
+  // A phone-folded `secondary` card hides `right` while folded (its filters
+  // act on a table you cannot see); a `collapsible` one keeps it beside the link.
+  const showRight = !!right && (!folds || collapsible || open);
+  const stacked = rightStacks && showRight;
+  // Header columns: the title, then the right slot and the toggle where each
+  // is present. On a phone a stacked right slot leaves the title row.
+  const phoneCols = 1 + (showRight && !stacked ? 1 : 0) + (toggle ? 1 : 0);
+  const deskCols = 1 + (showRight ? 1 : 0) + (toggle ? 1 : 0);
   return (
     <section className={`min-w-0 rounded-lg border border-gray-800 bg-gray-900 ${className}`}>
-      {(title || right) && (
+      {(title || right || folds) && (
         <header
-          // Stacks on a phone. Side by side, a `shrink-0` control leaves the
-          // subtitle a column two words wide and it wraps one word per line.
-          className="flex flex-col items-start gap-2 border-b border-gray-800 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-4 sm:py-3"
+          // A grid, so one DOM serves both layouts. On a phone the title and a
+          // short right slot (a count, one link, show/hide) share the first
+          // row and the subtitle runs full width beneath them; side by side
+          // it would be squeezed to a column two words wide. From sm up it is
+          // ONE row: title, the subtitle beside it, then the right slot.
+          className={`grid ${GRID_COLS[phoneCols]} ${SM_GRID_COLS[deskCols]} items-baseline gap-x-3 border-b border-gray-800 px-3 py-2.5 sm:items-center sm:gap-x-4 sm:px-4`}
         >
-          <div className="min-w-0">
-            {title && <h3 className="text-sm font-semibold text-gray-100">{title}</h3>}
-            {/* Subtitles are mostly explanation, and on a phone two lines of it
-                sat between you and the table on every single card. They are not
-                dropped — some carry live counts ("19 unread across 14 players")
-                and cannot be told from prose programmatically — but they get
-                smaller type and tighter leading below sm, which is about 40% of
-                the height back without losing a word. */}
+          {/* `contents` on a phone, so the title and subtitle are grid items
+              on rows 1 and 2; from sm up a wrapping flex line in column 1. */}
+          <div className="contents sm:col-start-1 sm:row-start-1 sm:flex sm:min-w-0 sm:flex-wrap sm:items-baseline sm:gap-x-2.5">
+            {title && (
+              <h3 className="col-start-1 row-start-1 min-w-0 text-sm font-semibold text-gray-100">
+                {info ? <HoverInfo info={info}>{title}</HoverInfo> : title}
+              </h3>
+            )}
             {subtitle && (
-              <p className="mt-0.5 text-[11px] leading-snug text-gray-500 sm:text-xs sm:leading-normal">
+              <p
+                className={`${COL_SPAN[phoneCols]} row-start-2 mt-0.5 min-w-0 text-[11px] leading-snug text-gray-500 sm:mt-0 sm:text-xs`}
+              >
                 {subtitle}
               </p>
             )}
           </div>
-          {right && !collapsible && <div className="w-full shrink-0 sm:w-auto">{right}</div>}
-          {collapsible && (
-            <button
-              onClick={() => setOpen((v) => !v)}
-              aria-expanded={open}
-              className="w-full shrink-0 text-left text-xs text-indigo-400 sm:w-auto"
+          {showRight && (
+            <div
+              className={`min-w-0 sm:col-start-2 sm:row-start-1 sm:mt-0 sm:justify-self-end ${
+                stacked ? `${COL_SPAN[phoneCols]} row-start-3 mt-2 sm:col-span-1` : "col-start-2 row-start-1 justify-self-end"
+              }`}
             >
-              {open ? "hide" : "show"}
-            </button>
+              {right}
+            </div>
+          )}
+          {toggle && (
+            <div
+              className={`row-start-1 justify-self-end ${phoneCols === 3 ? "col-start-3" : "col-start-2"} ${
+                deskCols === 3 ? "sm:col-start-3" : "sm:col-start-2"
+              }`}
+            >
+              {toggle}
+            </div>
           )}
         </header>
       )}
@@ -122,26 +195,93 @@ export function Card({
   );
 }
 
-export function StatTile({
-  label,
-  value,
-  hint,
-  tone = "default",
+/**
+ * A card with nothing in it is still worth saying — "your lineup is already
+ * optimal" is an answer — but it does not deserve a header, a subtitle and
+ * two rows of padding to say it. One slim line, same border, same order in
+ * the page, so the tab opens on the things that need you.
+ */
+export function QuietLine({
+  title,
+  info,
+  children,
+  right,
 }: {
-  label: string;
-  value: ReactNode;
-  hint?: string;
-  tone?: "default" | "good" | "warning" | "critical";
+  title: string;
+  /** As on Card: explanation on hover over the title. */
+  info?: ReactNode;
+  children: ReactNode;
+  right?: ReactNode;
 }) {
-  const color =
-    tone === "good" ? C.good : tone === "warning" ? C.warning : tone === "critical" ? C.critical : C.ink;
   return (
-    <div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold" style={{ color }}>
-        {value}
+    // On a phone the title and `right` share the first row, as on Card, and
+    // the sentence runs full width under them; from sm up it is one line.
+    <section
+      className={`grid min-w-0 items-baseline gap-x-3 gap-y-1 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 sm:flex sm:px-4 ${
+        right ? "grid-cols-[minmax(0,1fr)_auto]" : "grid-cols-1"
+      }`}
+    >
+      <h3 className="col-start-1 row-start-1 shrink-0 text-sm font-semibold text-gray-300">
+        {info ? <HoverInfo info={info}>{title}</HoverInfo> : title}
+      </h3>
+      <p className={`row-start-2 min-w-0 text-xs text-gray-500 ${right ? "col-span-2" : ""}`}>{children}</p>
+      {right && <div className="col-start-2 row-start-1 shrink-0 justify-self-end sm:ml-auto">{right}</div>}
+    </section>
+  );
+}
+
+/**
+ * The one loading state: a few pulsing bars in roughly the space the content
+ * will take, so the card does not jump from one line to a screenful. The
+ * label is for screen readers; the bars say "loading" to everyone else.
+ */
+export function Loading({ label = "Loading…", rows = 3 }: { label?: string; rows?: number }) {
+  // The floor is for a card's worth of rows; a one-line placeholder stays one line.
+  return (
+    <div role="status" aria-live="polite" className={`space-y-2.5 py-1 ${rows >= 3 ? "min-h-[8rem]" : ""}`}>
+      <span className="sr-only">{label}</span>
+      {Array.from({ length: rows }, (_, i) => (
+        <div
+          key={i}
+          aria-hidden="true"
+          className="h-4 animate-pulse rounded bg-gray-800"
+          style={{ width: `${92 - (i % 3) * 14}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A run of short facts separated by "·": the second line of a compact phone
+ * row ("RB · SEA · proj 12.4 · WR11"), or any inline list of the same shape.
+ *
+ * The dot is drawn by CSS, never written into the text: every child gets a
+ * fixed-width "·" before it, and the row is pulled left by that width inside
+ * a box that clips sideways. Whichever child starts a line — the first, or one
+ * that wrapped — has its dot in the clipped margin, so a wrapped line never
+ * starts or ends on a lone "·". That only works on elements: wrap EACH child
+ * in a <span> (a bare string or number child gets no separator). Falsy
+ * children are dropped, so a caller can write
+ * `{age != null && <span>age {age}</span>}` without leaving a gap.
+ */
+export function MetaLine({ children, className = "" }: { children: ReactNode; className?: string }) {
+  const parts = Children.toArray(children).filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <div className={`overflow-x-clip text-[11px] font-normal text-gray-500 ${className}`}>
+      <div className="-ml-4 flex flex-wrap items-baseline [&>*]:before:inline-block [&>*]:before:w-4 [&>*]:before:text-center [&>*]:before:text-gray-600 [&>*]:before:content-['·']">
+        {parts}
       </div>
-      {hint && <div className="mt-1 text-xs text-gray-500">{hint}</div>}
+    </div>
+  );
+}
+
+/** The one error state: a padded red box, never bare red text. */
+export function ErrorBox({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div role="alert" className={`rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300 ${className}`}>
+      {children}
     </div>
   );
 }
@@ -151,10 +291,12 @@ export function Badge({
   tone = "neutral",
   children,
   title,
+  className = "",
 }: {
   tone?: "neutral" | "good" | "warning" | "critical" | "info";
   children: ReactNode;
   title?: string;
+  className?: string;
 }) {
   const map: Record<string, string> = {
     neutral: "bg-gray-800 text-gray-300 ring-gray-700",
@@ -166,32 +308,9 @@ export function Badge({
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${map[tone]}`}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${map[tone]} ${className}`}
     >
       {children}
-    </span>
-  );
-}
-
-/** Inline magnitude bar for a table cell. One hue, 4px rounded data-end. */
-export function CellBar({
-  value,
-  max,
-  color = C.s1,
-  width = 72,
-}: {
-  value: number | null | undefined;
-  max: number;
-  color?: string;
-  width?: number;
-}) {
-  if (value == null || !max) return <span className="text-gray-700">—</span>;
-  const w = Math.max(2, Math.min(width, (Math.abs(value) / max) * width));
-  return (
-    <span className="inline-block align-middle" style={{ width, height: 8 }}>
-      <svg width={width} height={8} role="presentation">
-        <rect x={0} y={0} width={w} height={8} rx={4} fill={color} />
-      </svg>
     </span>
   );
 }
@@ -257,7 +376,7 @@ export function HBars({
 export function LineChart({
   series,
   xLabels,
-  height = 190,
+  height: tall = 190,
   yMax,
   yFormat = (v: number) => String(v),
   emphasisLabel,
@@ -270,7 +389,12 @@ export function LineChart({
   emphasisLabel?: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 640;
+  // The SVG scales to its box, so on a phone a 640-wide viewBox shrank the
+  // 9-unit labels to ~5px. A narrower logical canvas keeps them ~10px on a
+  // 342px card; the x ticks thin out to match.
+  const narrow = useIsNarrow();
+  const W = narrow ? 360 : 640;
+  const height = narrow ? 200 : tall;
   const padL = 34;
   const padR = 12;
   const padT = 8;
@@ -303,7 +427,7 @@ export function LineChart({
           </g>
         ))}
         {xLabels.map((l, i) =>
-          i % Math.ceil(n / 8) === 0 ? (
+          i % Math.ceil(n / (narrow ? 6 : 8)) === 0 ? (
             <text key={i} x={x(i)} y={height - 6} textAnchor="middle" fontSize={9} fill={C.muted}>
               {l}
             </text>
@@ -441,19 +565,51 @@ export function Balance({ delta, scale }: { delta: number; scale: number }) {
 
 export { Note } from "./method";
 
+type Align = "left" | "center" | "right";
+const ALIGN_RE = /(^|\s)text-(left|center|right)(\s|$)/;
+const ALIGN_CLASS: Record<Align, string> = { left: "text-left", center: "text-center", right: "text-right" };
+
+/**
+ * Alignment for a header or cell. An explicit `align` wins; otherwise a
+ * `text-right`/`text-center` in className is honoured, and only a header with
+ * neither falls back to text-left. Emitting text-left beside a caller's
+ * text-right left the winner to stylesheet order, which was not the caller's.
+ */
+function alignClass(className: string, align: Align | undefined, fallback: Align | null): string {
+  if (align) return ALIGN_CLASS[align];
+  if (ALIGN_RE.test(className) || !fallback) return "";
+  return ALIGN_CLASS[fallback];
+}
+
+/**
+ * The one sub-heading inside a card (a section of a card, not a card title):
+ * small caps in muted grey, the same voice as a table's column headers. The
+ * Methodology page spells the same classes out, since method.tsx cannot
+ * import from here without a cycle.
+ */
+export function SubHead({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
+  return (
+    <h4 id={id} className={`text-[11px] font-medium uppercase tracking-wide text-gray-500 ${className}`}>
+      {children}
+    </h4>
+  );
+}
+
 export function Th({
   children,
   className = "",
+  align,
   ...rest
 }: {
   children: ReactNode;
   className?: string;
+  align?: Align;
   /** A column header is the right home for the paragraph explaining the column. */
-} & ComponentPropsWithoutRef<"th">) {
+} & Omit<ComponentPropsWithoutRef<"th">, "align">) {
   return (
     <th
       {...rest}
-      className={`px-2 py-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500 ${className}`}
+      className={`px-2 py-1.5 ${alignClass(className, align, "left")} text-[11px] font-medium uppercase tracking-wide text-gray-500 ${className}`}
     >
       {children}
     </th>
@@ -465,18 +621,42 @@ export function Th({
  * used to destructure only children/className/style/title and silently drop
  * the rest, so the mobile stacked-card layout rendered
  * `content: attr(data-label)` against an attribute that never reached the DOM.
- * Every call site passing data-label was already correct; none of them reached
- * a phone, so a stacked row read "Bradley / 2 / 1 / 1 / 50%" with nothing
- * saying which number was which.
+ *
+ * A labelled cell wraps its value in `.ff-val`. On a desktop that wrapper is
+ * `display: contents` and changes nothing; in a phone's stacked card it is the
+ * one flex item beside the label, so a multi-part value ("12.4 · roto 11")
+ * groups on the right instead of being spread across the row by
+ * space-between. The row head (`data-label=""`) is left unwrapped.
  */
 export function Td({
   children,
   className = "",
+  align,
+  block = false,
+  empty = false,
   ...rest
-}: { children: ReactNode; className?: string } & ComponentPropsWithoutRef<"td">) {
+}: {
+  children?: ReactNode;
+  className?: string;
+  align?: Align;
+  /** Prose (Sites say, Why): on a phone the label sits above and the text runs full width. */
+  block?: boolean;
+  /** The value is null or "—": hidden in a phone's stacked card, kept on desktop so columns line up. */
+  empty?: boolean;
+} & Omit<ComponentPropsWithoutRef<"td">, "align">) {
+  const label = (rest as { "data-label"?: string })["data-label"];
+  const cls = [
+    "px-2 py-1.5 text-sm text-gray-300",
+    alignClass(className, align, null),
+    block ? "ff-cell-block" : "",
+    empty ? "ff-empty" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <td {...rest} className={`px-2 py-1.5 text-sm text-gray-300 ${className}`}>
-      {children}
+    <td {...rest} className={cls}>
+      {label ? <div className="ff-val min-w-0">{children}</div> : children}
     </td>
   );
 }
@@ -489,92 +669,289 @@ export type PeekNote = {
 };
 
 /**
- * A small note icon beside a player's name. Hover or click to read his most
- * recent reports without leaving the row you are working in.
+ * The page-wide news index (ff/api.py news_index): per player [notes listed,
+ * shade 0-2, any flagged], and the notes themselves, newest first.
+ */
+export type NewsIndex = {
+  players: Record<string, [number, number, number]>;
+  notes: Record<string, PeekNote[]>;
+};
+
+const NewsIndexContext = createContext<NewsIndex | null>(null);
+
+/** The league being viewed, for anything a player name opens (his dossier is per league). */
+export const LeagueContext = createContext<string>("");
+/** FantasyPage fetches the index once and provides it to every tab. */
+export const NewsIndexProvider = NewsIndexContext.Provider;
+
+/**
+ * A floating panel anchored to a trigger: the news badge and HoverInfo share
+ * it. Hover (or focus) shows it; a click pins it until an outside press or
+ * Escape. Hover spans the trigger AND the panel, so the pointer can travel
+ * into the panel to reach a link: leaving either starts a short timer that
+ * entering either cancels. On a phone there is no hover, so a tap pins it and
+ * it opens as a bottom sheet pinned to the viewport: a panel hanging off a
+ * trigger 250px across a 390px screen is half off-screen whichever edge it
+ * aligns to.
+ *
+ * The panel is portalled to <body> and positioned `fixed`. Rendered in place
+ * it sat inside tables: it inherited their nowrap (one line of text running
+ * past the panel) and later rows painted over it. It opens below the
+ * trigger, or above when short of room.
+ */
+function usePopover({
+  align = "left",
+  width = 352,
+  interactive = true,
+}: {
+  align?: "left" | "right";
+  width?: number;
+  /**
+   * The pointer can move into a hovered panel (to reach a link) and it stays
+   * open. Off, a hovered panel lets the pointer through: plain detail that
+   * opens over the next line must not block hovering that line.
+   */
+  interactive?: boolean;
+} = {}) {
+  const narrow = useIsNarrow();
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const open = pinned || (!narrow && (hovered || focused));
+  const panelWidth = useCallback(() => Math.min(width, window.innerWidth - 16), [width]);
+
+  const leaveTimer = useRef<number | undefined>(undefined);
+  const enter = () => {
+    window.clearTimeout(leaveTimer.current);
+    setHovered(true);
+  };
+  const leave = () => {
+    window.clearTimeout(leaveTimer.current);
+    leaveTimer.current = window.setTimeout(() => setHovered(false), POPOVER_LEAVE_MS);
+  };
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
+
+  const place = useCallback(() => {
+    const t = triggerRef.current;
+    if (!t) return;
+    const r = t.getBoundingClientRect();
+    const w = panelWidth();
+    const h = panelRef.current?.offsetHeight ?? 160;
+    const flip = window.innerHeight - r.bottom - POPOVER_GAP < h && r.top - POPOVER_GAP > window.innerHeight - r.bottom;
+    const want = align === "right" ? r.right - w : r.left;
+    setPos({
+      top: flip ? r.top - POPOVER_GAP - h : r.bottom + POPOVER_GAP,
+      left: Math.min(Math.max(8, want), window.innerWidth - w - 8),
+      width: w,
+    });
+  }, [align, panelWidth]);
+
+  useLayoutEffect(() => {
+    if (!open || narrow) return;
+    place();
+    return () => setPos(null);
+  }, [open, narrow, place]);
+
+  // Follow the trigger while open; a pinned panel closes on an outside press
+  // or Escape. Not on blur: the press on a link inside the panel blurs the
+  // trigger first, which used to close the panel before the link was hit.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setPinned(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPinned(false);
+    };
+    const onMove = () => !narrow && place();
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open, narrow, place]);
+
+  const toggle = () => setPinned((v) => !v);
+  const triggerProps = {
+    ref: (el: HTMLElement | null) => {
+      triggerRef.current = el;
+    },
+    onClick: (e: { stopPropagation: () => void }) => {
+      // Rows that expand on click must not also toggle.
+      e.stopPropagation();
+      toggle();
+    },
+    onMouseEnter: enter,
+    onMouseLeave: leave,
+    onFocus: () => setFocused(true),
+    onBlur: () => setFocused(false),
+    "aria-expanded": open,
+  };
+
+  // Above the player popup and the swap comparison (both z-[1000]): at z-30
+  // every hover inside them opened underneath, showing the help cursor and
+  // no text.
+  const panel = (children: ReactNode) =>
+    open &&
+    createPortal(
+      <div
+        ref={panelRef}
+        onMouseEnter={narrow || !interactive ? undefined : enter}
+        onMouseLeave={narrow || !interactive ? undefined : leave}
+        className={`fixed z-[1100] whitespace-normal rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left font-normal shadow-xl ${
+          narrow ? "inset-x-2 bottom-2 max-h-[60dvh] overflow-y-auto ff-sheet" : "max-h-[70vh] overflow-y-auto"
+        } ${!interactive && !pinned && !narrow ? "pointer-events-none" : ""}`}
+        // Unplaced, it is laid out hidden at its real width, so the height
+        // `place` measures (to decide whether to flip) is the height it gets.
+        style={
+          narrow
+            ? undefined
+            : pos
+              ? { top: pos.top, left: pos.left, width: pos.width }
+              : { top: 0, left: 0, width: panelWidth(), visibility: "hidden" }
+        }
+      >
+        {children}
+      </div>,
+      document.body,
+    );
+
+  return { open, narrow, place, toggle, triggerProps, panel };
+}
+
+/** Space between a trigger and its floating panel. */
+const POPOVER_GAP = 4;
+/** Grace period after the pointer leaves the trigger or panel before it closes. */
+const POPOVER_LEAVE_MS = 200;
+
+/**
+ * Detail that shows only on hover (or a tap on a phone): the trigger text gets
+ * a dotted underline so it reads as something to point at. `info` is a node,
+ * or a string whose lines ("\n") become lines of the panel.
+ */
+export function HoverInfo({
+  info,
+  children,
+  className = "",
+  width = 300,
+}: {
+  info: ReactNode;
+  children: ReactNode;
+  className?: string;
+  /** Panel width in px on desktop (capped to the window); a phone gets the full-width sheet. */
+  width?: number;
+}) {
+  const p = usePopover({ width, interactive: false });
+  if (!info) return <span className={className}>{children}</span>;
+  return (
+    <>
+      <span
+        {...p.triggerProps}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            p.toggle();
+          }
+        }}
+        className={`cursor-help underline decoration-gray-600 decoration-dotted underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500/60 ${className}`}
+      >
+        {children}
+      </span>
+      {p.panel(
+        <div className="space-y-0.5 text-xs leading-snug text-gray-300">
+          {typeof info === "string" ? info.split("\n").map((l, i) => <div key={i}>{l}</div>) : info}
+        </div>,
+      )}
+    </>
+  );
+}
+
+/**
+ * The news badge beside a player's name, on every tab: how many recent notes
+ * there are, shaded by whether any of them matters. Hover or click for the
+ * notes themselves, newest first.
  *
  * Click as well as hover, deliberately: an 11pm waiver decision happens on a
  * phone, and a hover-only affordance is invisible to a thumb.
  *
- * Renders NOTHING when there are no notes rather than a greyed-out icon — an
- * absent icon reads as "nothing to see", while a dead one invites a click that
- * does nothing. The notes are shipped with the page payload, so opening this
- * fires no request.
+ * Renders NOTHING when a player has no notes rather than a greyed-out badge:
+ * an absent badge reads as "nothing to see", a dead one invites a click that
+ * does nothing. The count, shade and headlines all come from one page-wide
+ * index loaded with the page, so a hover shows the notes at once and no tab's
+ * payload carries them.
  */
 export function NewsPeek({
-  notes,
+  id,
   name,
   align = "left",
 }: {
-  notes?: PeekNote[];
+  id: string;
   name: string;
   align?: "left" | "right";
 }) {
-  const [pinned, setPinned] = useState(false);
-  if (!notes || notes.length === 0) return null;
-  const flagged = notes.some((n) => n.flagged);
+  const index = useContext(NewsIndexContext);
+  const entry = index?.players[id];
+  const notes = index?.notes[id] ?? [];
+  const p = usePopover({ align });
+
+  if (!entry || entry[0] === 0) return null;
+  const [count, shade, flagged] = entry;
   return (
-    <span className="relative inline-block align-middle">
+    <>
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setPinned((v) => !v);
-        }}
-        onBlur={() => setPinned(false)}
-        aria-label={`${notes.length} recent report${notes.length === 1 ? "" : "s"} on ${name}`}
-        className={`peer ml-1 rounded px-1 text-[10px] leading-none ring-1 ring-inset transition-colors ${
-          flagged
-            ? "text-red-400 ring-red-500/40"
-            : "text-gray-500 ring-gray-700 hover:text-indigo-300 hover:ring-indigo-500/40"
+        {...p.triggerProps}
+        type="button"
+        aria-label={`${count} recent report${count === 1 ? "" : "s"} on ${name}${SHADE_LABEL[shade] ? ` (${SHADE_LABEL[shade]})` : ""}`}
+        className={`ff-inline ff-hit ml-1 inline-block rounded px-1 align-middle text-[10px] leading-none ring-1 ring-inset transition-colors ${
+          flagged ? "text-red-400 ring-red-500/40" : (SHADE_CLS[shade] ?? SHADE_CLS[0])
         }`}
       >
-        {notes.length}
+        {count}
       </button>
-      <span
-        // Visibility is decided in JS, not by CSS precedence. The first version
-        // used `!block` to override `hidden` — which is Tailwind v3 syntax; v4
-        // moved the important modifier to a suffix (`block!`), so the class did
-        // nothing and the click-to-pin path silently never worked. Hover still
-        // did, which is exactly the kind of bug that survives a desktop test and
-        // fails on a phone.
-        // On a phone this is a bottom sheet pinned to the VIEWPORT, not a panel
-        // anchored to the badge. Anchoring cannot work there: the badge sits
-        // beside a player name that may be 250px across a 390px screen, so a
-        // 22rem panel hanging off it is half off-screen whichever edge it
-        // aligns to, and `max-w-[80vw]` only made it narrow AND clipped. Tap is
-        // the only way to open it on touch anyway — there is no hover — so a
-        // sheet is also the interaction a phone expects.
-        className={`z-30 rounded-lg border border-gray-700 bg-gray-950 p-2.5 text-left shadow-xl
-          fixed inset-x-2 bottom-2 max-h-[60dvh] overflow-y-auto ff-sheet
-          sm:absolute sm:inset-x-auto sm:bottom-auto sm:top-full sm:mt-1 sm:max-h-none sm:w-[22rem] sm:max-w-[80vw] sm:overflow-visible ${
-          pinned
-            ? "block pointer-events-auto"
-            : "pointer-events-none hidden sm:peer-hover:block sm:peer-focus:block"
-        } ${align === "right" ? "sm:right-0" : "sm:left-0"}`}
-      >
-        <span className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
-          {name} — {notes.length} recent report{notes.length === 1 ? "" : "s"}
-        </span>
-        {notes.map((n, i) => (
-          <span key={i} className="mb-1.5 block last:mb-0">
-            <span className="mr-1.5 text-[11px] text-gray-600">{shortDate(n.published_at)}</span>
-            <span className="text-xs leading-snug text-gray-300">{n.headline}</span>
-            {n.url && <SourceLink href={n.url} />}
-            {n.flagged && (
-              <span className="ml-1 text-[10px] text-red-400">reads as an instruction</span>
-            )}
+      {p.panel(
+        <>
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
+            {name} — {count} recent report{count === 1 ? "" : "s"}
           </span>
-        ))}
-      </span>
-    </span>
+          {SHADE_LABEL[shade] && <span className="mb-1.5 block text-[11px] text-indigo-300">{SHADE_LABEL[shade]}</span>}
+          {notes.map((n, i) => (
+            <span key={i} className="mb-1.5 block last:mb-0">
+              <span className="mr-1.5 text-[11px] text-gray-600">{fmtDate(n.published_at)}</span>
+              <span className="text-xs leading-snug text-gray-300">{n.headline}</span>
+              {n.url && <SourceLink href={n.url} />}
+              {n.flagged && <span className="ml-1 text-[10px] text-red-400">reads as an instruction</span>}
+            </span>
+          ))}
+        </>,
+      )}
+    </>
   );
 }
 
-function shortDate(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
+/**
+ * One hue, three strengths. 2: an injury / out / role / return note in the
+ * last 24h; 1: in the last 72h; 0: only older or routine notes (box scores).
+ */
+// Fill vs outline vs dim, not just opacity steps: two translucent fills were
+// indistinguishable at badge size on a phone.
+const SHADE_CLS = [
+  "text-indigo-400/60 ring-indigo-400/20 hover:text-indigo-300 hover:ring-indigo-400/50",
+  "text-indigo-200 ring-indigo-400/80 hover:bg-indigo-500/20",
+  "bg-indigo-500 text-white ring-indigo-400 hover:bg-indigo-400",
+];
+const SHADE_LABEL = ["", "Injury or role news in the last 3 days", "Injury or role news in the last 24 hours"];
 
 /**
  * A link to the source, as an icon beside the text rather than the text itself.
@@ -593,7 +970,7 @@ export function SourceLink({ href, label = "ESPN player news" }: { href: string;
       title={`Open ${label}`}
       aria-label={`Open ${label}`}
       onClick={(e) => e.stopPropagation()}
-      className="ml-1.5 inline-flex translate-y-[1px] text-gray-600 transition-colors hover:text-indigo-300"
+      className="ff-hit ml-1.5 inline-flex translate-y-[1px] text-gray-600 transition-colors hover:text-indigo-300"
     >
       <svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path
@@ -609,10 +986,12 @@ export function SourceLink({ href, label = "ESPN player news" }: { href: string;
 }
 
 /**
- * The one fold control every long list shares: "show N more" / "show all N" /
- * "show fewer". Renders nothing when there is nothing hidden and nothing to
+ * The one fold control every long list shares: "Show N more" / "Show all N" /
+ * "Show fewer". Renders nothing when there is nothing hidden and nothing to
  * collapse, so call sites can drop it in unconditionally. `ff-inline` keeps
- * the coarse-pointer padding rule from turning it into a 36px block.
+ * the coarse-pointer min-height from turning it into a 36px block; the
+ * `py-2 -mb-2` pair (the top padding is the old mt-2 gap) and `ff-hit` give
+ * a thumb ~32px without moving the text.
  */
 export function FoldToggle({
   total,
@@ -627,7 +1006,7 @@ export function FoldToggle({
   /** When given, the control also offers "show fewer" once open. */
   expanded?: boolean;
   onToggle: () => void;
-  /** "all" reads "show all 120"; "more" reads "show 30 more". */
+  /** "all" reads "Show all 120"; "more" reads "Show 30 more". */
   mode?: "all" | "more";
   className?: string;
 }) {
@@ -635,10 +1014,11 @@ export function FoldToggle({
   if (hidden === 0 && !expanded) return null;
   return (
     <button
+      type="button"
       onClick={onToggle}
-      className={`ff-inline mt-2 text-xs text-indigo-400 hover:text-indigo-300 ${className}`}
+      className={`ff-inline ff-hit -mb-2 py-2 text-xs text-indigo-400 hover:text-indigo-300 ${className}`}
     >
-      {expanded && hidden === 0 ? "show fewer" : mode === "all" ? `show all ${total}` : `show ${hidden} more`}
+      {expanded && hidden === 0 ? "Show fewer" : mode === "all" ? `Show all ${total}` : `Show ${hidden} more`}
     </button>
   );
 }

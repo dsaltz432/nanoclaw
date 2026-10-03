@@ -1,50 +1,45 @@
-import { useEffect, useState } from "react";
-import { Badge, Card, FoldToggle, StatTile, Td, Th } from "./viz";
-import { ACTION_TONE, srcShort } from "./labels";
-import { SrcLink, NoteLine, type Note } from "./NoteLine";
-import WaiversTab from "./WaiversTab";
+import { useEffect, useState, type ReactNode } from "react";
+import { Badge, Card, ErrorBox, FoldToggle, Loading, MetaLine, Note, QuietLine, Td, Th, useIsNarrow } from "./viz";
 import { Select } from "./Select";
+import { fmtDateTime, signed } from "./labels";
+import { ClaimQuote, ClaimsSummary, PlayerName, RankText, type Claim, type Note as WireNote } from "./NoteLine";
+import FaabMarket, { type Market } from "./WaiversTab";
 
 /**
  * Moves — add / drop / claim / stash, in one place.
  *
- * Each candidate row carries the four things that used to live on four
- * tabs: lineup gain and FAAB price (the waiver engine), consensus rank and
- * what the sites say (the content layer), and crowd velocity (Sleeper adds,
- * ESPN ownership). Gain decides; the rest annotates. The full engine — price
- * table, rivals' budgets, burn curves, the searchable board — is one fold
- * away at the bottom, unchanged.
+ * The Board is the only add/drop list. Each row carries lineup gain and FAAB
+ * price (the waiver engine), consensus rank and what the sites say (the
+ * content layer), and crowd demand (Sleeper adds, ESPN ownership) as a line
+ * under the name. Gain decides; the rest annotates. Availability owns when he
+ * can be had and what his tier costs; Move owns the engine's call and the bid
+ * in dollars. The FAAB market reference (price table, rivals' budgets, burn
+ * curves) is one collapsible card at the bottom.
  *
  * For the dynasty league the rank column is rest-of-season and the board is
  * ordered by rest-of-season points; a this-week gain is not the question.
  */
 
-type Rank = { median: number; best: number; worst: number; spread: number; n: number } | null;
+type Rank = { median: number; best: number; worst: number } | null;
 type Overlay = {
   rank: Rank;
   delta: number | null;
-  ranks: Record<string, number>;
-  claims: { n: number; n_sources: number; net: number; by_action: Record<string, number>; by_horizon: Record<string, number>; evidence: { action: string; horizon: string; rationale: string; source: string }[] } | null;
-  crowd: { verdict: string | null; why: string | null; adds_24: number | null; pct_owned: number | null } | null;
-  note: Note;
+  claims: { n_sources: number; by_action: Record<string, number>; evidence: Claim[] } | null;
+  crowd: { verdict: string | null; why: string | null; pct_owned: number | null } | null;
+  note: WireNote;
 } | null;
 
+/** An add the engine pairs with a drop; keyed onto the Board row it belongs to. */
 type Move = {
   player_id: string;
-  name: string;
-  position: string;
-  team: string | null;
-  injury_status: string | null;
-  projected: number;
-  ros_points: number | null;
   gain: number;
-  drop: { player_id: string; name: string; position: string; projected: number } | null;
+  drop: { player_id: string; name: string; projected: number | null } | null;
   availability: string;
-  clears_at: string | null;
+  suggested_bid: number | null;
   suggested_pct: number | null;
-  why: string;
-  overlay: Overlay;
 };
+
+type Displaces = { slot: string; name: string | null; points: number } | null;
 
 type Cand = {
   player_id: string;
@@ -54,20 +49,51 @@ type Cand = {
   injury_status: string | null;
   projected: number | null;
   ros_points: number | null;
-  bar: number | null;
   over_bar: number | null;
-  displaces: { slot: string; name: string; points: number } | null;
+  displaces: Displaces;
   availability: string;
-  clears_at: string | null;
+  clears_at_iso: string | null;
   bid_applies: boolean;
+  tier: string | null;
   market_low: number | null;
   market_high: number | null;
   overlay: Overlay;
 };
 
-type Drop = { player_id: string; name: string; position: string; team: string | null; projected: number | null; overlay: Overlay; drop_talk: number; hold_talk: number };
-type Stash = { kind: "contingent" | "stash_talk"; player_id?: string; name?: string; position?: string; team?: string | null; rank?: Rank; overlay: Overlay; [k: string]: unknown };
-type Crowd = { player_id: string; name: string; position: string | null; team: string | null; availability: string; verdict: string; why: string | null; overlay: Overlay };
+type Drop = {
+  player_id: string;
+  name: string;
+  position: string;
+  team: string | null;
+  injury_status: string | null;
+  projected: number | null;
+  ros_points?: number | null;
+  /** Out / IR / Doubtful designation. Context only: the list is ordered on rest-of-season value. */
+  hurt?: boolean;
+  /** Why he is spare, from the payload (ROS depth, the best free agent at his position, market in dynasty). */
+  why?: string;
+  ros_rank?: { median: number; best: number; worst: number } | null;
+  ros_rank_delta?: number | null;
+  overlay: Overlay;
+  drop_talk: number;
+  hold_talk: number;
+};
+/** A bench player kept off the drop list because he makes the best rest-of-season lineup. */
+type DropHold = { player_id: string; name: string; why: string };
+/** A spare who would start for a rival: a trade chip, not a drop (see Trades). */
+type DropTrade = DropHold & { rivals: number };
+type Stash = {
+  kind: "contingent" | "stash_talk";
+  player_id?: string;
+  name?: string;
+  position?: string;
+  team?: string | null;
+  /** Contingent only: "if X is ruled out", and the engine's arithmetic behind it. */
+  trigger?: string;
+  reasoning?: string;
+  overlay: Overlay;
+};
+type Crowd = { player_id: string; name: string; position: string | null; team: string | null; why: string | null; overlay: Overlay };
 
 /** A player released by the roster chopped last week (guillotine only). */
 type Released = {
@@ -80,36 +106,15 @@ type Released = {
   claimed_by_me: boolean;
   board: null | {
     projected: number | null;
-    bar: number | null;
     over_bar: number | null;
-    displaces: { slot: string; name: string; points: number } | null;
     availability: string | null;
-    clears_at: string | null;
-    bid_applies: boolean;
-    suggested_bid: number | null;
-    suggested_pct: number | null;
-    market_bid_if_contested: number | null;
-    tier: string | null;
-    tier_p90: number | null;
-    tier_n: number | null;
-    tier_thin: boolean | null;
-    ros_points: number | null;
-    no_bid_reason: string | null;
+    clears_at_iso: string | null;
   };
   guidance: null | {
     band: "alpha" | "average" | "conservative" | "token";
-    band_pct: number;
-    ceiling: number;
-    market_p75: number | null;
-    market_p90: number | null;
-    tier_n: number | null;
-    tier_thin: boolean | null;
-    board_suggested: number | null;
     bid: number | null;
     bid_pct_of_budget: number | null;
-    bid_pct_of_mine: number | null;
     rivals_who_can_outbid: number;
-    rivals_flush: number;
     why: string[];
   };
 };
@@ -123,23 +128,13 @@ type Chopped =
       rivals_flush: number;
       rivals_alive: number;
       players: Released[];
-      bands: Record<string, number>;
       note: string;
     }
   | { week: null; players: []; note: string };
 
 type Guillotine = {
   chopped: Chopped;
-  qb_premium: {
-    superflex: boolean;
-    teams: number;
-    qb_starters_max: number;
-    nfl_starting_jobs: number;
-    qb_vs_rb: number | null;
-    qb_replacement: number | null;
-    rb_replacement: number | null;
-    note: string;
-  };
+  qb_premium: { qb_vs_rb: number | null; note: string };
 } | null;
 
 const BAND_TONE: Record<NonNullable<Released["guidance"]>["band"], "critical" | "warning" | "info" | "neutral"> = {
@@ -153,491 +148,738 @@ type Data = {
   week: number;
   guillotine?: Guillotine;
   horizon: "week" | "ros";
-  rank_scope: string;
-  lineup_total: number | null;
   budget: number | null;
   add_now: Move[];
   claim_wednesday: Move[];
   board: Cand[];
   drops: Drop[];
+  drop_holds?: DropHold[];
+  drop_trade?: DropTrade[];
   stash: Stash[];
   crowd: Crowd[];
-  notes: { inference: string | null; method: string | null };
-  note_hours: number;
+  market?: Market;
+  notes: { inference: string | null };
   error?: string;
 };
 
+const BOARD_SHOWN = 15;
+const STASH_SHOWN = 3;
+const CHOPPED_SHOWN = 8;
+
+/** FLEX is a filter, not a position: anyone who could fill a flex slot. */
+const FLEX_MEMBERS = ["RB", "WR", "TE"];
+const POSITION_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
+
+/** Points over the replacement bar: green when he clears it, gray when he does not. */
+function OverBar({ v }: { v: number | null | undefined }) {
+  if (v == null) return null;
+  return <span className={`ml-1 whitespace-nowrap text-[11px] ${v > 0 ? "text-green-400" : "text-gray-500"}`}>{signed(v)}</span>;
+}
+
+/** Whether the overlay has anything the sites said: a claim or a wire note. */
+const hasSites = (o: Overlay) => !!(o?.claims || o?.note);
+
+/** What the sites say, the newest quote, and the newest wire note. */
+function Sites({ o }: { o: Overlay }) {
+  if (!hasSites(o)) return <span className="text-xs text-gray-700">quiet</span>;
+  return (
+    <div className="min-w-0">
+      {o?.claims && (
+        <>
+          <ClaimsSummary byAction={o.claims.by_action} nSources={o.claims.n_sources} />
+          {o.claims.evidence[0] && (
+            <div className="mt-0.5 max-w-[26rem]">
+              <ClaimQuote e={o.claims.evidence[0]} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function crowdTone(verdict: string): "warning" | "info" | "neutral" {
+  if (verdict.startsWith("move now")) return "warning";
+  if (verdict.startsWith("rising")) return "info";
+  return "neutral";
+}
+
+/** Demand, not production: the crowd verdict and how widely he is owned. `why` goes in the tooltip. */
+function CrowdBadge({ o, withWhy = true }: { o: Overlay; withWhy?: boolean }) {
+  if (!o?.crowd?.verdict) return null;
+  return (
+    <span className="whitespace-nowrap text-xs" title={withWhy ? o.crowd.why ?? undefined : undefined}>
+      <Badge tone={crowdTone(o.crowd.verdict)}>{o.crowd.verdict}</Badge>
+      {o.crowd.pct_owned != null && <span className="ml-1 text-gray-600">{o.crowd.pct_owned}% owned</span>}
+    </span>
+  );
+}
+
+/** A bid in dollars (what you type in Sleeper), its share of the budget in the tooltip. */
+function Bid({ bid, pct, budget }: { bid: number; pct: number | null; budget: number | null }) {
+  const share = pct ?? (budget ? (100 * bid) / budget : null);
+  return (
+    <span
+      className="whitespace-nowrap tabular-nums"
+      title={share != null ? `${+share.toFixed(1)}% of the${budget != null ? ` $${budget}` : ""} budget` : undefined}
+    >
+      bid ${bid}
+    </span>
+  );
+}
+
+const moveBadge = (m: Move) =>
+  m.availability === "free_agent" ? <Badge tone="good">add now</Badge> : <Badge tone="warning">claim</Badge>;
+
+/**
+ * The engine's add/drop call for a Board row: the badge, the lineup gain, the
+ * drop and the bid. When he clears waivers is Availability's, and a drop
+ * every move shares (`sharedDrop`) is said once in the subtitle.
+ */
+function MoveCell({
+  m,
+  sharedDrop,
+  budget,
+  onPlayer,
+}: {
+  m: Move | null;
+  sharedDrop: boolean;
+  budget: number | null;
+  onPlayer: (id: string) => void;
+}) {
+  if (!m) return <span className="text-gray-700" title="does not improve your starting lineup">—</span>;
+  return (
+    <div>
+      {moveBadge(m)}
+      <span className="ml-1 tabular-nums text-green-400">{signed(m.gain)}</span>
+      <MetaLine className="mt-0.5">
+        {m.drop && !sharedDrop && (
+          <span>
+            drop <PlayerName id={m.drop.player_id} name={m.drop.name} onPlayer={onPlayer} />
+            {m.drop.projected != null && ` (${m.drop.projected.toFixed(1)})`}
+          </span>
+        )}
+        {m.availability !== "free_agent" && m.suggested_bid != null && (
+          <Bid bid={m.suggested_bid} pct={m.suggested_pct} budget={budget} />
+        )}
+      </MetaLine>
+    </div>
+  );
+}
+
+/** Free now, or on waivers: when he clears and what his tier has cost here. */
+function Availability({ c }: { c: Cand }) {
+  if (c.availability === "free_agent") return <span className="text-green-400">free</span>;
+  return (
+    <div className="text-gray-400">
+      waivers
+      {c.clears_at_iso && (
+        <div className="whitespace-nowrap text-gray-500" title="when his waiver period clears">
+          {fmtDateTime(c.clears_at_iso)}
+        </div>
+      )}
+      {c.bid_applies && c.market_low != null && c.market_high != null && (
+        <div
+          className="whitespace-nowrap tabular-nums text-gray-600"
+          title={`What ${c.tier ? `the ${c.tier} tier` : "his tier"} has gone for in this league: $${c.market_low} median, $${c.market_high} p75. A market price, not a bid.`}
+        >
+          ${c.market_low}–{c.market_high}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Where an unclaimed released player stands now. */
+function Fate({ p }: { p: Released }) {
+  if (p.board == null) return <span className="text-gray-600">unpriced</span>;
+  if (p.board.availability === "free_agent") return <span className="text-green-400">free agent</span>;
+  const until = fmtDateTime(p.board.clears_at_iso);
+  return <span className="text-gray-400">on waivers{until ? ` until ${until}` : ""}</span>;
+}
+
+const displacesText = (d: Displaces) => (d ? `${d.slot} ${d.name ?? "an empty slot"} (${d.points.toFixed(1)})` : "nobody");
 
 export default function MovesTab({ league, onPlayer }: { league: string; onPlayer: (id: string) => void }) {
   const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [showEngine, setShowEngine] = useState(false);
-  const [boardPos, setBoardPos] = useState("");
-  const [allMoves, setAllMoves] = useState(false);
+  const [boardPos, setBoardPos] = useState<string | null>(null);
+  const narrow = useIsNarrow();
+  const [query, setQuery] = useState("");
+  // Default off: of ~150 available players most would not start for you,
+  // and showing them by default buries the handful that would.
+  const [includeAll, setIncludeAll] = useState(false);
   const [allBoard, setAllBoard] = useState(false);
   const [allStash, setAllStash] = useState(false);
+  const [allChopped, setAllChopped] = useState(false);
 
   useEffect(() => {
-    setData(null);
+    let cancelled = false;
     fetch(`/api/fantasy/moves?league=${encodeURIComponent(league)}`)
       .then((r) => r.json())
-      .then((d) => (d.error ? setErr(d.error) : (setErr(null), setData(d))))
-      .catch((e) => setErr(String(e)));
+      .then((d) => {
+        if (cancelled) return;
+        if (d.error) setErr(d.error);
+        else setData(d);
+      })
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => {
+      cancelled = true;
+    };
   }, [league]);
 
-  if (err) return <div className="p-6 text-sm text-red-400">{err}</div>;
-  if (!data) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  if (err) return <ErrorBox>{err}</ErrorBox>;
+  if (!data) return <Loading label="Loading moves…" rows={6} />;
 
-  const Name = ({ id, name, pos, team, inj }: { id: string; name: string; pos?: string | null; team?: string | null; inj?: string | null }) => (
-    <>
-      <button onClick={() => onPlayer(id)} className="text-left text-gray-100 hover:text-indigo-300 hover:underline">
-        {name}
-      </button>
-      <span className="ml-1.5 text-xs text-gray-500">
-        {pos}
-        {team ? ` · ${team}` : ""}
-      </span>
-      {inj && (
-        <>
-          {" "}
-          <Badge tone="warning">{inj}</Badge>
-        </>
-      )}
-    </>
-  );
-
-  const Rank = ({ o }: { o: Overlay }) =>
-    o?.rank ? (
-      <span className="whitespace-nowrap tabular-nums text-gray-300" title={Object.entries(o.ranks).map(([s, v]) => `${srcShort(s)} ${v}`).join(", ")}>
-        {o.rank.median}
-        <span className="text-gray-600"> ({o.rank.best}–{o.rank.worst})</span>
-        {o.delta != null && o.delta !== 0 && <span className={o.delta > 0 ? "text-green-400" : "text-red-400"}> {o.delta > 0 ? "▲" : "▼"}{Math.abs(o.delta)}</span>}
-      </span>
-    ) : (
-      <span className="text-gray-700">—</span>
-    );
-
-  // The newest injury / out / role / return wire note rides in the Sites
-  // cell (same shape as Lineup's NoteLine) so no table gains a column.
-  const Sites = ({ o }: { o: Overlay }) =>
-    o?.claims ? (
-      <span>
-        <span className="inline-flex flex-wrap gap-1">
-          {Object.entries(o.claims.by_action)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([a, n]) => (
-              <Badge key={a} tone={ACTION_TONE[a] ?? "neutral"}>
-                {a}
-                {n > 1 ? ` ×${n}` : ""}
-              </Badge>
-            ))}
-          <span className="text-[11px] text-gray-600">{o.claims.n_sources} {o.claims.n_sources === 1 ? "site" : "sites"}</span>
-        </span>
-        {o.claims.evidence[0] && (
-          <div className="mt-0.5 max-w-[26rem] text-[11px] text-gray-500">
-            <SrcLink e={o.claims.evidence[0]} /> {o.claims.evidence[0].rationale}
-          </div>
-        )}
-        <NoteLine note={o.note} />
-      </span>
-    ) : o?.note ? (
-      <span>
-        <NoteLine note={o.note} className="max-w-[26rem] whitespace-normal text-[11px] font-normal text-gray-400" />
-      </span>
-    ) : (
-      <span className="text-xs text-gray-700">quiet</span>
-    );
-
-  const CrowdCell = ({ o }: { o: Overlay }) =>
-    o?.crowd?.verdict ? (
-      <span className="text-xs" title={o.crowd.why ?? ""}>
-        <Badge tone={o.crowd.verdict.startsWith("move now") ? "critical" : o.crowd.verdict.startsWith("rising") ? "info" : o.crowd.verdict.startsWith("your league") ? "warning" : "neutral"}>
-          {o.crowd.verdict}
-        </Badge>
-        {o.crowd.pct_owned != null && <span className="ml-1 text-gray-600">{o.crowd.pct_owned}% owned</span>}
-      </span>
-    ) : (
-      <span className="text-xs text-gray-700">—</span>
-    );
-
-  const MOVES_SHOWN = 5;
-  const BOARD_SHOWN = 8;
-  const STASH_SHOWN = 3;
+  const weekly = data.horizon !== "ros";
   const movesAll = [...data.add_now, ...data.claim_wednesday];
-  // The engine's add/drop pairs used to be their own table above the board,
-  // which showed the same players twice. They are now a column on the board.
   const moveById = new Map<string, Move>();
   for (const m of movesAll) if (!moveById.has(m.player_id)) moveById.set(m.player_id, m);
-  const MoveCell = ({ m }: { m: Move | null }) =>
-    m ? (
-      <div>
-        {m.availability === "free_agent" ? <Badge tone="good">add now</Badge> : <Badge tone="warning">claim</Badge>}
-        <span className="ml-1 tabular-nums text-green-400">+{m.gain.toFixed(1)}</span>
-        <div className="text-gray-500">
-          {m.drop && !sharedDrop && (
-            <>
-              drop {m.drop.name} <span className="text-gray-600">({m.drop.projected.toFixed(1)})</span>
-            </>
-          )}
-          {m.availability !== "free_agent" && (
-            <>
-              {m.drop && !sharedDrop ? " · " : ""}
-              {m.clears_at ?? ""}
-              {m.suggested_pct != null && <> · bid {m.suggested_pct}%</>}
-            </>
-          )}
-        </div>
-      </div>
-    ) : (
-      <span className="text-gray-700" title="does not improve your starting lineup">—</span>
-    );
   // Thirteen rows all dropping the same bench player is one fact, not a column.
   const firstDrop = movesAll[0]?.drop ?? null;
   const sharedDrop =
     movesAll.length > 1 && firstDrop && movesAll.every((m) => m.drop?.player_id === firstDrop.player_id) ? firstDrop : null;
+
   // Rest-of-season points put five team defences above every skill player on
   // the dynasty board; nobody is stashing a kicker for 2027.
-  const boardPool = data.horizon === "ros" ? data.board.filter((c) => c.position !== "DEF" && c.position !== "K") : data.board;
+  const boardPool = weekly ? data.board : data.board.filter((c) => c.position !== "DEF" && c.position !== "K");
+  const present = new Set(boardPool.map((c) => c.position));
+  const positions = [
+    ...(FLEX_MEMBERS.some((p) => present.has(p)) ? ["FLEX"] : []),
+    ...POSITION_ORDER.filter((p) => present.has(p)),
+  ];
+  const wanted = boardPos === "FLEX" ? FLEX_MEMBERS : boardPos ? [boardPos] : null;
+
+  // The board's controls. Desktop: search, position chips and the include
+  // toggle in the card header. Phone: the toggle beside the title ("Non-
+  // starters"), and search with a position dropdown on one row under it;
+  // seven chips and a full-width search were three rows before any player.
+  const includeToggle = (
+    <label className="flex items-center gap-1.5 whitespace-nowrap text-xs text-gray-400 sm:ml-auto">
+      <input
+        type="checkbox"
+        checked={includeAll}
+        onChange={(e) => setIncludeAll(e.target.checked)}
+        disabled={!!query.trim()}
+        className="accent-indigo-500"
+      />
+      {narrow ? "Non-starters" : <>Include players who wouldn&rsquo;t start</>}
+    </label>
+  );
+  const boardControls = (
+    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search the board…"
+        aria-label="Search the board by name or team"
+        className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-100 placeholder:text-gray-600 sm:w-44 sm:flex-none"
+      />
+      {narrow ? (
+        <Select
+          aria-label="Position"
+          label="Pos"
+          value={boardPos ?? ""}
+          onChange={(v) => setBoardPos(v || null)}
+          options={[{ value: "", label: "All" }, ...positions.map((p) => ({ value: p, label: p }))]}
+        />
+      ) : (
+        <div role="group" aria-label="Position" className="flex flex-wrap gap-1">
+          {[null, ...positions].map((p) => (
+            <button
+              key={p ?? "all"}
+              type="button"
+              onClick={() => setBoardPos(p)}
+              aria-pressed={boardPos === p}
+              title={p === "FLEX" ? "RB, WR and TE: anyone who can fill a flex slot" : undefined}
+              className={`min-w-[2.25rem] rounded px-2 py-1 text-center text-xs font-medium ring-1 ring-inset transition-colors ${
+                boardPos === p
+                  ? "bg-indigo-500/15 text-indigo-300 ring-indigo-500/40"
+                  : "bg-gray-800 text-gray-400 ring-gray-700 hover:text-gray-200"
+              }`}
+            >
+              {p ?? "All"}
+            </button>
+          ))}
+        </div>
+      )}
+      {!narrow && weekly && includeToggle}
+    </div>
+  );
+  const q = query.trim().toLowerCase();
+  // "Would start" is a this-week question, so the filter applies only to a
+  // weekly board; the dynasty board is a rest-of-season shopping list. A name
+  // search is an explicit request for that player and overrides it.
+  const wouldStart = (c: Cand) => moveById.has(c.player_id) || (c.over_bar ?? 0) > 0;
   const boardAll = boardPool
-    .filter((c) => !boardPos || c.position === boardPos)
+    .filter((c) => !wanted || wanted.includes(c.position))
+    .filter((c) => (q ? `${c.name} ${c.team ?? ""}`.toLowerCase().includes(q) : !weekly || includeAll || wouldStart(c)))
     .sort((x, y) => (moveById.has(y.player_id) ? 1 : 0) - (moveById.has(x.player_id) ? 1 : 0));
   const board = allBoard ? boardAll : boardAll.slice(0, BOARD_SHOWN);
-  const positions = Array.from(new Set(boardPool.map((c) => c.position))).sort();
-  // "FLEX Kayshon Boutte (7.0)" on 35 of 40 rows made an 80px column four
-  // lines tall. The value most rows share is stated once in the subtitle and
-  // only the exceptions say who they would push out, under the name.
-  const displacesKey = (d: Cand["displaces"]) => (d ? `${d.slot} ${d.name}` : "");
+  const showMove = movesAll.length > 0;
+
+  // "FLEX Kayshon Boutte (7.0)" on 35 of 40 rows made a column four lines
+  // tall. The value most rows share is stated once in the subtitle and only
+  // the exceptions say who they would push out, under the name. With no
+  // majority, every row says it there.
+  const displacesKey = (d: Displaces) => (d ? `${d.slot} ${d.name}` : "");
   const displacesCount = new Map<string, number>();
   for (const c of boardAll) if (c.displaces) displacesCount.set(displacesKey(c.displaces), (displacesCount.get(displacesKey(c.displaces)) ?? 0) + 1);
   const commonKey = [...displacesCount.entries()].sort((a, b) => b[1] - a[1])[0];
   const sharedDisplaces =
-    data.horizon !== "ros" && commonKey && boardAll.length > 1 && commonKey[1] * 2 >= boardAll.length
+    weekly && commonKey && boardAll.length > 1 && commonKey[1] * 2 >= boardAll.length
       ? boardAll.find((c) => displacesKey(c.displaces) === commonKey[0])?.displaces ?? null
       : null;
   const isException = (c: Cand) => sharedDisplaces != null && displacesKey(c.displaces) !== displacesKey(sharedDisplaces);
+  const displacesLine = (c: Cand) => weekly && c.displaces != null && (sharedDisplaces == null || isException(c));
+
   const stash = allStash ? data.stash : data.stash.slice(0, STASH_SHOWN);
 
   // Guillotine: last week's chopped roster is the week's market, priced by
-  // the same board as the fold and capped by the FantasyLife bands.
+  // the same board rows and capped by the FantasyLife bands.
   const g = data.guillotine ?? null;
   const chopped = g?.chopped ?? null;
   const choppedFull = chopped && chopped.week != null && "eliminated" in chopped ? chopped : null;
+  const unclaimed = chopped ? chopped.players.filter((p) => p.claimed_by == null) : [];
+  const claimed = chopped ? chopped.players.filter((p) => p.claimed_by != null) : [];
+  const choppedRows = allChopped ? unclaimed : unclaimed.slice(0, CHOPPED_SHOWN);
+  const qbVsRb = g?.qb_premium.qb_vs_rb;
+  // A bid, rivals and reasons only mean something while he is on waivers; a
+  // free agent's Fate already says everything ("free agent"), and an
+  // unpriced one has no market to reason from.
+  const biddable = (p: Released) => p.board?.availability === "waivers" && p.guidance != null;
+  // The chop is this week's market only while a released player is still on
+  // waivers; once they have all cleared or been claimed it is history and
+  // goes below the Board.
+  const choppedLive = unclaimed.some((p) => p.board?.availability === "waivers");
+  // With nobody left to bid on, Bid, Rivals and Why would be a column of dashes each.
+  const anyBid = choppedRows.some(biddable);
 
-  const Fate = ({ p }: { p: Released }) =>
-    p.claimed_by != null ? (
-      <Badge tone="neutral">claimed by {p.claimed_by_me ? "you" : p.claimed_by}</Badge>
-    ) : p.board == null ? (
-      <span className="text-gray-600">unpriced</span>
-    ) : p.board.availability === "free_agent" ? (
-      <span className="text-green-400">free agent</span>
-    ) : (
-      <span className="text-gray-400">on waivers{p.board.clears_at ? ` until ${p.board.clears_at}` : ""}</span>
+  const empty = q
+    ? `No match for “${query.trim()}” among the ${boardPool.length} priced available players${boardPos ? ` at ${boardPos}` : ""}.`
+    : weekly && !includeAll
+      ? "Nobody available would start for you this week."
+      : "No available player at this position.";
+
+  let choppedCard: ReactNode = null;
+  if (g && chopped && chopped.players.length === 0) choppedCard = <QuietLine title="Chopped roster">{chopped.note}</QuietLine>;
+  else if (g && chopped)
+    choppedCard = (
+      <Card
+        title="Chopped roster"
+        subtitle={
+          choppedFull
+            ? `week ${choppedFull.week} chop: ${choppedFull.eliminated.join(", ")} · your budget left $${choppedFull.my_budget_left} of $${choppedFull.budget} · ${choppedFull.rivals_flush} of ${choppedFull.rivals_alive} rivals still hold 50%+${qbVsRb != null ? ` · QB worth ${qbVsRb}x RB here` : ""}`
+            : qbVsRb != null
+              ? `QB worth ${qbVsRb}x RB here`
+              : undefined
+        }
+      >
+        <Note>{chopped.note}</Note>
+        <Note>{g.qb_premium.note}</Note>
+        {unclaimed.length > 0 ? (
+          <div className="ff-stack-wrap overflow-x-auto">
+            {/* On a phone the row head is the whole row but the reasons: name
+                and projection, then fate, bid and rivals on one meta line. */}
+            <table className="ff-stack w-full">
+              <thead>
+                <tr>
+                  <Th>Player</Th>
+                  <Th className="hidden sm:table-cell">Fate</Th>
+                  <Th className="hidden text-right sm:table-cell">Proj</Th>
+                  {anyBid && (
+                    <>
+                      <Th className="hidden text-right sm:table-cell">Bid</Th>
+                      <Th className="hidden sm:table-cell">Rivals</Th>
+                      <Th>Why</Th>
+                    </>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {choppedRows.map((p) => {
+                  const gd = biddable(p) ? p.guidance : null;
+                  const proj = p.board?.projected ?? null;
+                  const budget = choppedFull?.budget ?? data.budget;
+                  return (
+                    <tr key={p.player_id} className="border-t border-gray-800/60 align-top">
+                      <Td data-label="" className="ff-row-head">
+                        <div className="flex items-baseline gap-2">
+                          <div className="min-w-0 flex-1">
+                            <PlayerName id={p.player_id} name={p.name} pos={p.position} team={p.team} injury={p.injury_status} onPlayer={onPlayer} />
+                          </div>
+                          {proj != null && (
+                            <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-gray-200 sm:hidden">
+                              {proj.toFixed(1)}
+                              <OverBar v={p.board?.over_bar} />
+                            </span>
+                          )}
+                        </div>
+                        <MetaLine className="mt-0.5 sm:hidden">
+                          <span>
+                            <Fate p={p} />
+                          </span>
+                          {gd?.bid != null && (
+                            <span className="whitespace-nowrap">
+                              <Bid bid={gd.bid} pct={gd.bid_pct_of_budget} budget={budget} />{" "}
+                              <Badge tone={BAND_TONE[gd.band]}>{gd.band}</Badge>
+                            </span>
+                          )}
+                          {gd && <span>{gd.rivals_who_can_outbid} can outbid</span>}
+                        </MetaLine>
+                      </Td>
+                      <Td data-label="Fate" className="hidden text-xs sm:table-cell">
+                        <Fate p={p} />
+                      </Td>
+                      <Td data-label="Proj" className="hidden text-right tabular-nums sm:table-cell">
+                        {proj != null ? (
+                          <>
+                            <span className="whitespace-nowrap text-gray-200">{proj.toFixed(1)}</span>
+                            <OverBar v={p.board?.over_bar} />
+                          </>
+                        ) : (
+                          <span className="text-gray-700">—</span>
+                        )}
+                      </Td>
+                      {anyBid && (
+                        <>
+                          <Td data-label="Bid" className="hidden text-right text-xs sm:table-cell">
+                            {gd?.bid != null ? (
+                              <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5 gap-y-0.5">
+                                <span
+                                  className="font-semibold tabular-nums text-gray-100"
+                                  title={gd.bid_pct_of_budget != null ? `${gd.bid_pct_of_budget}% of the $${budget} budget` : undefined}
+                                >
+                                  ${gd.bid}
+                                </span>
+                                <Badge tone={BAND_TONE[gd.band]}>{gd.band}</Badge>
+                              </span>
+                            ) : (
+                              <span className="text-gray-700">—</span>
+                            )}
+                          </Td>
+                          <Td data-label="Rivals" className="hidden text-xs text-gray-400 sm:table-cell">
+                            {gd ? `${gd.rivals_who_can_outbid} can outbid` : <span className="text-gray-700">—</span>}
+                          </Td>
+                          <Td data-label="" block empty={!gd?.why.length} className="text-[11px] text-gray-500">
+                            {gd && gd.why.length > 0 ? (
+                              <div className="max-w-[26rem]">
+                                {gd.why.map((w, i) => (
+                                  <div key={i}>{w}</div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-gray-700">—</span>
+                            )}
+                          </Td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-500">Every released player has been claimed.</p>
+        )}
+        <FoldToggle total={unclaimed.length} shown={choppedRows.length} expanded={allChopped} onToggle={() => setAllChopped((v) => !v)} />
+        {claimed.length > 0 && (
+          <p className="mt-2 text-xs text-gray-500">
+            <span className="text-gray-400">Already claimed:</span>{" "}
+            {claimed.map((p, i) => (
+              <span key={p.player_id}>
+                {i > 0 && ", "}
+                <PlayerName id={p.player_id} name={p.name} onPlayer={onPlayer} /> ({p.claimed_by_me ? "you" : p.claimed_by})
+              </span>
+            ))}
+          </p>
+        )}
+      </Card>
     );
 
   return (
     <div className="space-y-4">
-      {g && chopped && (
+      {choppedLive && choppedCard}
+
+      {boardPool.length === 0 ? (
+        <QuietLine title="Board">No available players are priced for this league yet.</QuietLine>
+      ) : (
         <Card
-          title="Chopped roster"
+          title="Board"
           subtitle={
-            choppedFull
-              ? `week ${choppedFull.week} chop: ${choppedFull.eliminated.join(", ")} · your budget left $${choppedFull.my_budget_left} of $${choppedFull.budget} · ${choppedFull.rivals_flush} of ${choppedFull.rivals_alive} rivals still hold 50%+`
-              : undefined
+            (sharedDrop || sharedDisplaces) && (
+              <>
+                {sharedDrop && (
+                  <>
+                    Every move here drops <span className="text-gray-300">{sharedDrop.name}</span>
+                    {sharedDrop.projected != null && ` (${sharedDrop.projected.toFixed(1)})`}.
+                  </>
+                )}
+                {sharedDisplaces && (
+                  <>
+                    {sharedDrop ? " " : ""}
+                    {boardAll.some(isException) ? "Most" : "Everyone"} here would displace{" "}
+                    <span className="text-gray-300">{displacesText(sharedDisplaces)}</span>
+                    {boardAll.some(isException) ? "; the exceptions say who." : "."}
+                  </>
+                )}
+              </>
+            )
           }
+          // Search, position and the include toggle ride in the header: a row
+          // of their own, plus a subtitle and "Lineup now" (which Lineup
+          // shows), cost ~110px before the first player. On a phone only the
+          // toggle does; search and position are one row under the title.
+          rightStacks={!narrow}
+          right={narrow ? weekly && includeToggle : boardControls}
         >
-          {chopped.players.length === 0 ? (
-            <p className="text-xs text-gray-600">{chopped.note}</p>
+          <Note>
+            {weekly
+              ? "Proj is this week's projection under this league's scoring; the signed number beside it is how far he clears (green) or misses (gray) the replacement bar at your weakest startable slot. The line under a name says which starter he would push out, where that is not the one the subtitle names."
+              : "Ordered by rest-of-season points under this league's scoring. Defences and kickers are left out."}{" "}
+            Availability says whether he is free now or on waivers, when the waivers clear, and the range his projection
+            tier has gone for in this league (median to p75) — a market price, not a bid. Move is the engine's call: a
+            free add or a Wednesday claim, the lineup gain, who to drop for him, and the bid in dollars. The crowd badge
+            under a name is demand, not production: rivals' adds in your other leagues, national risers, ESPN ownership.
+          </Note>
+          {data.notes.inference && <Note>{data.notes.inference}</Note>}
+          {narrow && <div className="mb-3">{boardControls}</div>}
+
+          {boardAll.length === 0 ? (
+            <p className="text-xs text-gray-500">{empty}</p>
           ) : (
-            <>
-              <div className="ff-stack-wrap overflow-x-auto">
-                <table className="ff-stack w-full">
-                  <thead>
-                    <tr>
-                      <Th>Player</Th>
-                      <Th>Fate</Th>
-                      <Th className="text-right">Proj</Th>
-                      <Th className="text-right">Bid</Th>
-                      <Th>Rivals</Th>
-                      <Th>Why</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {chopped.players.map((p) => (
-                      <tr key={p.player_id} className="border-t border-gray-800/60 align-top">
-                        <Td data-label="" className="ff-row-head whitespace-nowrap">
-                          <Name id={p.player_id} name={p.name} pos={p.position} team={p.team} inj={p.injury_status} />
-                        </Td>
-                        <Td data-label="Fate" className="text-xs">
-                          <Fate p={p} />
-                        </Td>
-                        <Td data-label="Proj" className="whitespace-nowrap text-right tabular-nums">
-                          {p.board?.projected != null ? (
-                            <span>
-                              <span className="text-gray-200">{p.board.projected.toFixed(1)}</span>
-                              {p.board.over_bar != null && (
-                                <span className="ml-1 text-[11px] text-gray-500">
-                                  ({p.board.over_bar >= 0 ? "+" : ""}
-                                  {p.board.over_bar.toFixed(1)})
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-gray-700">—</span>
-                          )}
-                        </Td>
-                        <Td data-label="Bid" className="text-right text-xs">
-                          {p.guidance?.bid != null ? (
-                            <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5 gap-y-0.5">
-                              <span className="font-semibold tabular-nums text-gray-100">${p.guidance.bid}</span>
-                              {p.guidance.bid_pct_of_budget != null && <span className="text-gray-500">{p.guidance.bid_pct_of_budget}% of budget</span>}
-                              <Badge tone={BAND_TONE[p.guidance.band]}>{p.guidance.band}</Badge>
-                            </span>
-                          ) : (
-                            <span className="text-gray-700">—</span>
-                          )}
-                        </Td>
-                        <Td data-label="Rivals" className="whitespace-nowrap text-xs text-gray-400">
-                          {p.guidance ? `${p.guidance.rivals_who_can_outbid} can outbid` : "—"}
-                        </Td>
-                        <Td data-label="Why" className="text-[11px] text-gray-500">
-                          {p.guidance && p.guidance.why.length > 0 ? (
-                            <div className="max-w-[26rem]">
-                              {p.guidance.why.map((w, i) => (
-                                <div key={i}>{w}</div>
-                              ))}
+            <div className="ff-stack-wrap overflow-x-auto">
+              {/* Fixed widths from lg (the desktop card is ~785px) so every
+                  column keeps its size whatever the rows hold, and Sites say
+                  takes what is left: ~320px, or ~190px with Move shown. On a
+                  phone the row head is the whole row but the sites' call: name
+                  and the projection, then the move or availability, rank and
+                  crowd on one meta line. */}
+              <table className="ff-stack w-full lg:table-fixed">
+                <thead>
+                  <tr>
+                    <Th className="w-[24%]">Player</Th>
+                    <Th className="hidden w-[5rem] text-right sm:table-cell">{weekly ? "Proj" : "ROS pts"}</Th>
+                    <Th className="hidden w-[7rem] sm:table-cell">Availability</Th>
+                    {showMove && <Th className="hidden w-[8.5rem] sm:table-cell">Move</Th>}
+                    <Th className="hidden w-[5rem] sm:table-cell">Rank</Th>
+                    <Th>Sites say</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {board.map((c) => {
+                    const pts = weekly ? c.projected : c.ros_points;
+                    const o = c.overlay;
+                    const m = moveById.get(c.player_id) ?? null;
+                    return (
+                      <tr key={c.player_id} className="border-t border-gray-800/60 align-top">
+                        <Td data-label="" className="ff-row-head">
+                          <div className="flex items-baseline gap-2">
+                            <div className="min-w-0 flex-1">
+                              <PlayerName id={c.player_id} name={c.name} pos={c.position} team={c.team} injury={c.injury_status} onPlayer={onPlayer} />
                             </div>
-                          ) : (
-                            <span className="text-gray-700">—</span>
+                            {pts != null && (
+                              <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-gray-200 sm:hidden">
+                                {pts.toFixed(1)}
+                                {weekly ? <OverBar v={c.over_bar} /> : <span className="ml-1 text-[11px] text-gray-500">ROS</span>}
+                              </span>
+                            )}
+                          </div>
+                          {displacesLine(c) && (
+                            <div className="text-[11px] font-normal text-gray-500">displaces {displacesText(c.displaces)}</div>
                           )}
+                          {o?.crowd?.verdict && (
+                            <div className="mt-0.5 hidden font-normal sm:block">
+                              <CrowdBadge o={o} />
+                            </div>
+                          )}
+                          <MetaLine className="mt-0.5 sm:hidden">
+                            {m ? (
+                              <span className="whitespace-nowrap">
+                                {moveBadge(m)}
+                                <span className="ml-1 tabular-nums text-green-400">{signed(m.gain)}</span>
+                              </span>
+                            ) : (
+                              c.availability === "free_agent" && <span className="text-green-400">free</span>
+                            )}
+                            {/* A claim badge already says waivers; it needs only the clear time. */}
+                            {c.availability !== "free_agent" && (c.clears_at_iso || !m) && (
+                              <span>
+                                {m ? "clears" : "waivers"}
+                                {c.clears_at_iso && ` ${m ? "" : "till "}${fmtDateTime(c.clears_at_iso)}`}
+                              </span>
+                            )}
+                            {m && m.availability !== "free_agent" && m.suggested_bid != null && (
+                              <Bid bid={m.suggested_bid} pct={m.suggested_pct} budget={data.budget} />
+                            )}
+                            {m?.drop && !sharedDrop && (
+                              <span>
+                                drop <PlayerName id={m.drop.player_id} name={m.drop.name} onPlayer={onPlayer} />
+                              </span>
+                            )}
+                            {o?.rank && (
+                              <span>
+                                <RankText pos={c.position} median={o.rank.median} best={o.rank.best} worst={o.rank.worst} delta={o.delta} />
+                              </span>
+                            )}
+                            {o?.crowd?.verdict && <CrowdBadge o={o} />}
+                          </MetaLine>
+                        </Td>
+                        <Td data-label={weekly ? "Proj" : "ROS pts"} className="hidden text-right tabular-nums text-gray-200 sm:table-cell">
+                          <span className="whitespace-nowrap">{pts != null ? pts.toFixed(1) : "—"}</span>
+                          {weekly && <OverBar v={c.over_bar} />}
+                        </Td>
+                        <Td data-label="Availability" className="hidden text-xs sm:table-cell">
+                          <Availability c={c} />
+                        </Td>
+                        {showMove && (
+                          <Td data-label="Move" className="hidden text-xs sm:table-cell">
+                            <MoveCell m={m} sharedDrop={sharedDrop != null} budget={data.budget} onPlayer={onPlayer} />
+                          </Td>
+                        )}
+                        <Td data-label="Rank" className="hidden text-xs sm:table-cell">
+                          <RankText pos={c.position} median={o?.rank?.median} best={o?.rank?.best} worst={o?.rank?.worst} delta={o?.delta} />
+                        </Td>
+                        <Td data-label="" block empty={!hasSites(o)} className="text-xs">
+                          <Sites o={o} />
                         </Td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-[11px] text-gray-600">{chopped.note}</p>
-            </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
+          <FoldToggle total={boardAll.length} shown={board.length} expanded={allBoard} onToggle={() => setAllBoard((v) => !v)} mode="all" />
         </Card>
       )}
 
-      {g && (
-        <Card title="Superflex QB premium">
-          <p className="text-sm text-gray-200">
-            {g.qb_premium.teams} teams · up to {g.qb_premium.qb_starters_max} QB starters vs {g.qb_premium.nfl_starting_jobs} NFL jobs
-            {g.qb_premium.qb_vs_rb != null && <> · QB worth {g.qb_premium.qb_vs_rb}x RB here</>}
-          </p>
-          <p className="mt-1 text-xs text-gray-500">{g.qb_premium.note}</p>
-        </Card>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Lineup now" value={data.lineup_total?.toFixed(1) ?? "—"} hint={`week ${data.week}`} />
-        <StatTile
-          label="Adds that help"
-          value={movesAll.length}
-          hint={sharedDrop ? `all for the same drop slot` : "improve your starting lineup"}
-          tone={movesAll.length ? "good" : "default"}
-        />
-        <StatTile label="Drop talk" value={data.drops.filter((d) => d.drop_talk > 0).length} hint="bench players the sites say drop" />
-        <StatTile label="Crowd" value={data.crowd.length} hint="actionable demand signals" />
-      </div>
-
-      <Card
-        title="Board"
-        subtitle={
-          <>
-            {data.horizon === "ros"
-              ? "Available players ordered by rest-of-season points under this league's scoring, with the rest-of-season consensus rank. Defences and kickers are left out."
-              : "Available players who clear the replacement bar, by projection under this league's scoring."}
-            {" "}Move is the engine's call: who to drop for him and whether he is a free add or a Wednesday claim with a bid as percent of budget.
-            {sharedDrop && (
-              <>
-                {" "}Every move here drops <span className="text-gray-300">{sharedDrop.name}</span> ({sharedDrop.projected.toFixed(1)}).
-              </>
-            )}
-            {data.horizon !== "ros" &&
-              (sharedDisplaces ? (
-                <>
-                  {" "}
-                  {boardAll.some(isException) ? "Most" : "Everyone"} here would displace{" "}
-                  <span className="text-gray-300">{sharedDisplaces.slot} {sharedDisplaces.name}</span> ({sharedDisplaces.points.toFixed(1)})
-                  {boardAll.some(isException) ? "; the exceptions say who." : "."}
-                </>
-              ) : (
-                " Displaces says which of your starters he would push out."
-              ))}
-          </>
-        }
-        right={
-          <Select
-            aria-label="Board position"
-            size="sm"
-            value={boardPos}
-            onChange={setBoardPos}
-            options={[{ value: "", label: "all positions" }, ...positions.map((p) => ({ value: p, label: p }))]}
-          />
-        }
-      >
-        <div className="ff-stack-wrap overflow-x-auto">
-          <table className="ff-stack w-full">
-            <thead>
-              <tr>
-                <Th>Player</Th>
-                <Th>Move</Th>
-                <Th className="text-right">{data.horizon === "ros" ? "ROS pts" : "Proj"}</Th>
-                {!sharedDisplaces && <Th>Displaces</Th>}
-                <Th>Availability</Th>
-                <Th>Rank</Th>
-                <Th>Sites say</Th>
-                <Th className="hidden xl:table-cell">Crowd</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {board.map((c) => (
-                <tr key={c.player_id} className="border-t border-gray-800/60 align-top">
-                  <Td data-label="" className="ff-row-head whitespace-nowrap">
-                    <Name id={c.player_id} name={c.name} pos={c.position} team={c.team} inj={c.injury_status} />
-                    {isException(c) && (
-                      <div className="text-[11px] font-normal text-gray-500">
-                        displaces {c.displaces ? `${c.displaces.slot} ${c.displaces.name} (${c.displaces.points.toFixed(1)})` : "nobody"}
-                      </div>
-                    )}
-                  </Td>
-                  <Td data-label="Move" className="text-xs">
-                    <MoveCell m={moveById.get(c.player_id) ?? null} />
-                  </Td>
-                  <Td data-label={data.horizon === "ros" ? "ROS pts" : "Proj"} className="whitespace-nowrap text-right tabular-nums text-gray-200">
-                    {data.horizon === "ros" ? (c.ros_points?.toFixed(0) ?? "—") : (c.projected?.toFixed(1) ?? "—")}
-                    {data.horizon !== "ros" && c.over_bar != null && <span className="text-[11px] text-green-500"> +{c.over_bar.toFixed(1)}</span>}
-                  </Td>
-                  {!sharedDisplaces && (
-                    <Td data-label="Displaces" className="text-xs text-gray-500">
-                      {c.displaces ? `${c.displaces.slot} ${c.displaces.name} (${c.displaces.points.toFixed(1)})` : "—"}
-                    </Td>
-                  )}
-                  <Td data-label="Availability" className="text-xs">
-                    {c.availability === "free_agent" ? (
-                      <span className="whitespace-nowrap text-green-400">free · add now</span>
-                    ) : (
-                      <span className="text-gray-400">
-                        waivers{c.clears_at ? ` · ${c.clears_at}` : ""}
-                        {c.bid_applies && c.market_low != null && <span className="text-gray-500"> · ${c.market_low}–{c.market_high}</span>}
-                      </span>
-                    )}
-                  </Td>
-                  <Td data-label="Rank" className="text-xs">
-                    <Rank o={c.overlay} />
-                  </Td>
-                  <Td data-label="Sites say" className="text-xs">
-                    <div>
-                      <Sites o={c.overlay} />
-                      {c.overlay?.crowd?.verdict && (
-                        <div className="mt-1 xl:hidden">
-                          <CrowdCell o={c.overlay} />
-                        </div>
-                      )}
-                    </div>
-                  </Td>
-                  <Td data-label="Crowd" className="hidden whitespace-nowrap xl:table-cell">
-                    <CrowdCell o={c.overlay} />
-                  </Td>
-                </tr>
-              ))}
-              {boardAll.length === 0 && (
-                <tr>
-                  <Td data-label="" className="text-xs text-gray-600" colSpan={8}>
-                    Nobody at this position clears the bar.
-                  </Td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <FoldToggle total={boardAll.length} shown={board.length} expanded={allBoard} onToggle={() => setAllBoard((v) => !v)} mode="all" />
-      </Card>
+      {!choppedLive && choppedCard}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="Drop candidates" subtitle="Your bench, weakest projection first. Drop talk from the sites is called out; hold or stash talk argues the other way.">
-          <ul className="space-y-1.5">
-            {data.drops.map((d) => (
-              <li key={d.player_id} className="flex flex-wrap items-baseline gap-2 text-sm">
-                <Name id={d.player_id} name={d.name} pos={d.position} team={d.team} />
-                <span className="tabular-nums text-xs text-gray-500">{d.projected?.toFixed(1) ?? "0.0"}</span>
-                {d.drop_talk > 0 && <Badge tone="critical">drop talk{d.drop_talk > 1 ? ` ×${d.drop_talk}` : ""}</Badge>}
-                {d.hold_talk > 0 && <Badge tone="info">hold/stash talk</Badge>}
-                <span className="ml-auto text-xs">
-                  <Rank o={d.overlay} />
-                </span>
-                {d.overlay?.note && <NoteLine note={d.overlay.note} className="basis-full whitespace-normal text-[11px] text-gray-400" />}
-              </li>
-            ))}
-          </ul>
-        </Card>
-        <Card title="Stash" subtitle="Contingent value the board would never surface (a handcuff behind a hurt starter) and free agents the sites say stash.">
-          {data.stash.length === 0 ? (
-            <p className="text-xs text-gray-600">Nothing to stash right now.</p>
-          ) : (
-            <>
-              <ul className="space-y-1.5">
-                {stash.map((s, i) => (
-                  <li key={`${s.kind}-${s.player_id ?? i}`} className="text-sm">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      {s.player_id && s.name ? <Name id={s.player_id} name={s.name} pos={s.position} team={s.team ?? undefined} /> : <span className="text-gray-300">{String(s.name ?? "")}</span>}
-                      <Badge tone={s.kind === "contingent" ? "warning" : "info"}>{s.kind === "contingent" ? "contingent" : "stash talk"}</Badge>
+        {data.drops.length === 0 ? (
+          <QuietLine title="Drop candidates">
+            No bench players to spare.
+            {(data.drop_holds ?? []).length > 0 && ` Held on value: ${(data.drop_holds ?? []).map((h) => h.name).join(", ")}.`}
+            {(data.drop_trade ?? []).length > 0 && ` Trade instead: ${(data.drop_trade ?? []).map((t) => t.name).join(", ")} (see Trades).`}
+          </QuietLine>
+        ) : (
+          <Card title="Drop candidates">
+            <Note>
+              Bench players the roster can spare on rest-of-season value, cheapest first: the ROS points you give up
+              over the best free agent at his position (market value first in dynasty). This week&apos;s projection and a
+              short injury do not put anyone here; a bench player who makes your best rest-of-season lineup is held.
+              A spare who would start for a rival is a trade chip, not a drop: he is under Trade instead. Drop talk
+              from the sites is called out; hold or stash talk argues the other way.
+            </Note>
+            <ul className="space-y-2">
+              {data.drops.map((d) => {
+                const pts = d.ros_points ?? null;
+                const rk = d.ros_rank ?? d.overlay?.rank ?? null;
+                return (
+                  <li key={d.player_id} className="text-sm">
+                    <div className="flex items-baseline gap-2">
+                      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+                        <span>
+                          <PlayerName id={d.player_id} name={d.name} pos={d.position} team={d.team} injury={d.injury_status} onPlayer={onPlayer} />
+                        </span>
+                        <span className="whitespace-nowrap text-xs tabular-nums text-gray-500">
+                          {pts != null ? `${pts.toFixed(0)} ROS` : "—"}
+                        </span>
+                        {d.drop_talk > 0 && <Badge tone="critical">drop talk{d.drop_talk > 1 ? ` ×${d.drop_talk}` : ""}</Badge>}
+                        {d.hold_talk > 0 && <Badge tone="info">hold/stash talk</Badge>}
+                      </div>
+                      <span className="shrink-0 text-xs">
+                        <RankText pos={d.position} median={rk?.median} best={rk?.best} worst={rk?.worst} delta={d.ros_rank ? d.ros_rank_delta : d.overlay?.delta} />
+                      </span>
                     </div>
-                    <div className="text-xs">
+                    {d.why && <div className="text-xs text-gray-500">{d.why}</div>}
+                  </li>
+                );
+              })}
+            </ul>
+            {((data.drop_trade ?? []).length > 0 || (data.drop_holds ?? []).length > 0) && (
+              <div className="mt-2 space-y-0.5 text-xs text-gray-500">
+                {(data.drop_trade ?? []).map((t) => (
+                  <div key={`t-${t.player_id}`}>
+                    Trade instead: <PlayerName id={t.player_id} name={t.name} onPlayer={onPlayer} /> — {t.why}
+                  </div>
+                ))}
+                {(data.drop_holds ?? []).map((h) => (
+                  <div key={h.player_id}>
+                    Held: <PlayerName id={h.player_id} name={h.name} onPlayer={onPlayer} /> — {h.why}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {data.stash.length === 0 ? (
+          <QuietLine title="Stash">Nothing to stash right now.</QuietLine>
+        ) : (
+          <Card title="Stash">
+            <ul className="space-y-2">
+              {stash.map((s, i) => (
+                <li key={`${s.kind}-${s.player_id ?? i}`} className="text-sm">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span>
+                      {s.player_id ? (
+                        <PlayerName id={s.player_id} name={s.name ?? null} pos={s.position} team={s.team} onPlayer={onPlayer} />
+                      ) : (
+                        <span className="text-gray-300">{s.name ?? ""}</span>
+                      )}
+                    </span>
+                    <Badge tone={s.kind === "contingent" ? "warning" : "info"}>{s.kind === "contingent" ? "contingent" : "stash talk"}</Badge>
+                  </div>
+                  {hasSites(s.overlay) && (
+                    <div className="mt-0.5 text-xs">
                       <Sites o={s.overlay} />
                     </div>
-                    {typeof s.why === "string" && <div className="text-xs text-gray-500">{s.why}</div>}
-                  </li>
-                ))}
-              </ul>
-              <FoldToggle total={data.stash.length} shown={stash.length} expanded={allStash} onToggle={() => setAllStash((v) => !v)} />
-            </>
-          )}
-        </Card>
+                  )}
+                  {s.trigger && (
+                    <div className="text-xs text-gray-500" title={s.reasoning}>
+                      {s.trigger}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <FoldToggle total={data.stash.length} shown={stash.length} expanded={allStash} onToggle={() => setAllStash((v) => !v)} />
+          </Card>
+        )}
       </div>
 
-      <Card title="What the crowd is doing" subtitle="Added by a rival in another of your leagues, rising nationally, or owned everywhere but here. Demand, not production.">
-        {data.crowd.length === 0 ? (
-          <p className="text-xs text-gray-600">Nothing actionable.</p>
-        ) : (
-          <ul className="space-y-1.5">
+      {data.crowd.length === 0 ? (
+        <QuietLine title="What the crowd is doing">Nothing actionable.</QuietLine>
+      ) : (
+        <Card title="What the crowd is doing" info="Demand, not production: rivals' adds elsewhere, national risers, and players owned everywhere but here.">
+          <ul className="space-y-2">
             {data.crowd.map((c) => (
               <li key={c.player_id} className="text-sm">
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <Name id={c.player_id} name={c.name} pos={c.position} team={c.team} />
-                  <CrowdCell o={c.overlay} />
+                {/* One wrapping line: name, verdict, owned %, then the reason,
+                    which runs on beside them on a desktop and drops under
+                    them on a phone. The sites only when they said something. */}
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span>
+                    <PlayerName id={c.player_id} name={c.name} pos={c.position} team={c.team} onPlayer={onPlayer} />
+                  </span>
+                  <CrowdBadge o={c.overlay} withWhy={false} />
+                  {c.why && <span className="min-w-0 max-w-prose text-xs text-gray-500">{c.why}</span>}
                 </div>
-                {/* Sites on their own line: as an ml-auto tail they wrapped
-                    first and left the why-text stranded under a gap. */}
-                <div className="text-xs">
-                  <Sites o={c.overlay} />
-                </div>
-                {c.why && <div className="text-xs text-gray-500">{c.why}</div>}
+                {hasSites(c.overlay) && (
+                  <div className="mt-0.5 text-xs">
+                    <Sites o={c.overlay} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
-        )}
-      </Card>
+        </Card>
+      )}
 
-      <div className="rounded-lg border border-gray-800">
-        <button onClick={() => setShowEngine((v) => !v)} className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-gray-300 hover:text-gray-100">
-          <span>
-            Full waiver engine and market
-            <span className="ml-2 text-xs text-gray-500">price table · rivals' budgets · burn curves · searchable board · roster</span>
-          </span>
-          <span className="text-xs text-gray-500">{showEngine ? "hide" : "show"}</span>
-        </button>
-        {showEngine && (
-          <div className="border-t border-gray-800 p-3">
-            <WaiversTab league={league} key={`w-${league}`} />
-          </div>
-        )}
-      </div>
-      {data.notes.inference && <p className="text-[11px] text-gray-600">{data.notes.inference}</p>}
+      {data.market && <FaabMarket market={data.market} budget={data.budget} week={data.week} />}
     </div>
   );
 }
