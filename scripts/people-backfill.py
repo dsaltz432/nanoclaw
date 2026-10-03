@@ -43,6 +43,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -72,7 +73,29 @@ ARCHIVE = os.environ.get(
 )
 ARCHIVE_CALLS = os.path.join(ARCHIVE, "calls")            # calls-*.xml, any contact
 ARCHIVE_WA = os.path.join(ARCHIVE, "whatsapp-calls")     # p<person id>__<name>.csv
-ARCHIVE_WA_BACKUPS = os.path.join(ARCHIVE, "whatsapp-backups")  # encrypted msgstore *.crypt15
+ARCHIVE_WA_BACKUPS = os.path.join(ARCHIVE, "whatsapp-backups")  # set-<stamp>/: encrypted full + increments
+
+
+def wa_set_files(set_dir: str) -> tuple[str | None, list[str]]:
+    """A saved WhatsApp set: (full backup, increments in order)."""
+    full = os.path.join(set_dir, "msgstore.db.crypt15")
+    incs = sorted(
+        (f for f in os.listdir(set_dir) if re.fullmatch(r"msgstore-increment-\d+\.db\.crypt15", f)),
+        key=lambda f: int(re.search(r"increment-(\d+)", f).group(1)),
+    )
+    return (full if os.path.exists(full) else None), [os.path.join(set_dir, f) for f in incs]
+
+
+def newest_wa_set() -> tuple[str | None, list[str]]:
+    if not os.path.isdir(ARCHIVE_WA_BACKUPS):
+        return None, []
+    sets = sorted(d for d in os.listdir(ARCHIVE_WA_BACKUPS)
+                  if d.startswith("set-") and os.path.isdir(os.path.join(ARCHIVE_WA_BACKUPS, d)))
+    if sets:
+        return wa_set_files(os.path.join(ARCHIVE_WA_BACKUPS, sets[-1]))
+    # Before increments were handled (Sep 2026): bare full backups.
+    flat = sorted(f for f in os.listdir(ARCHIVE_WA_BACKUPS) if f.endswith(".crypt15"))
+    return (os.path.join(ARCHIVE_WA_BACKUPS, flat[-1]) if flat else None), []
 
 
 def _private_dir(path: str) -> None:
@@ -276,15 +299,19 @@ def _already_have_whatsapp_call(conn: sqlite3.Connection, person_id: int, ts: st
     return False
 
 
-def backfill_whatsapp_backup(conn: sqlite3.Connection, path: str, writer: Writer) -> dict:
-    """Load answered one-to-one WhatsApp calls with tracked numbers from one backup."""
+def backfill_whatsapp_backup(conn: sqlite3.Connection, path: str, writer: Writer,
+                             increments: list[str] | None = None) -> dict:
+    """
+    Load answered one-to-one WhatsApp calls with tracked numbers from a full
+    backup plus its increments (replayed in order; calls only).
+    """
     try:
         import people_whatsapp as pw
     except ImportError as exc:
         print(f"skipped {os.path.basename(path)}: {exc}")
         return {"read": 0, "skipped": {"unavailable": 1}, "unmatched_calls": 0}
     try:
-        db = pw.open_backup(path)
+        db = pw.open_backup(path, increments)
     except pw.BackupError as exc:
         print(f"skipped {os.path.basename(path)}: {exc}")
         return {"read": 0, "skipped": {"undecryptable": 1}, "unmatched_calls": 0, "error": str(exc)}
@@ -305,7 +332,8 @@ def backfill_whatsapp_backup(conn: sqlite3.Connection, path: str, writer: Writer
             continue
         writer.add(person, ts, "whatsapp", call.direction, call.duration_s)
 
-    print(f"{os.path.basename(path)}: {len(found)} answered one-to-one WhatsApp calls · "
+    label = os.path.basename(path) + (f" + {len(increments)} increments" if increments else "")
+    print(f"{label}: {len(found)} answered one-to-one WhatsApp calls · "
           f"{unmatched} with untracked numbers (not stored) · skipped "
           + ", ".join(f"{n} {why}" for why, n in skipped.items() if n))
     return {"read": len(found), "skipped": skipped, "unmatched_calls": unmatched}
@@ -421,14 +449,12 @@ def rescan(conn: sqlite3.Connection, writer: Writer) -> None:
                 continue  # that person was removed; their CSV names nobody else
             backfill_whatsapp_calls(conn, person, [os.path.join(ARCHIVE_WA, f)], writer)
 
-    # Each WhatsApp backup is the full history, so the newest one is enough.
-    backups = sorted(
-        f for f in os.listdir(ARCHIVE_WA_BACKUPS) if f.endswith(".crypt15")
-    ) if os.path.isdir(ARCHIVE_WA_BACKUPS) else []
-    if backups:
-        backfill_whatsapp_backup(conn, os.path.join(ARCHIVE_WA_BACKUPS, backups[-1]), writer)
+    # The newest WhatsApp set (full + its increments) is the whole history.
+    wa_full, wa_incs = newest_wa_set()
+    if wa_full:
+        backfill_whatsapp_backup(conn, wa_full, writer, wa_incs)
 
-    if not calls and not os.path.isdir(ARCHIVE_WA) and not backups:
+    if not calls and not os.path.isdir(ARCHIVE_WA) and not wa_full:
         print(f"No saved exports in {ARCHIVE}. Save one with --save.")
 
 

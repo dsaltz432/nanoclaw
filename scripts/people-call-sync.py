@@ -8,7 +8,8 @@ at 3:30 AM ET:
   Call-Backups      calls-*.xml        SMS Backup & Restore — the Android call log
   Whatsapp-Backups  msgstore.db.crypt15 WhatsApp's encrypted database (full history)
 
-Each run, launchd on the host (4:15 AM, 7:00 AM catch-up):
+Each run, launchd on the host (hourly at :15 — the phone's uploads drift from
+3:30 to past 7:00, so a fixed time misses some):
 
   1. lists both folders with a host-only copy of the dsaltzai Drive token;
   2. for each backup not ingested before — keyed by Drive id *and* content
@@ -47,10 +48,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
 import os
+import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -73,6 +77,9 @@ TOKEN = os.environ.get(
 )
 STATE = os.path.join(bf.ARCHIVE, "sync-state.json")
 STALE_AFTER_H = 48  # warn when a source's newest backup is older than this
+# The job runs hourly; a stale backup is worth one line a day, not 24. The 7:15
+# run is the one that says so (and any manual / dry run, so you can check).
+WARN_HOUR = 7
 
 SOURCES = {
     "calls": {
@@ -88,11 +95,9 @@ SOURCES = {
         "folder": "Whatsapp-Backups",
         "label": "WhatsApp",
         "archive": bf.ARCHIVE_WA_BACKUPS,
-        "keep": 3,
+        "keep": 3,  # sets (a full backup + its increments)
+        # .crypt14 files predate the 64-digit key and can't be decrypted with it.
         "wanted": lambda name: name.lower().endswith(".crypt15"),
-        # always "msgstore.db.crypt15" on Drive: name it by Drive's timestamp
-        "local_name": lambda f: "msgstore-{}.db.crypt15".format(
-            f["modifiedTime"].replace("-", "").replace(":", "").split(".")[0] + "Z"),
     },
 }
 
@@ -203,8 +208,9 @@ def fmt_len(seconds: int | None) -> str:
     return f"{m}m{s:02d}s" if m < 60 else f"{m // 60}h{m % 60:02d}m"
 
 
-def ingest(conn, key: str, path: str, dry_run: bool) -> tuple[int, str | None]:
-    """Load one backup. Returns (new calls, error)."""
+def ingest(conn, key: str, path: str, dry_run: bool,
+           increments: list[str] | None = None) -> tuple[int, str | None]:
+    """Load one backup (WhatsApp: a full backup + its increments). Returns (new calls, error)."""
     src = SOURCES[key]
     writer = bf.Writer(conn, dry_run, bf.DEFAULT_SINCE)
     try:
@@ -212,7 +218,7 @@ def ingest(conn, key: str, path: str, dry_run: bool) -> tuple[int, str | None]:
             if key == "calls":
                 stats = bf.backfill_calls(conn, path, writer, show=0)
             else:
-                stats = bf.backfill_whatsapp_backup(conn, path, writer)
+                stats = bf.backfill_whatsapp_backup(conn, path, writer, increments)
     except BaseException:
         conn.rollback()
         raise
@@ -227,7 +233,8 @@ def ingest(conn, key: str, path: str, dry_run: bool) -> tuple[int, str | None]:
         extra = f" · {sum(writer.present[n]['whatsapp'] for n in writer.present)} already recorded"
     # calls.xml: every call in the log; WhatsApp: answered one-to-one calls only.
     read = "calls in the log" if key == "calls" else "answered calls"
-    log(f"{src['label']} · {os.path.basename(path)}: {stats['read']} {read} · "
+    label = os.path.basename(path) + (f" + {len(increments)} increments" if increments else "")
+    log(f"{src['label']} · {label}: {stats['read']} {read} · "
         f"{len(writer.new_rows)} {verb}{extra} · "
         f"{stats['unmatched_calls']} with untracked numbers (not stored)")
     for name, ts, _source, direction, duration in sorted(writer.new_rows, key=lambda r: r[1]):
@@ -235,6 +242,52 @@ def ingest(conn, key: str, path: str, dry_run: bool) -> tuple[int, str | None]:
         log(f"  {verb}: {src['label']:<8} {ts.replace('T', ' ')}  {arrow} {direction:<3}  "
             f"{fmt_len(duration):>7}  {name}")
     return len(writer.new_rows), None
+
+
+# ── WhatsApp sets ─────────────────────────────────────────────────────────────
+#
+# WhatsApp backs up as a set: msgstore.db.crypt15 (full) plus
+# msgstore-increment-N.db.crypt15 (changes since it). When it takes a new full
+# backup it renames the previous set's increments with a date suffix
+# (msgstore-increment-2-2026-09-27.1.db.crypt15); their contents are already in
+# the new full backup, so they're skipped. The current set is processed whole
+# whenever any file in it changes — calls already stored are a no-op.
+
+_CURRENT_INCREMENT = re.compile(r"^msgstore-increment-(\d+)\.db\.crypt15$")
+
+
+def current_wa_set(backups: list[dict]) -> tuple[dict | None, list[dict]]:
+    full = next((f for f in backups if f["name"] == "msgstore.db.crypt15"), None)
+    if full is None:
+        return None, []
+    incs = [f for f in backups
+            if _CURRENT_INCREMENT.match(f["name"]) and f["modifiedTime"] >= full["modifiedTime"]]
+    incs.sort(key=lambda f: int(_CURRENT_INCREMENT.match(f["name"]).group(1)))
+    return full, incs
+
+
+def wa_set_key(full: dict, incs: list[dict]) -> str:
+    sig = "|".join(f"{f['name']}:{f.get('md5Checksum', f['modifiedTime'])}" for f in [full, *incs])
+    return "set:" + hashlib.sha256(sig.encode()).hexdigest()[:24]
+
+
+def wa_set_dir(full: dict) -> str:
+    stamp = full["modifiedTime"].replace("-", "").replace(":", "").split(".")[0] + "Z"
+    return os.path.join(bf.ARCHIVE_WA_BACKUPS, f"set-{stamp}")
+
+
+def prune_wa_sets(keep: int) -> None:
+    d = bf.ARCHIVE_WA_BACKUPS
+    if not os.path.isdir(d):
+        return
+    sets = sorted(x for x in os.listdir(d) if x.startswith("set-"))
+    for old in sets[:-keep]:
+        shutil.rmtree(os.path.join(d, old))
+        log(f"archive: removed old WhatsApp set {old} (keeping newest {keep})")
+    if sets:  # bare full backups from before increments were handled
+        for legacy in (x for x in os.listdir(d) if x.endswith(".crypt15")):
+            os.remove(os.path.join(d, legacy))
+            log(f"archive: removed {legacy} (superseded by the set layout)")
 
 
 def main() -> int:
@@ -248,6 +301,10 @@ def main() -> int:
     conn = pc.connect(args.db, create=False)
     scratch = tempfile.TemporaryDirectory() if args.dry_run else None
     total_new, failures = 0, 0
+    # Hourly runs mostly find nothing: those collapse to one line at the end.
+    idle: list[str] = []
+    busy = False
+    say_stale = args.dry_run or datetime.now().hour == WARN_HOUR or os.isatty(1)
 
     for key, src in SOURCES.items():
         st = state["sources"][key]
@@ -257,29 +314,73 @@ def main() -> int:
         except Exception as exc:
             log(f"ERROR {src['label']}: can't read Drive folder {src['folder']}: {exc}")
             failures += 1
+            busy = True
             continue
 
         if not backups:
-            log(f"WARN {src['label']}: no backups in {src['folder']} — is the phone's scheduled backup running?")
+            if say_stale:
+                log(f"WARN {src['label']}: no backups in {src['folder']} — is the phone's scheduled backup running?")
+            idle.append(f"{src['label']} 0 on Drive")
             continue
         newest = backups[-1]
         age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(
             newest["modifiedTime"].replace("Z", "+00:00"))).total_seconds() / 3600
-        if age_h > STALE_AFTER_H:
+        if age_h > STALE_AFTER_H and say_stale:
             log(f"WARN {src['label']}: newest backup is {age_h:.0f}h old — "
                 "the phone's scheduled backup may have stopped")
 
-        todo = [f for f in backups if not already_done(st["done"], f)]
-        # A WhatsApp backup is the whole history: only the newest pending one matters.
         if key == "whatsapp":
-            todo = todo[-1:]
-        if not todo:
-            log(f"{src['label']}: nothing new ({len(backups)} on Drive, all ingested)")
+            full, incs = current_wa_set(backups)
+            if full is None:
+                if say_stale:
+                    log("WARN WhatsApp: no msgstore.db.crypt15 (full backup) in Whatsapp-Backups")
+                idle.append("WhatsApp: no full backup")
+                continue
+            set_key = wa_set_key(full, incs)
+            if set_key in st["done"]:
+                idle.append(f"WhatsApp set of {1 + len(incs)}")
+                continue
+            busy = True
+            dest_dir = os.path.join(scratch.name, "whatsapp") if scratch else wa_set_dir(full)
+            try:
+                bf._private_dir(dest_dir)
+                wanted = {f["name"] for f in [full, *incs]}
+                for stale in set(os.listdir(dest_dir)) - wanted:
+                    os.remove(os.path.join(dest_dir, stale))  # increments no longer in the set
+                paths = []
+                for f in [full, *incs]:
+                    dest = os.path.join(dest_dir, f["name"])
+                    download(session, f["id"], dest)
+                    paths.append(dest)
+                n, error = ingest(conn, key, paths[0], args.dry_run, paths[1:])
+            except Exception as exc:
+                log(f"ERROR WhatsApp set: {type(exc).__name__}: {exc}")
+                failures += 1
+                continue
+            if error:
+                log(f"ERROR WhatsApp set: {error}")
+                failures += 1
+                continue
+            total_new += n
+            if not args.dry_run:
+                st["done"][set_key] = {
+                    "name": f"msgstore.db.crypt15 + {len(incs)} increments",
+                    "modified": max(f["modifiedTime"] for f in [full, *incs]),
+                    "ingested_at": datetime.now().isoformat(timespec="seconds"),
+                    "new_calls": n,
+                }
+                prune_wa_sets(src["keep"])
             continue
+
+        todo = [f for f in backups if not already_done(st["done"], f)]
+        if not todo:
+            idle.append(f"{src['label']} {len(backups)} on Drive")
+            continue
+        busy = True
 
         for f in todo:
             dest_dir = scratch.name if scratch else src["archive"]
-            dest = os.path.join(dest_dir, src["local_name"](f))
+            dest = os.path.join(dest_dir, src["local_name"](f))  # phone call logs
             try:
                 download(session, f["id"], dest)
                 n, error = ingest(conn, key, dest, args.dry_run)
@@ -302,7 +403,11 @@ def main() -> int:
             prune(src["archive"], src["keep"])
 
     if args.dry_run:
+        if idle:
+            log(f"nothing new: {', '.join(idle)}")
         log(f"dry run — {total_new} calls would be added; nothing written, state unchanged")
+    elif not busy:
+        log(f"nothing new ({', '.join(idle)}, all ingested)")
     else:
         save_state(state)
         log(f"done: {total_new} new calls" + (f", {failures} error(s)" if failures else ""))
