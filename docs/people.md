@@ -3,14 +3,14 @@
 When Daniel last had a real interaction with a small set of close friends and
 family. The agent-facing description (what's stored, how the Telegram group
 behaves) is [groups/people/CLAUDE.md](../groups/people/CLAUDE.md); this doc is
-the operator's view: sources, the nightly job, the archive, and how to re-run
+the operator's view: sources, the sync job, the archive, and how to re-run
 things.
 
 ```
 phone, 3:30 AM ET ─┬─ SMS Backup & Restore ─→ Drive Agents/Call-Backups/calls-*.xml
-                   └─ WhatsApp backup ──────→ Drive Agents/Whatsapp-Backups/msgstore.db.crypt15
+                   └─ WhatsApp backup ──────→ Drive Agents/Whatsapp-Backups/msgstore.db.crypt15 + msgstore-increment-N…
                                                    │
-Mac, 4:15 AM (+7:00 AM catch-up)                   ▼
+Mac, hourly at :15                                 ▼
   launchd com.nanoclaw.people-call-sync → scripts/people-call-sync.py
       ├─ saves each new backup privately   ~/.config/nanoclaw/people-exports/
       ├─ loads new calls for tracked people → data/sessions/people/.claude/contacts.db
@@ -30,10 +30,13 @@ anywhere, and nobody who isn't tracked: calls with other numbers are counted
 and dropped. WhatsApp *messages* are out of scope; the WhatsApp backup is
 decrypted only to read its call table (below).
 
-## The nightly job
+## The sync job
 
-`scripts/people-call-sync.py`, run by launchd at **4:15 AM** and **7:00 AM**
-(the second run covers a night the Mac slept through). Each run:
+`scripts/people-call-sync.py`, run by launchd **hourly at :15**. The phone's
+uploads are scheduled for 3:30 AM but in practice land anywhere up to past
+7:00, so a fixed time missed some by minutes; hourly picks each one up within
+the hour. A run that finds nothing logs a single `nothing new (…)` line. Each
+run:
 
 1. Lists `Call-Backups` and `Whatsapp-Backups` with a host-only copy of the
    dsaltzai Drive token (`~/.config/nanoclaw/people-drive-credentials.json`).
@@ -49,10 +52,10 @@ decrypted only to read its call table (below).
    phone · calls-20260923225225.xml: 2224 calls in the log · 1 new · 1022 with untracked numbers (not stored)
      new: phone    2026-09-23 18:50:05  → out    0m05s  Mom
    ```
-   `WARN` lines mean a source's newest backup is over 48 h old, i.e. the
+   `WARN` lines (written once a day, by the 7:15 AM run) mean a source's newest backup is over 48 h old, i.e. the
    phone's schedule stopped. `ERROR` lines (and a non-zero exit) mean a source
    couldn't be read or decrypted; the other source still runs.
-5. Prunes the archive: newest **14** call logs, newest **3** WhatsApp backups
+5. Prunes the archive: newest **14** call logs, newest **3** WhatsApp sets
    (each is a full history).
 
 The log is also on the dashboard: **Admin ▸ Host Tasks ▸ People: call-log sync**.
@@ -73,17 +76,30 @@ all**. Untracked numbers are only ever counted, never listed.
 
 ### WhatsApp: calls only, decrypted in memory
 
-`msgstore.db.crypt15` is WhatsApp's entire database, messages included. The job
-(`scripts/people_whatsapp.py`):
+WhatsApp backs up as a **set**: a full database, `msgstore.db.crypt15`, plus
+daily `msgstore-increment-N.db.crypt15` files holding only what changed since.
+Each increment is a ZIP of per-table change files. When WhatsApp takes a new full
+backup, it renames the previous set's increments with a date suffix
+(`msgstore-increment-2-2026-09-27.1.db.crypt15`); their contents are already in
+the new full backup, so the job skips them. `.crypt14` files predate the 64-digit
+key (they need WhatsApp's device key) and are ignored.
+
+The job processes the **current set whole** (full backup + every current
+increment, in order) whenever any file in it changes, fingerprinted by Drive
+checksums. Calls already stored are a no-op, so reprocessing is safe. In
+`scripts/people_whatsapp.py`, it:
 
 - reads the 64-digit backup key from the **macOS Keychain**, item
   `whatsapp-backup-key`, via `/usr/bin/security` (it never appears in a file,
   log, argument list or error message);
-- decrypts and decompresses **in memory** and opens the result as an in-memory
-  SQLite database, so plaintext never touches the disk;
+- decrypts and decompresses the full backup **in memory** and opens it as an
+  in-memory SQLite database, so plaintext never touches the disk;
+- replays each increment onto it, opening **only** the `call_log_modified_*`,
+  `jid_modified_*` and `jid_map_modified_*` members. `messages.bin` and every
+  other member (chats, receipts, media references…) are never read;
 - reads only `call_log` (plus `jid` / `jid_map` to turn WhatsApp's private
   contact ids into phone numbers) and skips group calls;
-- keeps the **encrypted** file, so messages for chosen people *could* be
+- keeps the **encrypted** files, so messages for chosen people *could* be
   extracted later, as a deliberate decision. Nothing does that today.
 
 Store or replace the key (you'll be prompted; it stays out of shell history):
@@ -107,7 +123,7 @@ set on the phone instead: **last 10 backups** each.
 | Path | Holds |
 |---|---|
 | `calls/` | call-log backups (newest 14; plus any saved with `--save`) |
-| `whatsapp-backups/` | encrypted WhatsApp backups (newest 3) |
+| `whatsapp-backups/set-<full backup time>/` | encrypted WhatsApp sets: full backup + its increments (newest 3 sets) |
 | `whatsapp-calls/` | WhatsApp call-history CSVs, `p<person id>__<name>.csv` (one-off imports, Sep 2026) |
 | `sync-state.json` | which backups have been ingested |
 
@@ -143,5 +159,6 @@ history, and messages are out of scope.
 | No new calls for days | the log's `WARN` lines: has the phone's schedule stopped? |
 | `ERROR WhatsApp …: Keychain item … not readable` | keychain locked, or item missing: re-run the `security add-generic-password` command |
 | `ERROR WhatsApp …: decryption failed` | wrong key, or WhatsApp was switched to a password-protected backup |
+| A WhatsApp call is missing | is the day's increment in `Whatsapp-Backups`? The phone must upload the increments, not just `msgstore.db.crypt15` |
 | A call is missing for someone | is their number on their record? Is it before 2025, unanswered, or a group call? |
 | Job exits 78 with empty logs | the `~/Documents` spawn-time rule in [host-cronjobs.md](host-cronjobs.md); the plist already avoids it |

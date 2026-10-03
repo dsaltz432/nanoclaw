@@ -136,7 +136,7 @@ const JOBS: JobDescriptor[] = [
     key: "people-call-sync",
     label: "People: call-log sync",
     launchdLabel: "com.nanoclaw.people-call-sync",
-    schedule: "Daily 4:15 AM + 7:00 AM",
+    schedule: "Hourly at :15",
     // The script's own output: one line per backup ingested, plus one per
     // new call (person, time, length). Untracked numbers are only counted.
     logPath: homeLog("people-call-sync.log"),

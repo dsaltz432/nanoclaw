@@ -21,19 +21,14 @@
     </array>
     <key>WorkingDirectory</key>
     <string>{{HOME}}</string>
-    <!-- The phone's scheduled backup runs at 03:30 ET. 04:15 picks it up; 07:00 catches a
-         night the Mac slept through (launchd also runs a missed time on wake). -->
+    <!-- Hourly at :15. The phone's uploads are scheduled for 03:30 ET but drift (seen
+         05:36, 06:40, 07:00:58), so a fixed time missed some by minutes. A run with
+         nothing new takes seconds and logs one line. launchd also runs a missed
+         time on wake. -->
     <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Hour</key><integer>4</integer>
-            <key>Minute</key><integer>15</integer>
-        </dict>
-        <dict>
-            <key>Hour</key><integer>7</integer>
-            <key>Minute</key><integer>0</integer>
-        </dict>
-    </array>
+    <dict>
+        <key>Minute</key><integer>15</integer>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
