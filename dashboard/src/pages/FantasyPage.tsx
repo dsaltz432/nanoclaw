@@ -237,7 +237,11 @@ export default function FantasyPage() {
   return (
     <NewsIndexProvider value={newsIndex}>
       <LeagueContext.Provider value={league}>
-        <div className="ff-scope px-4 pb-4 pt-3 sm:px-8 sm:pb-8 sm:pt-5">
+        {/* relative: the containing block for absolutely positioned
+            descendants (the sr-only column labels). Without one they are
+            placed against the page itself, escape the scrolling <main> and
+            stretch the window, which then scrolls on into empty black. */}
+        <div className="ff-scope relative px-4 pb-4 pt-3 sm:px-8 sm:pb-8 sm:pt-5">
           {/* ── header: one row on every tab ────────────────────────────────
               Title, league picker and its facts, then Methodology and health,
               on one line from sm up, so the tab bar sits at the same height on
