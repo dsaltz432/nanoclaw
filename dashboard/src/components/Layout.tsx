@@ -111,7 +111,12 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto">
+        {/* relative: the containing block for absolutely positioned content
+            (sr-only labels, tooltips) that has no positioned parent of its
+            own. Without it such an element is placed against the page,
+            escapes this scroll container and stretches the window, which then
+            scrolls on past the content into the empty background. */}
+        <main className="relative flex-1 overflow-auto">
           <Suspense fallback={<div className="p-8 text-sm text-gray-500">Loading…</div>}>
             <Outlet />
           </Suspense>
