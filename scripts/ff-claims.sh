@@ -10,9 +10,13 @@
 # ff.db. See fantasy-football-agent/CONTENT-PLAN.md (layer 2) and
 # ff/content/claims.py for the containment argument.
 #
-# Auth is the host's Claude Code login (keychain), which a gui launchd agent
-# can read. `--bare` is deliberately NOT used by the extractor: it skips
-# credential loading and every call returns "Not logged in".
+# Auth is NanoClaw's long-lived CLAUDE_CODE_OAUTH_TOKEN from the repo's .env —
+# the same token the agent containers use — never the interactive Claude Code
+# login in the keychain. That login expires and needs a human at /login: on
+# 2026-10-13 it did, and this job failed for ~40 hours (87 articles stranded).
+# No token in .env is a FATAL, not a quiet fallback to the keychain.
+# `--bare` is deliberately NOT used by the extractor: it skips credential
+# loading and every call returns "Not logged in".
 #
 # This job cannot message anyone. It has no send_message and its child
 # process has no tools. Steady state is one to three new articles per run,
@@ -21,6 +25,7 @@
 set -uo pipefail
 
 FF_DIR="${FF_ROOT:-${HOME}/Documents/repositories/fantasy-football-agent}"
+NANOCLAW_ENV="${NANOCLAW_ENV:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env}"
 LOCK="/tmp/nanoclaw-ff-claims.lock"
 LIMIT="${FF_CLAIMS_LIMIT:-8}"
 
@@ -31,12 +36,25 @@ if [ ! -d "${FF_DIR}/ff" ]; then
   exit 1
 fi
 
+# The token, read without ever echoing it. Strips optional surrounding quotes.
+CLAUDE_CODE_OAUTH_TOKEN="$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "${NANOCLAW_ENV}" 2>/dev/null \
+  | head -1 | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+  echo "$(stamp) FATAL no CLAUDE_CODE_OAUTH_TOKEN in ${NANOCLAW_ENV}; refusing to fall back to the interactive login" >&2
+  exit 1
+fi
+export CLAUDE_CODE_OAUTH_TOKEN
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN  # nothing may outrank the token
+
 # The claude CLI lives in ~/.local/bin (native installer) or, on older npm
 # installs, under nvm — launchd's PATH includes neither. Put its directory on
 # PATH and tell the extractor where it is, unless the operator already did.
 if [ -z "${FF_CLAUDE_BIN:-}" ]; then
-  for c in "$(command -v claude 2>/dev/null)" "${HOME}/.local/bin/claude" "${HOME}"/.nvm/versions/node/*/bin/claude; do
-    if [ -n "${c}" ] && [ -x "${c}" ]; then FF_CLAUDE_BIN="${c}"; break; fi
+  # The installer's link can be briefly broken mid-update; the newest
+  # version it would point to is still there (ls -t: newest first).
+  newest_version="$(ls -t "${HOME}"/.local/share/claude/versions/* 2>/dev/null | head -1)"
+  for c in "$(command -v claude 2>/dev/null)" "${HOME}/.local/bin/claude" "${newest_version}" "${HOME}"/.nvm/versions/node/*/bin/claude; do
+    if [ -n "${c}" ] && [ -x "${c}" ] && [ -f "${c}" ]; then FF_CLAUDE_BIN="${c}"; break; fi
   done
 fi
 if [ -z "${FF_CLAUDE_BIN:-}" ]; then

@@ -59,8 +59,13 @@ table: player, action add/drop/start/sit/buy/sell/hold/stash/watch, horizon
 week/ros/dynasty, the author's confidence, a one-line rationale). One
 headless `claude -p` call per article with `--tools ""`, no MCP, no session
 and a JSON schema enforced — an article that tries to instruct the model can
-at worst corrupt its own row. `--bare` must not be used: it skips keychain
-credential loading. `python3 -m ff.cli claims --dry-run` shows what one
+at worst corrupt its own row. Auth is NanoClaw's long-lived
+`CLAUDE_CODE_OAUTH_TOKEN` from `.env` (the agents' token), passed by
+`scripts/ff-claims.sh` — never the interactive Claude Code login, which
+expires and needs a human at `/login` (it did on 2026-10-13: ~40h down, 87
+articles stranded). No token is a FATAL, not a fallback. Auth and usage-limit
+failures don't count against an article's three attempts. `--bare` must not
+be used: it skips credential loading. `python3 -m ff.cli claims --dry-run` shows what one
 article would produce without writing; `ff.cli claims --limit N` drains the
 queue. Per-article status lives in `article_extractions` and on the Admin
 subtab; `ff.cli api claims` lists recent claims.
@@ -401,7 +406,7 @@ Four host launchd jobs, split by how fast the data underneath them moves.
 | `com.nanoclaw.ff-news` | every 15 min | Sleeper player index, Rotowire notes, **expert-site articles + player news** (content layer), then **`ff.cli digest-cache`**: the Today digest per league into `payload_cache` + the daily snapshot | `scripts/ff-news.sh` · `launchd/com.nanoclaw.ff-news.plist` |
 | `com.nanoclaw.ff-live` | every 2h | transactions, matchups, FAAB, **rosters**, **traded picks**, **FantasyPros weekly + ROS ECR and Fantasy Footballers projections** (content layer) | `scripts/ff-refresh.sh live` · `launchd/com.nanoclaw.ff-live.plist` |
 | `com.nanoclaw.ff-daily` | 06:40 daily | projections (this week, plus the next three into `projections_ahead`), ownership, market values, injuries, **nflverse usage (snap + target share for the week just played)**, **schedules/Vegas lines**, **CBS + Footballguys rankings, dynasty ECR** (content layer) | `scripts/ff-refresh.sh daily` · `launchd/com.nanoclaw.ff-daily.plist` |
-| `com.nanoclaw.ff-claims` | every 15 min | **claim extraction** (content layer 2): up to 8 stored articles per run through headless `claude -p` with no tools, JSON-schema output, on the host's Claude Code login | `scripts/ff-claims.sh` · `launchd/com.nanoclaw.ff-claims.plist` · install `scripts/install-ff-claims-plist.sh` |
+| `com.nanoclaw.ff-claims` | every 15 min | **claim extraction** (content layer 2): up to 8 stored articles per run through headless `claude -p` with no tools, JSON-schema output, authenticated with NanoClaw's `.env` token (never the interactive login) | `scripts/ff-claims.sh` · `launchd/com.nanoclaw.ff-claims.plist` · install `scripts/install-ff-claims-plist.sh` |
 
 All four appear on the dashboard's **Scheduled Tasks** page (last exit, running
 state, log tail, trigger-now) via the descriptor list in
