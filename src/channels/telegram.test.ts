@@ -790,6 +790,105 @@ describe('TelegramChannel', () => {
       ).resolves.toBeUndefined();
     });
 
+    describe('transient failures', () => {
+      const grammyError = (
+        code: number,
+        parameters: Record<string, unknown> = {},
+      ) =>
+        Object.assign(new Error(`Call to 'sendMessage' failed! (${code})`), {
+          name: 'GrammyError',
+          error_code: code,
+          parameters,
+        });
+      const httpError = () =>
+        Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+          name: 'HttpError',
+        });
+
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      async function send(channel: TelegramChannel, text = 'Alert') {
+        const p = channel.sendMessage('tg:100200300', text);
+        await vi.runAllTimersAsync();
+        return p;
+      }
+
+      it('retries a 504 and delivers the formatted message', async () => {
+        const channel = new TelegramChannel('test-token', createTestOpts());
+        await channel.connect();
+        const api = currentBot().api.sendMessage;
+        api.mockRejectedValueOnce(grammyError(504));
+
+        await send(channel);
+
+        expect(api).toHaveBeenCalledTimes(2);
+        // The retry is still Markdown — a 504 is not a formatting problem
+        expect(api).toHaveBeenLastCalledWith('100200300', 'Alert', {
+          parse_mode: 'Markdown',
+        });
+      });
+
+      it('retries network errors', async () => {
+        const channel = new TelegramChannel('test-token', createTestOpts());
+        await channel.connect();
+        const api = currentBot().api.sendMessage;
+        api
+          .mockRejectedValueOnce(httpError())
+          .mockRejectedValueOnce(httpError());
+
+        await send(channel);
+
+        expect(api).toHaveBeenCalledTimes(3);
+      });
+
+      it('waits retry_after on 429', async () => {
+        const channel = new TelegramChannel('test-token', createTestOpts());
+        await channel.connect();
+        const api = currentBot().api.sendMessage;
+        api.mockRejectedValueOnce(grammyError(429, { retry_after: 7 }));
+
+        const p = channel.sendMessage('tg:100200300', 'Alert');
+        await vi.advanceTimersByTimeAsync(6_900);
+        expect(api).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(200);
+        await p;
+        expect(api).toHaveBeenCalledTimes(2);
+      });
+
+      it('gives up after 4 attempts and logs the failure', async () => {
+        const { logger } = await import('../logger.js');
+        const channel = new TelegramChannel('test-token', createTestOpts());
+        await channel.connect();
+        const api = currentBot().api.sendMessage;
+        api.mockRejectedValue(grammyError(502));
+
+        await expect(send(channel)).resolves.toBeUndefined();
+
+        expect(api).toHaveBeenCalledTimes(4);
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ jid: 'tg:100200300' }),
+          'Failed to send Telegram message',
+        );
+      });
+
+      it('does not retry a 400 (falls back to plain text once)', async () => {
+        const channel = new TelegramChannel('test-token', createTestOpts());
+        await channel.connect();
+        const api = currentBot().api.sendMessage;
+        api.mockRejectedValueOnce(grammyError(400));
+
+        await send(channel);
+
+        expect(api).toHaveBeenCalledTimes(2);
+        expect(api).toHaveBeenLastCalledWith('100200300', 'Alert', {});
+      });
+    });
+
     it('does nothing when bot is not initialized', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);

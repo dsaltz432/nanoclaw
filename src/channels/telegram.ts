@@ -18,10 +18,67 @@ export interface TelegramChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+/** Waits between attempts when Telegram has a transient failure. */
+const TELEGRAM_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
+const TELEGRAM_MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * How long to wait before retrying `err`, or null if it is not worth retrying.
+ * Transient: network failures (grammY HttpError), Telegram 5xx (e.g. the
+ * 504 Gateway Timeout that dropped a watchdog alert on 2026-10-15), and
+ * 429 rate limits (honouring retry_after). Duck-typed on `name` so it does
+ * not depend on grammY's error classes being importable.
+ */
+function transientRetryDelayMs(err: unknown, defaultMs: number): number | null {
+  const e = err as {
+    name?: string;
+    error_code?: number;
+    parameters?: { retry_after?: number };
+  } | null;
+  if (!e || typeof e !== 'object') return null;
+  if (e.name === 'HttpError') return defaultMs;
+  if (e.name === 'GrammyError' && typeof e.error_code === 'number') {
+    if (e.error_code === 429) {
+      const s = e.parameters?.retry_after;
+      return typeof s === 'number'
+        ? Math.min(s * 1000, TELEGRAM_MAX_RETRY_AFTER_MS)
+        : defaultMs;
+    }
+    if (e.error_code >= 500) return defaultMs;
+  }
+  return null;
+}
+
+/**
+ * Run `send`, retrying transient failures with backoff. A retry after a
+ * timeout can occasionally duplicate a message Telegram did deliver — a
+ * duplicate is better than a silently lost alert.
+ */
+async function withTelegramRetry(send: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await send();
+    } catch (err) {
+      const waitMs =
+        attempt < TELEGRAM_RETRY_DELAYS_MS.length
+          ? transientRetryDelayMs(err, TELEGRAM_RETRY_DELAYS_MS[attempt])
+          : null;
+      if (waitMs === null) throw err;
+      logger.warn(
+        { err, attempt: attempt + 1, waitMs },
+        'Telegram send failed transiently, retrying',
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
 /**
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
  * Claude's output naturally matches Telegram's Markdown v1 format:
  *   *bold*, _italic_, `code`, ```code blocks```, [links](url)
+ * Transient errors are rethrown (not treated as Markdown problems) so
+ * withTelegramRetry can retry the formatted message.
  */
 async function sendTelegramMessage(
   api: { sendMessage: Api['sendMessage'] },
@@ -35,6 +92,7 @@ async function sendTelegramMessage(
       parse_mode: 'Markdown',
     });
   } catch (err) {
+    if (transientRetryDelayMs(err, 0) !== null) throw err;
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
@@ -248,16 +306,12 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await sendTelegramMessage(
-            this.bot.api,
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-          );
-        }
+      const api = this.bot.api;
+      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        const chunk = text.slice(i, i + MAX_LENGTH);
+        await withTelegramRetry(() =>
+          sendTelegramMessage(api, numericId, chunk),
+        );
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
