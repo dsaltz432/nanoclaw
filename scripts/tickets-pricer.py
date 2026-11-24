@@ -159,12 +159,17 @@ def describe(summary: dict | None, outcome: str, reason: str) -> str:
     lines = ["This run: %d due, 0 scraped, %d failed (%s)." % (summary.get("due_count", 0), summary.get("errors", 0), kind_txt or "no details")]
     cr, cs = summary.get("cookie_refresh"), summary.get("cookie_source", "?")
     lines.append("cookie_refresh: `%s`, cookie_source: `%s`" % (str(cr).lower(), cs))
-    if cs == "disk":
+    if cs == "reused":
+        lines.append("This run reused the saved cookie (no warmup).")
+    elif cs == "disk":
         lines.append("The Playwright warmup did not get a fresh cookie, so this run used the cookie saved on disk; the warmup is degraded.")
     elif not cr:
         lines.append("The Playwright warmup did not yield a fresh cookie on this run.")
     elif kinds and all("403" in str(k) or "waf" in str(k).lower() for k in kinds):
         lines.append("The cookie was fresh and everything still got 403, so the block is IP/WAF-level, not the cookie.")
+    if summary.get("aborted_after_block"):
+        lines.append("Stopped after %d blocked fetches in a row; %d due event(s) left for the next run."
+                     % (len(errs), summary.get("skipped_after_block", 0)))
     titles = [e.get("title") for e in errs if e.get("title")][:7]
     if titles:
         lines.append("Events: " + ", ".join(titles))

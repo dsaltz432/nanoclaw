@@ -10,6 +10,12 @@ StubHub sits behind DataDome, so plain HTTP requests get 403'd. This script:
   - Fetches event pages with curl_cffi impersonating Chrome 131, so the TLS
     handshake and HTTP/2 frame ordering match the browser that minted the
     cookie.
+  - Keeps ONE DataDome identity across runs (2026-11-24): the warmup is
+    seeded with the persisted cookies, and is skipped entirely while the last
+    warmup is < COOKIE_REUSE_MAX_AGE_MIN old (cookie_source "reused"). A 403
+    on a reused cookie triggers one seeded warmup + retry. Two blocked fetches
+    in a row end the run early (aborted_after_block). Before this, every run
+    was a new cookieless visitor and every other run got 403'd.
 
 DO NOT "fix" the Chrome/126 User-Agent in HEADERS to match impersonate=
 "chrome131". It looks like an inconsistency and it is not. Measured
@@ -65,6 +71,19 @@ HEADERS = {
 
 # Module-level cookie dict populated by refresh_cookies_via_playwright()
 _session_cookies: dict = {}
+# Set when an event fetch returned a newer datadome cookie; saved at run end.
+_cookies_rotated = False
+
+# Reuse the persisted cookie instead of running the Playwright warmup while
+# the last warmup is younger than this. A 403 on the reused cookie triggers a
+# (seeded) warmup and one retry, so a dead cookie costs one request.
+COOKIE_REUSE_MAX_AGE_MIN = 120
+
+# Stop the run after this many consecutive blocked fetches (403/429/WAF page).
+# A blocked run is all-or-nothing in practice; firing the rest at 7s spacing
+# only adds load while the IP's budget is already spent.
+BLOCK_ABORT_AFTER = 2
+BLOCK_ERRORS = {"403", "429", "waf"}
 
 # Scrape tier: how often to poll based on hours until event
 # Minutes of slack on each tier interval; see get_due_events.
@@ -85,31 +104,54 @@ TIERS = [
 # Cookie management
 # ---------------------------------------------------------------------------
 
-def load_cookies() -> dict:
-    """Load persisted cookies from disk. Returns empty dict on any failure."""
+def load_cookie_store() -> tuple[dict, datetime | None]:
+    """Persisted cookies plus when the Playwright warmup last ran.
+    ({}, None) on any failure."""
     try:
         with open(COOKIE_STORE_PATH) as f:
-            return json.load(f).get("cookies", {})
+            data = json.load(f)
     except Exception:
-        return {}
+        return {}, None
+    acquired = None
+    try:
+        acquired = datetime.strptime(
+            data.get("acquired_at", ""), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        pass
+    return data.get("cookies", {}) or {}, acquired
 
 
-def save_cookies(cookies: dict) -> None:
-    """Persist cookies to disk alongside acquisition timestamp."""
+def load_cookies() -> dict:
+    """Load persisted cookies from disk. Returns empty dict on any failure."""
+    return load_cookie_store()[0]
+
+
+def save_cookies(cookies: dict, acquired_at: str | None = None) -> None:
+    """Persist cookies to disk. acquired_at is the time of the last Playwright
+    warmup; pass the old value through when only DataDome rotated the cookie
+    on an event fetch, so the warmup age keeps counting."""
     data = {
         "cookies": cookies,
-        "acquired_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "acquired_at": acquired_at
+        or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     os.makedirs(os.path.dirname(COOKIE_STORE_PATH), exist_ok=True)
     with open(COOKIE_STORE_PATH, "w") as f:
         json.dump(data, f)
 
 
-def refresh_cookies_via_playwright() -> dict:
+def refresh_cookies_via_playwright(seed: dict | None = None) -> dict:
     """
     Launch a headless Chromium session, visit StubHub homepage + Yankees
     team page to acquire a validated DataDome cookie, then save and return
     the full cookie dict.
+
+    seed: cookies from the previous session, loaded into the browser first so
+    the warmup refreshes the SAME DataDome identity instead of minting a new
+    visitor. Until 2026-11-24 every run started cookieless, i.e. a brand-new
+    device from the same IP every 30 min, and from Nov 9 every other run was
+    403'd. See scraping-notes.md, "Nov 2026: alternating 403s".
 
     Returns empty dict on failure (scraper falls back to cookieless requests).
     """
@@ -136,6 +178,14 @@ def refresh_cookies_via_playwright() -> dict:
                 viewport={"width": 1280, "height": 800},
                 locale="en-US",
             )
+            if seed:
+                try:
+                    ctx.add_cookies([
+                        {"name": k, "value": v, "domain": ".stubhub.com", "path": "/"}
+                        for k, v in seed.items()
+                    ])
+                except Exception as e:  # a bad seed must not cost the warmup
+                    print(f"  Warning: could not seed cookies: {e}", file=sys.stderr)
             page = ctx.new_page()
             page.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -321,6 +371,17 @@ def fetch_event_prices(url: str) -> dict | None:
         if resp.status_code != 200:
             return {"error": str(resp.status_code), "detail": f"HTTP {resp.status_code}"}
         html = resp.text
+        # DataDome rotates its cookie via Set-Cookie on good responses; keep
+        # the newest one like a browser would. Only from a 200: the cookie on
+        # a 403 is a challenge cookie and must not replace a working one.
+        global _cookies_rotated
+        try:
+            new_dd = resp.cookies.get("datadome")
+        except Exception:  # e.g. CookieConflict across domains
+            new_dd = None
+        if new_dd and new_dd != _session_cookies.get("datadome"):
+            _session_cookies["datadome"] = new_dd
+            _cookies_rotated = True
     except Exception as e:
         return {"error": "network", "detail": str(e)}
 
@@ -592,32 +653,50 @@ def main():
         conn.close()
         return
 
-    # Refresh DataDome cookies via Playwright before every scrape session
-    # Two attempts: the warmup is a real browser load and can time out on a
-    # slow page. A single blip used to leave us cookieless -> all 403s.
-    _session_cookies = {}
-    for attempt in (1, 2):
-        _session_cookies = refresh_cookies_via_playwright()
-        if _session_cookies.get("datadome"):
-            break
-        if attempt == 1:
-            print("  Warmup produced no datadome cookie, retrying...", file=sys.stderr)
-            time.sleep(5)
+    stored, warmed_at = load_cookie_store()
 
-    summary["cookie_refresh"] = bool(_session_cookies.get("datadome"))
-
-    # Fall back to the last cookie we persisted. DataDome cookies outlive a
-    # single 30-min tick, so a stale-but-valid cookie beats sending none at all.
-    if not summary["cookie_refresh"]:
-        stored = load_cookies()
-        if stored.get("datadome"):
+    def warmup() -> None:
+        """Seeded Playwright warmup -> _session_cookies + summary fields.
+        Two attempts: the warmup is a real browser load and can time out on a
+        slow page. A single blip used to leave us cookieless -> all 403s."""
+        global _session_cookies
+        seed = dict(_session_cookies or stored)
+        fresh: dict = {}
+        for attempt in (1, 2):
+            fresh = refresh_cookies_via_playwright(seed=seed)
+            if fresh.get("datadome"):
+                break
+            if attempt == 1:
+                print("  Warmup produced no datadome cookie, retrying...", file=sys.stderr)
+                time.sleep(5)
+        summary["cookie_refresh"] = bool(fresh.get("datadome"))
+        if summary["cookie_refresh"]:
+            _session_cookies = fresh
+            summary["cookie_source"] = "playwright"
+        # Fall back to the last cookie we persisted. DataDome cookies outlive a
+        # single 30-min tick, so a stale-but-valid cookie beats sending none.
+        elif seed.get("datadome"):
             print("  Falling back to persisted cookies from disk", file=sys.stderr)
-            _session_cookies = stored
+            _session_cookies = seed
             summary["cookie_source"] = "disk"
         else:
+            _session_cookies = {}
             summary["cookie_source"] = "none"
+
+    # Reuse the persisted DataDome identity while the last warmup is recent;
+    # warm up (seeded with it) only when it is old or gets a 403.
+    age_min = (
+        (datetime.now(timezone.utc) - warmed_at).total_seconds() / 60
+        if warmed_at else None
+    )
+    _session_cookies = {}
+    if stored.get("datadome") and age_min is not None and age_min < COOKIE_REUSE_MAX_AGE_MIN:
+        print(f"  Reusing persisted cookies (warmup {age_min:.0f} min ago)", file=sys.stderr)
+        _session_cookies = dict(stored)
+        summary["cookie_source"] = "reused"
     else:
-        summary["cookie_source"] = "playwright"
+        warmup()
+    summary["cookie_age_min"] = round(age_min) if age_min is not None else None
 
     REQUEST_DELAY = 7
     WAF_FAIL_THRESHOLD = 3
@@ -645,6 +724,7 @@ def main():
             (event_id,),
         )
 
+    consecutive_blocks = 0
     for i, event in enumerate(due):
         eid = event["id"]
         team = event["team_slug"]
@@ -654,6 +734,20 @@ def main():
             time.sleep(REQUEST_DELAY)
 
         prices = fetch_event_prices(event["url"])
+        blocked = bool(prices) and prices.get("error") in BLOCK_ERRORS
+
+        # A reused cookie that gets blocked: warm up once (seeded, so the same
+        # identity) and retry this event before treating it as a block.
+        if blocked and summary["cookie_source"] == "reused":
+            print("  Reused cookie blocked; warming up and retrying", file=sys.stderr)
+            warmup()
+            summary["rewarmed_after_block"] = True
+            if summary["cookie_refresh"]:
+                time.sleep(REQUEST_DELAY)
+                prices = fetch_event_prices(event["url"])
+                blocked = bool(prices) and prices.get("error") in BLOCK_ERRORS
+
+        consecutive_blocks = consecutive_blocks + 1 if blocked else 0
 
         if prices is None or "error" in prices:
             summary["errors"] += 1
@@ -673,6 +767,16 @@ def main():
             elif err_type in ("waf", "network") or err_type.startswith("5"):
                 record_waf_failure(eid)
                 conn.commit()
+            if consecutive_blocks >= BLOCK_ABORT_AFTER:
+                left = len(due) - i - 1
+                summary["aborted_after_block"] = True
+                summary["skipped_after_block"] = left
+                print(
+                    f"  {consecutive_blocks} blocked fetches in a row; stopping, "
+                    f"{left} event(s) left for the next run",
+                    file=sys.stderr,
+                )
+                break
             continue
 
         section_prices = prices.get("section_prices", {})
@@ -735,6 +839,19 @@ def main():
             },
             "total_listings": prices.get("total_listings"),
         })
+
+    # Persist a cookie DataDome rotated during the run, keeping the warmup
+    # timestamp so COOKIE_REUSE_MAX_AGE_MIN still forces a periodic warmup.
+    if _cookies_rotated and _session_cookies.get("datadome"):
+        _, last_warm = load_cookie_store()
+        try:
+            save_cookies(
+                _session_cookies,
+                acquired_at=last_warm.strftime("%Y-%m-%dT%H:%M:%SZ") if last_warm else None,
+            )
+            summary["cookie_rotated"] = True
+        except Exception as e:
+            print(f"  Warning: could not persist rotated cookie: {e}", file=sys.stderr)
 
     print(json.dumps(summary))
     conn.close()
