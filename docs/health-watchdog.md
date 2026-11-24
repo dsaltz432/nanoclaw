@@ -56,6 +56,10 @@ wrapper can't page anyone; see [message-delivery.md](message-delivery.md)).
   successful run (exit 137 after the ~30 min follow-up window), not failures.
 - Multiple restarts of one service in a run collapse into a single alert bullet; 3+ is
   reported as a crash loop.
+- `read_probe` treats a present-but-**empty** file as present (added 2026-10-15). An empty
+  `restarts.txt` is the healthy state (no crashes in 6h); the old `-s` test read it as
+  MISSING and produced ~11 false `probe-missing:restarts.txt` alerts from Sep 21 to Oct 12.
+  Other probe files that are empty still count as missing.
 
 `jobs.txt` freshness covers: backup, email-metadata, spotify-cleanup, ff-daily (daily);
 ff-news (15 min), ff-live (2h), ff-claims (15 min) as intervals; backup-verify (weekly); briefing-upload +
@@ -88,3 +92,56 @@ bash scripts/heartbeat.sh && cat data/health-probe/launchctl.txt
 #    the email-metadata plist; see docs/host-cronjobs.md).
 # 3. The scheduled task is in SQLite; if missing on a new machine, recreate it.
 ```
+
+
+## Home Assistant monitoring (added 2026-11-14)
+
+Built after the Home Assistant Green was down ~3 days (2026-11-11 → 11-14) with
+nothing noticing: an SSD USB reset corrupted containerd's metadata DB, containerd
+crash-looped, and Core could not start. Two layers, both read-only toward the Green:
+
+| Piece | Where | What it does |
+|---|---|---|
+| Collector | Green: `/config/monitoring/ha_collect.sh` | Prints a status + log bundle: backstop facts, versions/add-ons/backups, and warning/error digests (repeats collapsed to `count \| first .. last \| sample`) from Core, Supervisor, OS journal, kernel and the Z-Wave/Matter/Mosquitto/Ring-MQTT add-ons. |
+| Monitor key | old Mac `~/.ssh/ha_monitor_ed25519` | Accepted by the Green's Terminal & SSH add-on only as `restrict,command="/config/monitoring/ha_collect.sh"` — it can run that script and nothing else (no shell, no forwarding; tested 2026-11-14). |
+| `com.nanoclaw.ha-probe` | `scripts/ha-probe.sh`, `launchd/com.nanoclaw.ha-probe.plist`, `scripts/install-ha-probe-plist.sh` | Every 30 min: runs the collector, writes `data/health-probe/home-assistant/{bundle.txt,status.txt,bundles/}`. **Fixed rules live here** and become `FINDING\|severity\|key\|message` lines in `status.txt`. Log: `~/.local/share/nanoclaw/logs/ha-probe.log`. |
+| Heartbeat | `scripts/heartbeat.sh` | `jobs.txt` row `com.nanoclaw.ha-probe interval 75` → watchdog check 8 flags a stalled probe. |
+| Watchdog check 13 | Health Watchdog prompt (patched by `scripts/patch-watchdog-ha.py`; pre-patch copy in `groups/telegram_ops/watchdog-prompt.bak-2026-11-14-pre-ha.md`) | Relays `FINDING` lines verbatim; `ha-unreachable`/`ha-error` get two-run confirmation. No interpretation of logs. |
+| Home Assistant Triage | scheduled task in `telegram_ops`, cron `0 7,19 * * *`, silent=1; prompt in `groups/telegram_ops/ha-triage-prompt.md` (apply edits with `scripts/create-ha-triage-task.py`) | AI review of `bundle.txt` against `groups/telegram_ops/ha-baseline.md`: reports only patterns that are not known noise AND new or worsening. State: `groups/telegram_ops/ha-triage-state.json`. |
+
+Fixed backstop rules (in `ha-probe.sh`): Core not running (critical); add-on not
+started, Supervisor unhealthy, resolution issue other than `no_current_backup`,
+newest backup > 36h, kernel disk I/O errors or USB storage resets since boot, data
+disk > 85%, Z-Wave cannot open its stick (high). Boot-dependent rules wait 15 min
+after a reboot.
+
+**False alarm from triage?** Add the pattern to `groups/telegram_ops/ha-baseline.md`
+(and to the home-assistant skill's known-noise list on Daniel's laptop, which is
+the source of truth). **No auto-repair** by design: alerts suggest what to check;
+fixes happen from the laptop with Daniel's approval.
+
+**Undo:** `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.ha-probe.plist`;
+pause/delete the "Home Assistant Triage" task; restore the watchdog prompt from the
+backup; remove the `ha-monitor@oldmac` line from the SSH add-on's `authorized_keys`
+option and `/config/monitoring/` on the Green.
+
+## Alert-delivery and false-alarm fixes (2026-11-14)
+
+- **Telegram retry** (`src/channels/telegram.ts`): network errors, 5xx and 429
+  are retried (2s, 5s, 15s; 429 honours `retry_after`, max 60s) before the
+  final `Failed to send Telegram message` log line. Before this, a single 504
+  (2026-10-15) silently dropped a watchdog alert, and dedupe meant it was never
+  re-sent. A retry after a timeout can occasionally duplicate a message.
+- **ffballers Tuesday window** (`scripts/heartbeat.sh`): ffballers' rankings
+  page is down every Tuesday ~02:00-13:00 local for its weekly reset, so
+  `ff-content.ffballers.rankings` gets `max_age_min=1200` until 16:00 Tuesday.
+- **sqlite busy timeout** on the ff-content freshness query, so a read that
+  lands on a write no longer reports `age -1 query-failed`.
+- **Watchdog check 8** (patched by `scripts/patch-watchdog-ff-noise.py`;
+  pre-patch prompt in `groups/telegram_ops/watchdog-prompt.bak-2026-11-14-pre-ff-noise.md`):
+  `ff-content.*` stale/nolog findings need two consecutive runs; a `FAIL:`
+  state alone (age still within limit) is not a finding.
+
+Note: running `scripts/heartbeat.sh` by hand over SSH lacks Docker on PATH, so
+it reports "docker CLI unusable" and pings Healthchecks.io `/fail`. Use
+`launchctl kickstart gui/$(id -u)/com.nanoclaw.heartbeat` instead.

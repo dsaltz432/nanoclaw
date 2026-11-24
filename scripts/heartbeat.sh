@@ -98,6 +98,14 @@ emit_job com.nanoclaw.ff-claims       interval 60   "${HOME}/.local/share/nanocl
 # backup-verify runs weekly (Sun 05:00); 7 days + a day of grace. The script
 # appends to this log on every run, success or failure, so mtime is reliable.
 emit_job com.nanoclaw.backup-verify   weekly 11640  "${LOG_DIR}/backup-verify.log"
+# ha-probe pulls a Home Assistant status bundle every 30 min (added 2026-11-14);
+# 75 min = two missed fires plus grace.
+emit_job com.nanoclaw.ha-probe        interval 75   "${HOME}/.local/share/nanoclaw/logs/ha-probe.log"
+# Script jobs that replaced the Ticket Pricer / Health Watchdog agent tasks
+# (2026-11-24), both every 30 min; 75 = two missed fires plus grace. The
+# watchdog is also covered by the watchdog-state.json age check below.
+emit_job com.nanoclaw.tickets-pricer interval 75  "${HOME}/.local/share/nanoclaw/logs/tickets-pricer.log"
+emit_job com.nanoclaw.watchdog       interval 75  "${HOME}/.local/share/nanoclaw/logs/watchdog.out.log"
 # WatchPaths jobs fire only when their watched directory changes. They have
 # been idle for months by design; staleness here is not a fault.
 emit_job com.nanoclaw.briefing-upload      event - "${LOG_DIR}/briefing-upload.log"
@@ -121,9 +129,20 @@ if [ -f "$FF_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
   FF_CONTENT_JOBS="ffballers.articles:60 cbs.articles:60 fantasypros.articles:60 footballguys.articles:60 draftsharks.articles:60 fantasylife.articles:60 fantasypros.rankings:360 ffballers.rankings:360 cbs.rankings:${DAILY_MAX_AGE_MIN} footballguys.rankings:${DAILY_MAX_AGE_MIN}"
   for spec in $FF_CONTENT_JOBS; do
     src="${spec%%:*}"; max_age="${spec##*:}"
+    # ffballers takes its rankings page down for the weekly reset every
+    # Tuesday ~02:00-13:00 local ("no window.udk.data payload on page" on
+    # every run; stale alerts on 4 Tuesdays in a row, 2026-10-20..11-10).
+    # Allow 20h until 16:00 Tuesday; after that the normal 360 applies, so a
+    # page that does not come back still alerts. (2026-11-14)
+    if [ "$src" = "ffballers.rankings" ] && [ "$(date +%u)" = 2 ] && [ "$(date +%H)" -lt 16 ]; then
+      max_age=1200
+    fi
     # started_at is local ISO with a numeric offset; strftime('%s') of the
     # first 19 chars treats it as UTC, so apply the offset ourselves.
-    row=$(sqlite3 -separator '|' "file:${FF_DB}?mode=ro" "
+    # .timeout: ff writes this DB every few minutes; without a busy wait a
+    # read that lands on a write returns nothing and was reported as
+    # "age -1 query-failed" (false job-nolog alert, 2026-10-27).
+    row=$(sqlite3 -cmd ".timeout 5000" -separator '|' "file:${FF_DB}?mode=ro" "
       SELECT
         COALESCE((SELECT CAST((strftime('%s','now') - (strftime('%s', substr(started_at,1,19))
                  - (CAST(substr(started_at,20,3) AS INTEGER)*3600 + CAST(substr(started_at,23,2) AS INTEGER)*60

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.ha-probe</string>
+
+    <!-- Every 30 min: pull a read-only status + log bundle from the Home Assistant
+         Green and write data/health-probe/home-assistant/. Health Watchdog check 13
+         applies the fixed rules in status.txt; the "Home Assistant Triage" agent
+         task reviews bundle.txt with AI. Built 2026-11-14 after HA was down ~3 days
+         unnoticed. -->
+
+    <!-- Nothing launchd touches at spawn time may live under ~/Documents (exit 78),
+         so: inline bash -c, logs under ~/.local. See docs/host-cronjobs.md. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /bin/bash "{{PROJECT_ROOT}}/scripts/ha-probe.sh"</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ha-probe.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/ha-probe.error.log</string>
+</dict>
+</plist>
