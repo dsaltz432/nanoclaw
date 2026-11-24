@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.tickets-pricer</string>
+
+    <!-- Every 30 min at :00 and :30: run ticket-scraper.py in the agent image and alert the tickets chat once per outage.
+         Replaced an Opus agent task on 2026-11-24 (same cadence, no tokens).
+         See the header of scripts/tickets-pricer.py. -->
+
+    <!-- Nothing launchd touches at spawn time may live under ~/Documents (exit 78),
+         so: inline bash -c, logs under ~/.local. See docs/host-cronjobs.md. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /usr/bin/python3 "{{PROJECT_ROOT}}/scripts/tickets-pricer.py"</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+
+    <!-- Clock-aligned like the old cron (0,30), not StartInterval, so timing
+         matches what the watchdog and the tickets chat are used to. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/tickets-pricer.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/tickets-pricer.error.log</string>
+</dict>
+</plist>

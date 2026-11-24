@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanoclaw.watchdog</string>
+
+    <!-- Every 30 min at :02 and :32 (just after the pricer and the heartbeat): the 13 Health Watchdog checks, alerting telegram_ops.
+         Replaced an Opus agent task on 2026-11-24 (same cadence, no tokens).
+         See the header of scripts/watchdog.py. -->
+
+    <!-- Nothing launchd touches at spawn time may live under ~/Documents (exit 78),
+         so: inline bash -c, logs under ~/.local. See docs/host-cronjobs.md. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec /usr/bin/python3 "{{PROJECT_ROOT}}/scripts/watchdog.py"</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}</string>
+
+    <!-- Clock-aligned like the old cron (2,32), not StartInterval, so timing
+         matches what the watchdog and the tickets chat are used to. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Minute</key><integer>2</integer></dict>
+        <dict><key>Minute</key><integer>32</integer></dict>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/watchdog.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.local/share/nanoclaw/logs/watchdog.error.log</string>
+</dict>
+</plist>

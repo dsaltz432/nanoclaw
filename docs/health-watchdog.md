@@ -1,5 +1,21 @@
 # Health Watchdog
 
+> **2026-11-24: the watchdog is now a script, not an agent.** The 13 checks below
+> run as `scripts/watchdog.py` under launchd (`com.nanoclaw.watchdog`, :02 and :32),
+> with the same thresholds, finding keys, state file and Alerts chat. The old
+> "Health Watchdog" scheduled task is **paused**, not deleted. It cost ~$0.35/run
+> (~$17/day of Opus) for rule-following that code does exactly. The rules in the
+> agent-era sections below still describe what the script checks; the script header
+> has the dedupe model (normal / once / two-run confirm). The "Ticket Pricer" task
+> moved the same way to `scripts/tickets-pricer.py` (`com.nanoclaw.tickets-pricer`,
+> :00 and :30): it alerts the tickets chat once per outage plus a recovery note,
+> where the agent version re-alerted every 30 min (~40 messages on 2026-11-18..19).
+> Both send through `scripts/nanoclaw_ipc.py` (drops a file in `data/ipc/<group>/messages/`).
+> Install/undo: `scripts/install-script-jobs.sh` (header has the rollback).
+> Logs: `~/.local/share/nanoclaw/logs/{watchdog,tickets-pricer}*.log`.
+> Also: Home Assistant kernel findings now carry their since-boot count in the key
+> (`ha-kernel-usb-resets:3`), so they alert when the count rises, not daily.
+
 Continuous self-monitoring. A host-side heartbeat script (every 5 min) dumps `launchctl` +
 disk state to a snapshot file and pings Healthchecks.io as a dead-man's switch. A NanoClaw
 scheduled task (every 30 min) reads that snapshot, the SQLite task history, recent container

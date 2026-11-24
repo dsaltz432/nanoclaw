@@ -67,6 +67,9 @@ HEADERS = {
 _session_cookies: dict = {}
 
 # Scrape tier: how often to poll based on hours until event
+# Minutes of slack on each tier interval; see get_due_events.
+POLL_GRACE_MIN = 5
+
 TIERS = [
     (6, 10),        # <6h: every 10 min
     (24, 30),       # 6-24h: every 30 min
@@ -234,7 +237,13 @@ def get_due_events(conn: sqlite3.Connection) -> list[dict]:
             if last_time.tzinfo is None:
                 last_time = last_time.replace(tzinfo=timezone.utc)
             minutes_since = (now - last_time).total_seconds() / 60
-            if minutes_since < interval:
+            # Grace: runs fire on the :00/:30 clock but polled_at is stamped
+            # a little after the run starts (warmup + fetch). Without slack an
+            # event polled at :00:40 is 20s short of due at the next :00:01
+            # tick and waits an extra 30 min every cycle — 60-min tier events
+            # were being polled every 90. (2026-11-24, when the pricer moved
+            # from an agent task to scripts/tickets-pricer.py.)
+            if minutes_since < interval - POLL_GRACE_MIN:
                 continue
 
         if last_polled:
