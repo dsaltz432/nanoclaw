@@ -47,3 +47,5 @@ scripts/spotify-cleanup/.cache
 .nanoclaw/
 
 agents-sdk-docs
+
+__pycache__/
